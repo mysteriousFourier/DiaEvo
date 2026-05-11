@@ -40,12 +40,17 @@ def _matching_commands(value: str) -> list[tuple[str, str]]:
 def render_prompt_line(value: str = "") -> str:
     width = min(max(72, _term_width() - 4), 144)
     inner_width = width - 2
-    visible = f"{GLYPHS['prompt']} {value}"
-    return f"{DIM}{GLYPHS['h'] * width}{RESET}\n{_fit(visible, inner_width)}\n{DIM}{GLYPHS['h'] * width}{RESET}"
+    value_lines = value.split("\n") or [""]
+    rendered = [f"{DIM}{GLYPHS['h'] * width}{RESET}"]
+    for index, line in enumerate(value_lines):
+        prefix = f"{GLYPHS['prompt']} " if index == 0 else "  "
+        rendered.append(_fit(f"{prefix}{line}", inner_width))
+    rendered.append(f"{DIM}{GLYPHS['h'] * width}{RESET}")
+    return "\n".join(rendered)
 
 
 def render_footer() -> str:
-    return f"  {DIM}? for shortcuts{RESET}"
+    return f"  {DIM}Ctrl+J newline {GLYPHS['dot']} ? for shortcuts{RESET}"
 
 
 def render_command_menu(value: str, selected_index: int = 0) -> str:
@@ -85,13 +90,17 @@ def render_prompt_state(value: str = "", selected_index: int = 0) -> str:
 
 
 def _cursor_to_input(rendered_lines: int, value: str) -> str:
-    lines_below_input = max(0, rendered_lines - 2)
-    right_moves = _display_width(f"{GLYPHS['prompt']} {value}")
+    value_lines = value.split("\n") or [""]
+    last_line = value_lines[-1]
+    lines_below_input = max(0, rendered_lines - 1 - len(value_lines))
+    prefix = f"{GLYPHS['prompt']} " if len(value_lines) == 1 else "  "
+    right_moves = _display_width(f"{prefix}{last_line}")
     return f"\033[{lines_below_input}A\r\033[{right_moves}C"
 
 
-def _cursor_to_bottom(rendered_lines: int) -> str:
-    lines_below_input = max(0, rendered_lines - 2)
+def _cursor_to_bottom(rendered_lines: int, value: str) -> str:
+    value_lines = value.split("\n") or [""]
+    lines_below_input = max(0, rendered_lines - 1 - len(value_lines))
     return f"\033[{lines_below_input}B\r"
 
 
@@ -106,7 +115,7 @@ def read_prompt() -> str:
     def redraw() -> None:
         nonlocal rendered_lines
         if rendered_lines:
-            sys.stdout.write(_cursor_to_bottom(rendered_lines))
+            sys.stdout.write(_cursor_to_bottom(rendered_lines, value))
             _erase_lines(rendered_lines)
         rendered = render_prompt_state(value, selected_index)
         rendered_lines = rendered.count("\n") + 1
@@ -117,13 +126,16 @@ def read_prompt() -> str:
     redraw()
     while True:
         char = msvcrt.getwch()
-        if char in {"\r", "\n"}:
+        if char == "\r":
+            if not value.strip():
+                redraw()
+                continue
             matches = _matching_commands(value)
             exact_command = any(value.strip() == name for name, _ in matches)
             bare_slash_prefix = value.strip().startswith("/") and " " not in value.strip()
             if matches and bare_slash_prefix and not exact_command:
                 value = matches[selected_index][0]
-            sys.stdout.write(_cursor_to_bottom(rendered_lines))
+            sys.stdout.write(_cursor_to_bottom(rendered_lines, value))
             sys.stdout.write("\n")
             sys.stdout.flush()
             return value.strip()
@@ -131,6 +143,11 @@ def read_prompt() -> str:
             raise KeyboardInterrupt
         if char == "\032":
             raise EOFError
+        if char == "\n":
+            value += "\n"
+            selected_index = 0
+            redraw()
+            continue
         if char == "\b":
             value = value[:-1]
             selected_index = 0
