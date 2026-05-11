@@ -19,6 +19,7 @@ RESET = f"{ESC}0m"
 BLUE = f"{ESC}38;5;111m"
 PURPLE = f"{ESC}38;5;141m"
 WHITE = f"{ESC}38;5;255m"
+CYAN = f"{ESC}38;5;45m"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 GLYPHS = {
@@ -98,7 +99,7 @@ def _frame_line(left: str, right: str, width: int, title: str = "") -> str:
 
 def whale_lines() -> list[str]:
     return [
-        f"{BLUE}    \u2580\u2588\u2580{RESET}",
+        f"{CYAN}    \u2580\u2588\u2580{RESET}",
         f"{BLUE} \u259f\u2599 \u259f\u259b\u2588\u2588\u2588\u2588\u259c\u258c{RESET}",
         f"{BLUE} \u259c\u259b{WHITE}\u259d\u259c\u2588\u2588\u2588\u2588\u2588\u259b\u2598{RESET}"
     ]
