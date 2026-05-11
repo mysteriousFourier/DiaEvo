@@ -1,0 +1,16 @@
+# MVP runtime is standard-library only.
+# Optional terminal UI enhancement:
+rich>=13.7
+
+# Test runner:
+pytest>=8.0
+
+# Future extension points from the project plan:
+# numpy
+# pandas
+# scikit-learn
+# networkx
+# mlxtend
+# sentence-transformers
+# textual
+# pyyaml

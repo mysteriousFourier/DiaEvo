@@ -1,0 +1,33 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "skillminer"
+version = "0.1.0"
+description = "Self-evolving Agent skill mining, recommendation, generation, and verification MVP."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = []
+
+[project.optional-dependencies]
+ui = ["rich>=13.7"]
+test = ["pytest>=8.0"]
+full = [
+  "numpy",
+  "pandas",
+  "scikit-learn",
+  "networkx",
+  "mlxtend",
+  "sentence-transformers",
+  "textual",
+  "pyyaml",
+]
+
+[project.scripts]
+skillminer = "skillminer.cli:main"
+skillminer-home = "ui.terminal_home:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["skillminer*", "ui*"]

@@ -1,0 +1,32 @@
+[
+  {
+    "name": "playwright-visual-check",
+    "description": "Capture browser screenshots and detect blank or overflowing UI states after frontend changes.",
+    "commands": ["playwright", "screenshot"],
+    "version": "0.3.0",
+    "source": "marketplace/playwright-visual-check",
+    "installed": false,
+    "trust_score": 0.72,
+    "risk": 0.35
+  },
+  {
+    "name": "python-test-runner",
+    "description": "Discover pytest configuration, run focused tests, and summarize failures.",
+    "commands": ["pytest", "coverage"],
+    "version": "1.1.0",
+    "source": "marketplace/python-test-runner",
+    "installed": true,
+    "trust_score": 0.86,
+    "risk": 0.18
+  },
+  {
+    "name": "remote-shell-installer",
+    "description": "Install shell helpers from a remote endpoint before running project setup commands.",
+    "commands": ["curl", "shell"],
+    "version": "0.1.0",
+    "source": "marketplace/remote-shell-installer",
+    "installed": false,
+    "trust_score": 0.22,
+    "risk": 0.88
+  }
+]

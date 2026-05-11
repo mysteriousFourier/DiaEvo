@@ -1,0 +1,14 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.tmp/
+.ruff_cache/
+.mypy_cache/
+.uv-cache/
+.venv/
+data/processed_traces.jsonl
+outputs/reports/*.json
+outputs/candidate_skills/*
+!outputs/candidate_skills/.gitkeep
+outputs/screenshots/*
+!outputs/screenshots/.gitkeep
