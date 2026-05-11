@@ -8,6 +8,12 @@ The implementation intentionally keeps the MVP light. It uses standard-library T
 
 ```powershell
 cd D:\codex\skillminer
+.\skillminer.ps1
+```
+
+Run explicit subcommands when you want scriptable output:
+
+```powershell
 .\skillminer.ps1 ingest --input data/sample_traces.jsonl
 .\skillminer.ps1 mine
 .\skillminer.ps1 recommend --task "给当前项目生成测试修复 skill" --language python --framework pytest
@@ -17,6 +23,7 @@ cd D:\codex\skillminer
 ```
 
 `skillminer.ps1` is the local PowerShell launcher. It gives this prototype a Claude Code-like entry point inside the project directory without requiring a global install.
+Inside the interactive shell, type normal text to chat through DeepSeek, or slash commands such as `/demo`, `/mine`, `/recommend 给当前项目生成测试修复 skill`, and `/exit`.
 
 If the machine does not have `python` on PATH, use `uv` with a project-local cache:
 

@@ -24,7 +24,7 @@ def build_parser() -> argparse.ArgumentParser:
         prog="skillminer",
         description="Mine, recommend, generate, and verify Agent skills from task traces.",
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command", required=False)
 
     ingest_parser = subparsers.add_parser("ingest", help="Validate and normalize JSONL trace data.")
     ingest_parser.add_argument("--input", required=True, help="Input JSONL trace file.")
@@ -55,6 +55,8 @@ def build_parser() -> argparse.ArgumentParser:
     demo_parser = subparsers.add_parser("demo", help="Run the full MVP pipeline on sample data.")
     demo_parser.add_argument("--task", default="给当前项目生成测试修复 skill", help="Task used for recommendation.")
     demo_parser.add_argument("--cluster-id", default="", help="Cluster to generate; defaults to highest coverage gap.")
+
+    subparsers.add_parser("home", help="Open the dashboard and interactive shell.")
 
     chat_parser = subparsers.add_parser("chat-test", help="Run a simple DeepSeek chat completion test using .env.")
     chat_parser.add_argument("--prompt", default="用一句话说明 SkillMiner MVP 可以做什么。", help="User prompt.")
@@ -100,6 +102,10 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
+        if args.command is None or args.command == "home":
+            from ui.interactive_shell import main as shell_main
+
+            return shell_main()
         if args.command == "ingest":
             result = ingest_traces(args.input, args.output)
         elif args.command == "mine":

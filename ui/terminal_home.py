@@ -61,11 +61,9 @@ def render_plain() -> str:
         )
         lines.append("")
     lines.append("Commands")
-    lines.append("python -m skillminer.cli ingest --input data/sample_traces.jsonl")
-    lines.append("python -m skillminer.cli mine")
-    lines.append('python -m skillminer.cli recommend --task "给当前项目生成测试修复 skill"')
-    lines.append("python -m skillminer.cli generate --cluster-id C03")
-    lines.append("python -m skillminer.cli verify --skill outputs/candidate_skills/C03")
+    lines.append("Type a normal prompt to chat with DeepSeek.")
+    lines.append("/ingest  /mine  /recommend <task>  /generate C03  /verify C03  /demo  /exit")
+    lines.append("Scriptable form: .\\skillminer.ps1 demo")
     return "\n".join(lines)
 
 
