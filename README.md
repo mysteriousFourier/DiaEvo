@@ -23,6 +23,30 @@ $env:UV_CACHE_DIR="$PWD\.uv-cache"
 uv run --with pytest python -m skillminer.cli demo
 ```
 
+## DeepSeek Chat Smoke Test
+
+Create a local `.env` from `.env.example`, then fill in your real key:
+
+```powershell
+copy .env.example .env
+notepad .env
+```
+
+Run a one-shot chat test:
+
+```powershell
+.\.venv\Scripts\python.exe -m skillminer.cli chat-test --prompt "用一句话说明 SkillMiner MVP 可以做什么。"
+```
+
+Run a tiny interactive conversation:
+
+```powershell
+.\.venv\Scripts\python.exe -m skillminer.cli chat-test --interactive
+```
+
+The command uses `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL` from `.env`. It defaults to `https://api.deepseek.com` and `deepseek-v4-pro`.
+`DEEPSEEK_MAX_TOKENS` controls maximum output length, not context length; the template uses `4096` as a practical default for testing.
+
 ## MVP Commands
 
 - `ingest`: validates JSONL traces and writes `data/processed_traces.jsonl`.

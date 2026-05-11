@@ -12,6 +12,7 @@ from .miner import mine
 from .paths import DATA_DIR, ensure_project_dirs
 from .recommender import recommend
 from .verifier import verify_skill
+from .deepseek_chat import run_chat_test
 
 
 def print_json(value: Any) -> None:
@@ -54,6 +55,17 @@ def build_parser() -> argparse.ArgumentParser:
     demo_parser = subparsers.add_parser("demo", help="Run the full MVP pipeline on sample data.")
     demo_parser.add_argument("--task", default="给当前项目生成测试修复 skill", help="Task used for recommendation.")
     demo_parser.add_argument("--cluster-id", default="", help="Cluster to generate; defaults to highest coverage gap.")
+
+    chat_parser = subparsers.add_parser("chat-test", help="Run a simple DeepSeek chat completion test using .env.")
+    chat_parser.add_argument("--prompt", default="用一句话说明 SkillMiner MVP 可以做什么。", help="User prompt.")
+    chat_parser.add_argument("--system", default="You are a concise assistant for testing an Agent skill mining MVP.", help="System prompt.")
+    chat_parser.add_argument("--env", default=None, help="Path to .env; defaults to project .env.")
+    chat_parser.add_argument("--model", default=None, help="Override DEEPSEEK_MODEL.")
+    chat_parser.add_argument("--base-url", default=None, help="Override DEEPSEEK_BASE_URL.")
+    chat_parser.add_argument("--max-tokens", type=int, default=None, help="Override DEEPSEEK_MAX_TOKENS.")
+    chat_parser.add_argument("--temperature", type=float, default=None, help="Override DEEPSEEK_TEMPERATURE.")
+    chat_parser.add_argument("--no-thinking", action="store_true", help="Disable DeepSeek thinking field for this test.")
+    chat_parser.add_argument("--interactive", action="store_true", help="Keep conversation history locally and chat until /exit.")
 
     return parser
 
@@ -108,6 +120,18 @@ def main(argv: list[str] | None = None) -> int:
             result = verify_skill(Path(args.skill))
         elif args.command == "demo":
             result = run_demo(args.task, args.cluster_id)
+        elif args.command == "chat-test":
+            return run_chat_test(
+                prompt=args.prompt,
+                system=args.system,
+                env_path=args.env,
+                model=args.model,
+                base_url=args.base_url,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                no_thinking=args.no_thinking,
+                interactive=args.interactive,
+            )
         else:
             parser.error(f"Unknown command: {args.command}")
             return 2

@@ -1,0 +1,38 @@
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+from .paths import PROJECT_ROOT
+
+
+def _strip_quotes(value: str) -> str:
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
+        return value[1:-1]
+    return value
+
+
+def load_env(path: str | Path | None = None, override: bool = False) -> dict[str, str]:
+    """Load a small dotenv file without adding a runtime dependency."""
+    target = Path(path) if path else PROJECT_ROOT / ".env"
+    loaded: dict[str, str] = {}
+    if not target.exists():
+        return loaded
+    for line_no, raw_line in enumerate(target.read_text(encoding="utf-8").splitlines(), start=1):
+        line = raw_line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            raise ValueError(f"Invalid .env line {target}:{line_no}")
+        key, value = line.split("=", 1)
+        key = key.strip().lstrip("\ufeff")
+        value = _strip_quotes(value)
+        if not key:
+            raise ValueError(f"Invalid empty .env key {target}:{line_no}")
+        loaded[key] = value
+        if override or key not in os.environ:
+            os.environ[key] = value
+    return loaded
