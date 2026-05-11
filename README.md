@@ -8,13 +8,15 @@ The implementation intentionally keeps the MVP light. It uses standard-library T
 
 ```powershell
 cd D:\codex\skillminer
-python -m skillminer.cli ingest --input data/sample_traces.jsonl
-python -m skillminer.cli mine
-python -m skillminer.cli recommend --task "给当前项目生成测试修复 skill" --language python --framework pytest
-python -m skillminer.cli generate --cluster-id C03
-python -m skillminer.cli verify --skill outputs/candidate_skills/C03
-python -m ui.terminal_home
+.\skillminer.ps1 ingest --input data/sample_traces.jsonl
+.\skillminer.ps1 mine
+.\skillminer.ps1 recommend --task "给当前项目生成测试修复 skill" --language python --framework pytest
+.\skillminer.ps1 generate --cluster-id C03
+.\skillminer.ps1 verify --skill outputs/candidate_skills/C03
+.\skillminer-home.ps1
 ```
+
+`skillminer.ps1` is the local PowerShell launcher. It gives this prototype a Claude Code-like entry point inside the project directory without requiring a global install.
 
 If the machine does not have `python` on PATH, use `uv` with a project-local cache:
 
@@ -35,13 +37,13 @@ notepad .env
 Run a one-shot chat test:
 
 ```powershell
-.\.venv\Scripts\python.exe -m skillminer.cli chat-test --prompt "用一句话说明 SkillMiner MVP 可以做什么。"
+.\skillminer.ps1 chat-test --prompt "用一句话说明 SkillMiner MVP 可以做什么。"
 ```
 
 Run a tiny interactive conversation:
 
 ```powershell
-.\.venv\Scripts\python.exe -m skillminer.cli chat-test --interactive
+.\skillminer.ps1 chat-test --interactive
 ```
 
 The command uses `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL` from `.env`. It defaults to `https://api.deepseek.com` and `deepseek-v4-pro`.
