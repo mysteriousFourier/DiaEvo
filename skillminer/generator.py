@@ -51,55 +51,55 @@ def build_skill_markdown(cluster: dict[str, Any]) -> str:
     coverage_gap = float(cluster.get("coverage_gap", 0.0) or 0.0)
     name_terms = "-".join(terms[:3]) if terms else cluster_id.lower()
     name = slugify(f"{cluster_id}-{name_terms}")
-    description = f"Reusable workflow for tasks like: {representative[:120]}"
+    description = f"适用于类似任务的可复用工作流：{representative[:120]}"
     risk = min(1.0, 0.25 + failure_rate * 0.35 + coverage_gap * 0.25)
     lines = [
         _frontmatter(name, description.replace('"', "'"), terms + tools + errors, risk, cluster_id),
         f"# {name}",
         "",
-        "## When To Use",
+        "## 何时使用",
         "",
-        f"Use this skill for tasks similar to `{representative}`.",
+        f"当任务与 `{representative}` 相似时使用这个技能。",
         "",
-        "Trigger signals:",
+        "触发信号：",
     ]
     for value in terms[:6]:
-        lines.append(f"- Task term: `{value}`")
+        lines.append(f"- 任务关键词：`{value}`")
     for value in extensions[:5]:
-        lines.append(f"- File type: `.{value}`")
+        lines.append(f"- 文件类型：`.{value}`")
     for value in errors[:5]:
-        lines.append(f"- Error pattern: `{value}`")
+        lines.append(f"- 错误模式：`{value}`")
     lines.extend(
         [
             "",
-            "## Workflow",
+            "## 工作流",
             "",
-            "1. Inspect the project context and confirm the relevant files before editing.",
-            "2. Reuse the stable tool sequence observed in successful traces.",
+            "1. 先检查项目上下文，并在编辑前确认相关文件。",
+            "2. 复用成功轨迹中稳定出现的工具顺序。",
         ]
     )
     for tool in tools[:6]:
-        lines.append(f"   - Prefer `{tool}` when it matches the current environment.")
+        lines.append(f"   - 如果当前环境适配，优先使用 `{tool}`。")
     lines.extend(
         [
-            "3. If the task involves a past failure pattern, reproduce the smallest failing case first.",
-            "4. Apply the change in a narrow scope, then run the closest available verification command.",
-            "5. Record the outcome so this skill can be updated with success and failure evidence.",
+            "3. 如果任务涉及历史失败模式，先复现最小失败用例。",
+            "4. 在尽量窄的范围内修改，然后运行最接近的验证命令。",
+            "5. 记录结果，便于后续用成功和失败证据更新这个技能。",
             "",
-            "## Safety Checks",
+            "## 安全检查",
             "",
-            "- Do not install external dependencies without user confirmation.",
-            "- Do not write outside the active workspace.",
-            "- Treat generated scripts as drafts until deterministic checks pass.",
-            "- If verification fails twice, stop and summarize the failure instead of broadening scope.",
+            "- 未经用户确认，不要安装外部依赖。",
+            "- 不要写入当前工作区之外的路径。",
+            "- 生成的脚本在确定性检查通过前都应视为草稿。",
+            "- 如果验证连续失败两次，停止扩大修改范围，并总结失败原因。",
             "",
-            "## Evidence",
+            "## 证据",
             "",
-            f"- Source cluster: `{cluster_id}`",
-            f"- Cluster size: `{cluster.get('size', 0)}`",
-            f"- Failure rate: `{float(cluster.get('failure_rate', 0.0) or 0.0):.2f}`",
-            f"- Coverage gap: `{float(cluster.get('coverage_gap', 0.0) or 0.0):.2f}`",
-            f"- Trace IDs: `{', '.join(str(item) for item in cluster.get('trace_ids', []))}`",
+            f"- 来源聚类：`{cluster_id}`",
+            f"- 聚类规模：`{cluster.get('size', 0)}`",
+            f"- 失败率：`{float(cluster.get('failure_rate', 0.0) or 0.0):.2f}`",
+            f"- 覆盖缺口：`{float(cluster.get('coverage_gap', 0.0) or 0.0):.2f}`",
+            f"- 轨迹 ID：`{', '.join(str(item) for item in cluster.get('trace_ids', []))}`",
             "",
         ]
     )

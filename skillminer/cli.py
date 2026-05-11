@@ -66,7 +66,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     chat_parser = subparsers.add_parser("chat-test", help="Run a simple DeepSeek chat completion test using .env.")
     chat_parser.add_argument("--prompt", default="用一句话说明 SkillMiner MVP 可以做什么。", help="User prompt.")
-    chat_parser.add_argument("--system", default="You are a concise assistant for testing an Agent skill mining MVP.", help="System prompt.")
+    chat_parser.add_argument("--system", default="你是用于测试 Agent 技能挖掘 MVP 的简洁中文助手。", help="System prompt.")
     chat_parser.add_argument("--env", default=None, help="Path to .env; defaults to project .env.")
     chat_parser.add_argument("--model", default=None, help="Override DEEPSEEK_MODEL.")
     chat_parser.add_argument("--base-url", default=None, help="Override DEEPSEEK_BASE_URL.")
