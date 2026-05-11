@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 import shutil
 import textwrap
+import unicodedata
 from pathlib import Path
 
 from skillminer.paths import PROJECT_ROOT, REPORTS_DIR
@@ -14,6 +15,7 @@ DIM = f"{ESC}2m"
 BOLD = f"{ESC}1m"
 ITALIC = f"{ESC}3m"
 RESET = f"{ESC}0m"
+BLUE = f"{ESC}38;5;111m"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 GLYPHS = {
@@ -33,8 +35,21 @@ def _term_width(default: int = 120) -> int:
     return max(80, shutil.get_terminal_size((default, 30)).columns)
 
 
+def _char_width(char: str) -> int:
+    if unicodedata.combining(char):
+        return 0
+    if unicodedata.east_asian_width(char) in {"F", "W"}:
+        return 2
+    return 1
+
+
+def _display_width(text: str) -> int:
+    clean = ANSI_RE.sub("", text)
+    return sum(_char_width(char) for char in clean)
+
+
 def _plain_len(text: str) -> int:
-    return len(ANSI_RE.sub("", text))
+    return _display_width(text)
 
 
 def _pad(text: str, width: int, *, align: str = "left") -> str:
@@ -50,9 +65,18 @@ def _pad(text: str, width: int, *, align: str = "left") -> str:
 
 def _truncate(text: str, width: int) -> str:
     clean = ANSI_RE.sub("", str(text))
-    if len(clean) <= width:
+    if _display_width(clean) <= width:
         return clean
-    return clean[: max(0, width - 1)] + "..."
+    result = []
+    used = 0
+    suffix_width = 3
+    for char in clean:
+        char_width = _char_width(char)
+        if used + char_width + suffix_width > width:
+            break
+        result.append(char)
+        used += char_width
+    return "".join(result) + "..."
 
 
 def _fit(text: str, width: int) -> str:
@@ -64,8 +88,9 @@ def _fit(text: str, width: int) -> str:
 def _frame_line(left: str, right: str, width: int, title: str = "") -> str:
     if title:
         title_width = _plain_len(title)
-        return f"{left}{GLYPHS['h']} {title}{GLYPHS['h'] * max(0, width - title_width - 4)}{right}"
-    return f"{left}{GLYPHS['h'] * (width - 2)}{right}"
+        tail = GLYPHS["h"] * max(0, width - title_width - 4)
+        return f"{ORANGE}{left}{GLYPHS['h']} {RESET}{title}{ORANGE}{tail}{right}{RESET}"
+    return f"{ORANGE}{left}{GLYPHS['h'] * (width - 2)}{right}{RESET}"
 
 
 def clawd_lines() -> list[str]:
@@ -129,7 +154,7 @@ def render_logo_card() -> str:
     left_width = 38
     right_width = width - left_width - 5
     title = f"{ORANGE}{BOLD}SkillMiner{RESET} {DIM}v0.1.0{RESET}"
-    divider = f"{DIM}{GLYPHS['mid']}{RESET}"
+    divider = f"{ORANGE}{GLYPHS['mid']}{RESET}"
     left = [
         "",
         f"{BOLD}Welcome back!{RESET}",
@@ -147,8 +172,8 @@ def render_logo_card() -> str:
         left_text = left[index] if index < len(left) else ""
         right_text = feed[index] if index < len(feed) else ""
         lines.append(
-            f"{GLYPHS['v']}{_pad(left_text, left_width, align='center')} "
-            f"{divider} {_pad(_fit(right_text, right_width), right_width)}{GLYPHS['v']}"
+            f"{ORANGE}{GLYPHS['v']}{RESET}{_pad(left_text, left_width, align='center')} "
+            f"{divider} {_pad(_fit(right_text, right_width), right_width)}{ORANGE}{GLYPHS['v']}{RESET}"
         )
     lines.append(_frame_line(GLYPHS["bl"], GLYPHS["br"], width))
     return "\n".join(lines)
@@ -157,16 +182,16 @@ def render_logo_card() -> str:
 def render_prompt_box() -> str:
     width = min(max(72, _term_width() - 4), 144)
     lines = [
-        _frame_line(GLYPHS["tl"], GLYPHS["tr"], width),
+        f"{DIM}{GLYPHS['h'] * width}{RESET}",
         f"{GLYPHS['v']} {GLYPHS['prompt']} {' ' * (width - 4)}{GLYPHS['v']}",
-        _frame_line(GLYPHS["bl"], GLYPHS["br"], width),
+        f"{DIM}{GLYPHS['h'] * width}{RESET}",
         f"  {DIM}? for shortcuts{RESET}",
     ]
     return "\n".join(lines)
 
 
 def render_home() -> str:
-    return f"{render_logo_card()}\n\n{render_prompt_box()}"
+    return render_logo_card()
 
 
 def trust_state_path() -> Path:
@@ -207,7 +232,7 @@ def render_trust_dialog(selected: int = 1) -> str:
     for paragraph in paragraphs:
         wrapped = textwrap.wrap(paragraph, width=body_width) if paragraph else [""]
         for line in wrapped:
-            lines.append(f"{GLYPHS['v']} {_pad(line, body_width)} {GLYPHS['v']}")
+            lines.append(f"{ORANGE}{GLYPHS['v']}{RESET} {_pad(line, body_width)} {ORANGE}{GLYPHS['v']}{RESET}")
     lines.append(_frame_line(GLYPHS["bl"], GLYPHS["br"], width))
     return "\n".join(lines)
 
