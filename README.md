@@ -20,6 +20,8 @@ Running `.\skillminer.ps1` with no arguments opens the terminal shell. On first 
 /generate C03
 /verify C03
 /demo
+/tools
+/tool list_files path=. recursive=false
 /model deepseek-v4-flash
 /baseurl https://api.deepseek.com
 /key
@@ -37,6 +39,8 @@ Run explicit subcommands when you want scriptable output:
 .\skillminer.ps1 recommend --task "给当前项目生成测试修复 skill" --language python --framework pytest
 .\skillminer.ps1 generate --cluster-id C03
 .\skillminer.ps1 verify --skill outputs/candidate_skills/C03
+.\skillminer.ps1 tools
+.\skillminer.ps1 tool read_file --arg path=README.md --arg limit=5
 .\skillminer-home.ps1
 ```
 
@@ -85,6 +89,17 @@ The command uses `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL` f
 - `generate`: creates `outputs/candidate_skills/<cluster-id>/SKILL.md`.
 - `verify`: checks candidate skill format and static safety.
 - `demo`: runs the full loop on sample data.
+- `tools`: lists local tool schemas, read/write classification, and approval requirements.
+- `tool`: executes a local tool with JSON args or repeated `--arg key=value` entries. Read-only workspace tools run directly; write, delete, patch, shell, and network tools return a preview unless `--approve` is supplied.
+
+## Local Tool Layer
+
+SkillMiner includes a Claude Code-inspired local tool layer for the first coding-agent runtime slice. It keeps chat, tool execution, and terminal rendering separate:
+
+- Workspace tools: `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`, `apply_patch`.
+- Execution/network tools: `run_shell`, `web_search`, `web_fetch`.
+- Safety: all paths are constrained to the project root, writes show unified diffs, deletes are marked destructive, and shell/network tools require explicit approval.
+- Traceability: every tool call appends a JSONL event under `.skillminer/tool_events.jsonl`, so future mining can learn from actual agent actions.
 
 ## Data Format
 

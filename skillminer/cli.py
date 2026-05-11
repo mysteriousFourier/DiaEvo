@@ -11,6 +11,7 @@ from .ingest import ingest_traces
 from .miner import mine
 from .paths import DATA_DIR, ensure_project_dirs
 from .recommender import recommend
+from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
 from .verifier import verify_skill
 from .deepseek_chat import run_chat_test
 
@@ -63,6 +64,14 @@ def build_parser() -> argparse.ArgumentParser:
     demo_parser.add_argument("--cluster-id", default="", help="Cluster to generate; defaults to highest coverage gap.")
 
     subparsers.add_parser("home", help="Open the dashboard and interactive shell.")
+
+    subparsers.add_parser("tools", help="List local tool schemas and approval requirements.")
+
+    tool_parser = subparsers.add_parser("tool", help="Execute one local tool with JSON arguments.")
+    tool_parser.add_argument("name", help="Tool name such as list_files or read_file.")
+    tool_parser.add_argument("--args", default="{}", help="JSON object passed to the tool.")
+    tool_parser.add_argument("--arg", action="append", default=[], help="Tool argument in key=value form; can be repeated.")
+    tool_parser.add_argument("--approve", action="store_true", help="Execute tools that require approval.")
 
     chat_parser = subparsers.add_parser("chat-test", help="Run a simple DeepSeek chat completion test using .env.")
     chat_parser.add_argument("--prompt", default="用一句话说明 SkillMiner MVP 可以做什么。", help="User prompt.")
@@ -132,6 +141,12 @@ def main(argv: list[str] | None = None) -> int:
             result = verify_skill(Path(args.skill))
         elif args.command == "demo":
             result = run_demo(args.task, args.cluster_id)
+        elif args.command == "tools":
+            result = {"tools": tool_schemas()}
+        elif args.command == "tool":
+            tool_args = parse_tool_args(args.args)
+            tool_args.update(parse_tool_arg_pairs(args.arg))
+            result = execute_tool(args.name, tool_args, approve=args.approve)
         elif args.command == "chat-test":
             return run_chat_test(
                 prompt=args.prompt,

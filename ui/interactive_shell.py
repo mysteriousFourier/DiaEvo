@@ -7,10 +7,12 @@ from typing import Callable
 from skillminer.cli import main as cli_main
 from skillminer.deepseek_chat import chat_completion, config_from_env, extract_assistant_text
 from skillminer.env import write_env_value
+from skillminer.tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
 
 from .cli_style import maybe_show_trust_dialog
 from .prompt_bar import is_command_input, read_prompt
 from .terminal_home import render_plain
+from .tool_render import render_tool_result
 
 DEFAULT_RECOMMEND_TASK = "给当前项目生成测试修复 skill"
 
@@ -22,6 +24,8 @@ Commands:
   /generate <cluster-id>   Generate candidate SKILL.md
   /verify <cluster-id/path> Verify candidate skill
   /demo                    Run full MVP demo
+  /tools                   List local tool schemas
+  /tool <name> <json|key=value...> Run local tool; add --approve to execute gated tools
   /model <name>            Set DEEPSEEK_MODEL and redraw dashboard
   /baseurl <url>           Set DEEPSEEK_BASE_URL
   /key <api-key>           Set DEEPSEEK_API_KEY without echoing it later
@@ -97,6 +101,31 @@ def _dispatch_command(command: str, chat_state: ChatConfigState) -> bool:
         return True
     if name in {"home", "dashboard"}:
         print(render_plain())
+        return True
+    if name == "tools":
+        for spec in tool_schemas():
+            gate = "approval" if spec["approval_required"] else "direct"
+            mode = "read" if spec["read_only"] else "write"
+            print(f"{spec['name']}  {mode}  {gate}  {spec['description']}")
+        return True
+    if name == "tool":
+        if not rest:
+            print("usage: /tool <name> <json-args> [--approve]")
+            return True
+        approve = "--approve" in rest
+        rest = [item for item in rest if item != "--approve"]
+        tool_name = rest[0]
+        raw_args = rest[1:]
+        try:
+            if raw_args and all("=" in item for item in raw_args):
+                tool_args = parse_tool_arg_pairs(raw_args)
+            else:
+                tool_args = parse_tool_args(" ".join(raw_args) if raw_args else "{}")
+        except Exception as exc:
+            print(f"tool args error: {exc}")
+            return True
+        result = execute_tool(tool_name, tool_args, approve=approve)
+        print(render_tool_result(result))
         return True
     if name == "model":
         _set_env_command("DEEPSEEK_MODEL", " ".join(rest), chat_state, prompt="DEEPSEEK_MODEL")

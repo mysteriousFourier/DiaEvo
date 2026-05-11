@@ -13,6 +13,8 @@ The shell supports a custom terminal dashboard, workspace trust confirmation, li
 
 The latest important commits are:
 
+- Add local tool execution layer (current handoff phase)
+- `a791869 Adjust mascot accent color`
 - `5154d95 Add interactive DeepSeek config commands`
 - `aa23310 Apply custom shell colors and mascot`
 - `5b7f644 Customize terminal shell styling`
@@ -31,6 +33,7 @@ The latest important commits are:
 - Skill recommendation with score explanations.
 - Candidate `SKILL.md` generation.
 - Static skill verification.
+- Claude Code-inspired local tool layer with explicit schemas, workspace boundary checks, approval previews, terminal result blocks, and JSONL event logging.
 - DeepSeek chat smoke test and interactive chat.
 - Claude Code-inspired terminal UI, now customized with local colors and mascot.
 - Runtime model/base URL/API key configuration through slash commands.
@@ -46,6 +49,8 @@ Interactive shell:
 /generate C03
 /verify C03
 /demo
+/tools
+/tool list_files path=. recursive=false
 /model deepseek-v4-flash
 /baseurl https://api.deepseek.com
 /key
@@ -58,6 +63,8 @@ Scriptable commands:
 
 ```powershell
 .\skillminer.ps1 demo
+.\skillminer.ps1 tools
+.\skillminer.ps1 tool read_file --arg path=README.md --arg limit=5
 .\skillminer.ps1 chat-test --prompt "用一句话说明 SkillMiner MVP 可以做什么。"
 .\skillminer.ps1 recommend --task "给当前项目生成测试修复 skill"
 ```
@@ -89,6 +96,7 @@ DEEPSEEK_TIMEOUT=60
 - `skillminer/cli.py`: scriptable CLI and demo pipeline.
 - `skillminer/deepseek_chat.py`: DeepSeek-compatible chat client.
 - `skillminer/env.py`: dotenv load/write helpers.
+- `skillminer/tool_layer.py`: tool schemas, workspace path checks, approval previews, execution handlers, and `.skillminer/tool_events.jsonl` logging.
 - `skillminer/ingest.py`: trace validation and normalization.
 - `skillminer/miner.py`: mining orchestration.
 - `skillminer/recommender.py`: skill recommendation scoring.
@@ -97,6 +105,7 @@ DEEPSEEK_TIMEOUT=60
 - `ui/cli_style.py`: dashboard, trust dialog, colors, mascot, model label.
 - `ui/prompt_bar.py`: live prompt, slash menu, keyboard selection, multiline input.
 - `ui/interactive_shell.py`: interactive loop, slash dispatch, chat state.
+- `ui/tool_render.py`: first-class terminal blocks for tool previews and results.
 - `ui/terminal_home.py`: dashboard-only entry point.
 - `skillminer.ps1`: primary PowerShell launcher.
 - `skillminer-home.ps1`: dashboard launcher.
@@ -111,6 +120,7 @@ Do not commit:
 - `.skillminer/`
 - generated reports under `outputs/reports/`
 - generated candidate skills under `outputs/candidate_skills/`
+- tool event logs under `.skillminer/tool_events.jsonl`
 - `data/processed_traces.jsonl`
 - `.idea/`
 
@@ -122,6 +132,8 @@ Before handing off a code change, run:
 
 ```powershell
 .\.venv\Scripts\python.exe -m compileall skillminer ui
+.\skillminer.ps1 tools
+.\skillminer.ps1 tool read_file --arg path=README.md --arg limit=3
 .\skillminer.ps1 demo
 .\skillminer-home.ps1
 git diff --check
@@ -141,20 +153,16 @@ git status --short --ignored
 - Cursor movement inside the current input buffer is not implemented; editing is append/backspace only.
 - Slash menu selection supports up/down, Tab completion, and Enter confirmation for bare command prefixes.
 - The DeepSeek client is synchronous and non-streaming.
-- Web tools are not implemented yet. There is no built-in `web search`, `web fetch`, URL reader, page summarizer, or citation/source-tracking layer.
-- Coding-agent file tools are not implemented yet. There is no model-callable tool layer for listing files, reading files, creating files, editing files, deleting files, applying patches, running shell commands, or showing diffs with approval gates.
+- Web tools exist as gated `web_search` and `web_fetch` schemas/handlers, but they are not model-callable yet and currently use best-effort HTML parsing rather than a robust search provider.
+- Coding-agent file tools exist as CLI/slash-callable local tools for listing, reading, writing, editing, deleting, applying patches, and running shell commands. They are not integrated into DeepSeek tool calls yet.
+- Write staleness tracking is basic; unlike Claude Code, the MVP does not yet require a prior read timestamp before writes/edits.
 - Generated skills are never auto-installed.
 
 ## Suggested Next Work
 
-- Add a Claude Code-style tool execution layer before positioning SkillMiner as a full coding agent. The next maintainer should reference Claude Code's behavior and, where local source is available, its terminal/tool interaction model:
-  - Keep chat, tool planning, tool execution, and terminal rendering as separate modules.
-  - Add explicit tool schemas for `web_search`, `web_fetch`, `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`, `apply_patch`, and `run_shell`.
-  - Require workspace boundary checks before writes/deletes, show diffs before destructive edits, and keep an approval gate for network, shell, delete, and dependency-install actions.
-  - Render tool calls and results in the shell as first-class blocks, similar to Claude Code, instead of hiding them inside model text.
-  - Store per-turn tool events so mined traces can include actual agent actions, not only user-provided JSONL samples.
-- Add web search/fetch support with source attribution. Implement search and fetch as separate tools, save URL/title/snippet/content metadata, and pass only bounded summaries back into the model.
-- Add codebase editing support with patch-first semantics. Prefer structured patches over ad hoc full-file rewrites, preserve user changes, and record before/after diffs for rollback and later skill mining.
+- Connect the local tool layer to DeepSeek chat turns. The next maintainer should add structured tool-call parsing/planning, permission prompts, per-turn tool result messages, and model-facing result summaries instead of requiring `/tool`.
+- Harden web search/fetch with source attribution. Keep search and fetch separate, save URL/title/snippet/content metadata, and pass only bounded summaries back into the model.
+- Add stronger codebase editing semantics. Require read-before-write staleness checks, preserve user changes, prefer structured patches, and record before/after diffs for rollback and later skill mining.
 - Add a provider abstraction around `DeepSeekConfig` if OpenAI-compatible, Anthropic, or local models should be selectable.
 - Add streaming responses to make chat feel closer to coding-agent CLIs.
 - Replace `msvcrt` prompt handling with `prompt_toolkit` if full cursor movement and Shift+Enter are required.
