@@ -9,7 +9,7 @@ from skillminer.deepseek_chat import chat_completion, config_from_env, extract_a
 from skillminer.env import write_env_value
 
 from .cli_style import maybe_show_trust_dialog
-from .prompt_bar import read_prompt
+from .prompt_bar import is_command_input, read_prompt
 from .terminal_home import render_plain
 
 DEFAULT_RECOMMEND_TASK = "给当前项目生成测试修复 skill"
@@ -47,15 +47,26 @@ def _run(argv: list[str]) -> None:
         print(f"command exited with code {code}")
 
 
-def _set_env_command(key: str, value: str, chat_state: ChatConfigState, *, secret: bool = False) -> None:
-    if secret and not value.strip():
-        value = getpass.getpass("DEEPSEEK_API_KEY: ")
-    if not value.strip():
+def _set_env_command(
+    key: str,
+    value: str,
+    chat_state: ChatConfigState,
+    *,
+    prompt: str,
+    secret: bool = False,
+) -> None:
+    value = value.strip()
+    if not value:
+        if secret:
+            value = getpass.getpass(f"{prompt}: ")
+        else:
+            value = input(f"{prompt}: ").strip()
+    if not value:
         print(f"usage: /{key.lower().replace('deepseek_', '').replace('_', '')} <value>")
         return
-    write_env_value(key, value.strip())
+    write_env_value(key, value)
     chat_state.reset()
-    shown = "***" if secret else value.strip()
+    shown = "***" if secret else value
     print(f"{key} = {shown}")
 
 
@@ -88,14 +99,14 @@ def _dispatch_command(command: str, chat_state: ChatConfigState) -> bool:
         print(render_plain())
         return True
     if name == "model":
-        _set_env_command("DEEPSEEK_MODEL", " ".join(rest), chat_state)
+        _set_env_command("DEEPSEEK_MODEL", " ".join(rest), chat_state, prompt="DEEPSEEK_MODEL")
         print(render_plain())
         return True
     if name == "baseurl":
-        _set_env_command("DEEPSEEK_BASE_URL", " ".join(rest), chat_state)
+        _set_env_command("DEEPSEEK_BASE_URL", " ".join(rest), chat_state, prompt="DEEPSEEK_BASE_URL")
         return True
     if name == "key":
-        _set_env_command("DEEPSEEK_API_KEY", " ".join(rest), chat_state, secret=True)
+        _set_env_command("DEEPSEEK_API_KEY", " ".join(rest), chat_state, prompt="DEEPSEEK_API_KEY", secret=True)
         return True
     if name in shortcuts:
         _run(shortcuts[name](rest))
@@ -134,7 +145,7 @@ def main() -> int:
             return 0
         if not command:
             continue
-        if command.startswith("/"):
+        if is_command_input(command):
             if not _dispatch_command(command, chat_state):
                 return 0
             continue

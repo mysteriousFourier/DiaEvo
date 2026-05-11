@@ -23,6 +23,7 @@ COMMANDS = [
     ("/help", "Show local commands"),
     ("/exit", "Quit"),
 ]
+COMMAND_NAMES = tuple(name for name, _ in COMMANDS)
 
 
 def _erase_lines(count: int) -> None:
@@ -34,10 +35,32 @@ def _erase_lines(count: int) -> None:
 
 
 def _matching_commands(value: str) -> list[tuple[str, str]]:
-    query = value.strip().lower()
+    query = value.splitlines()[0].lower() if value else ""
     if not query.startswith("/"):
         return []
+    if any(char.isspace() for char in query):
+        return []
     return [(name, desc) for name, desc in COMMANDS if name.startswith(query)][:9]
+
+
+def active_command_name(value: str) -> str:
+    first_line = value.splitlines()[0] if value else ""
+    lower_line = first_line.lower()
+    for name in sorted(COMMAND_NAMES, key=len, reverse=True):
+        if lower_line == name or lower_line.startswith(f"{name} "):
+            return first_line[: len(name)]
+    return ""
+
+
+def is_command_input(value: str) -> bool:
+    return bool(active_command_name(value))
+
+
+def _highlight_command_line(line: str) -> str:
+    name = active_command_name(line)
+    if not name:
+        return line
+    return f"{PURPLE}{name}{RESET}{line[len(name):]}"
 
 
 def render_prompt_line(value: str = "") -> str:
@@ -47,13 +70,14 @@ def render_prompt_line(value: str = "") -> str:
     rendered = [f"{DIM}{GLYPHS['h'] * width}{RESET}"]
     for index, line in enumerate(value_lines):
         prefix = f"{GLYPHS['prompt']} " if index == 0 else "  "
-        rendered.append(_fit(f"{prefix}{line}", inner_width))
+        visible_line = _highlight_command_line(line) if index == 0 else line
+        rendered.append(_fit(f"{prefix}{visible_line}", inner_width))
     rendered.append(f"{DIM}{GLYPHS['h'] * width}{RESET}")
     return "\n".join(rendered)
 
 
 def render_footer() -> str:
-    return f"  {DIM}Ctrl+J newline {GLYPHS['dot']} ? for shortcuts{RESET}"
+    return f"  {DIM}Enter runs exact command {GLYPHS['dot']} Ctrl+J newline {GLYPHS['dot']} ? for shortcuts{RESET}"
 
 
 def render_command_menu(value: str, selected_index: int = 0) -> str:
@@ -109,7 +133,7 @@ def _cursor_to_bottom(rendered_lines: int, value: str) -> str:
 
 def read_prompt() -> str:
     if msvcrt is None or not sys.stdin.isatty():
-        return input(f"{GLYPHS['prompt']} ").strip()
+        return input(f"{GLYPHS['prompt']} ")
 
     value = ""
     rendered_value = ""
@@ -135,15 +159,10 @@ def read_prompt() -> str:
             if not value.strip():
                 redraw()
                 continue
-            matches = _matching_commands(value)
-            exact_command = any(value.strip() == name for name, _ in matches)
-            bare_slash_prefix = value.strip().startswith("/") and " " not in value.strip()
-            if matches and bare_slash_prefix and not exact_command:
-                value = matches[selected_index][0]
             sys.stdout.write(_cursor_to_bottom(rendered_lines, value))
             sys.stdout.write("\n")
             sys.stdout.flush()
-            return value.strip()
+            return value.rstrip("\n")
         if char == "\003":
             raise KeyboardInterrupt
         if char == "\032":
