@@ -4,9 +4,11 @@ import re
 import shutil
 import textwrap
 import unicodedata
+import os
 from pathlib import Path
 
 from skillminer.paths import PROJECT_ROOT, REPORTS_DIR
+from skillminer.env import load_env
 from skillminer.storage import read_json, write_json
 
 ESC = "\033["
@@ -150,7 +152,9 @@ def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
 
 
 def render_logo_card() -> str:
+    load_env()
     ingest, mining, recommendations = _load_stats()
+    model_name = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro").strip() or "deepseek-v4-pro"
     width = min(max(72, _term_width() - 4), 144)
     left_width = 38
     right_width = width - left_width - 5
@@ -162,7 +166,7 @@ def render_logo_card() -> str:
         "",
         *whale_lines(),
         "",
-        f"{DIM}DeepSeek V4 Pro {GLYPHS['dot']} Skill Mining{RESET}",
+        f"{DIM}{_truncate(model_name, left_width - 18)} {GLYPHS['dot']} Skill Mining{RESET}",
         f"{DIM}{_truncate(str(PROJECT_ROOT), left_width - 2)}{RESET}",
     ]
     feed = _feed_lines(ingest, mining, recommendations)

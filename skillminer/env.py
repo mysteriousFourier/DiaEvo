@@ -36,3 +36,27 @@ def load_env(path: str | Path | None = None, override: bool = False) -> dict[str
         if override or key not in os.environ:
             os.environ[key] = value
     return loaded
+
+
+def write_env_value(key: str, value: str, path: str | Path | None = None) -> None:
+    """Update or append a single dotenv key while preserving unrelated lines."""
+    target = Path(path) if path else PROJECT_ROOT / ".env"
+    lines = target.read_text(encoding="utf-8").splitlines() if target.exists() else []
+    updated = False
+    output: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        candidate = stripped[len("export ") :].strip() if stripped.startswith("export ") else stripped
+        if candidate.startswith("#") or "=" not in candidate:
+            output.append(line)
+            continue
+        existing_key, _ = candidate.split("=", 1)
+        if existing_key.strip().lstrip("\ufeff") == key:
+            output.append(f"{key}={value}")
+            updated = True
+        else:
+            output.append(line)
+    if not updated:
+        output.append(f"{key}={value}")
+    target.write_text("\n".join(output).rstrip() + "\n", encoding="utf-8")
+    os.environ[key] = value

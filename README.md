@@ -11,7 +11,7 @@ cd D:\codex\skillminer
 .\skillminer.ps1
 ```
 
-Running `.\skillminer.ps1` with no arguments opens the Claude Code-style terminal shell. On first run, choose `1` to trust the workspace. Then type normal text to chat through DeepSeek, or use slash commands:
+Running `.\skillminer.ps1` with no arguments opens the terminal shell. On first run, choose `1` to trust the workspace. Then type normal text to chat through DeepSeek, or use slash commands:
 
 ```text
 /ingest
@@ -20,9 +20,14 @@ Running `.\skillminer.ps1` with no arguments opens the Claude Code-style termina
 /generate C03
 /verify C03
 /demo
+/model deepseek-v4-flash
+/baseurl https://api.deepseek.com
+/key
 /home
 /exit
 ```
+
+`/model`, `/baseurl`, and `/key` update `.env` and reset the current chat client. `/key` can be used without an argument; it will prompt for the key without echoing it. `/model <name>` also redraws the dashboard, and the model label under the mascot changes to the configured model name.
 
 Run explicit subcommands when you want scriptable output:
 
@@ -37,17 +42,17 @@ Run explicit subcommands when you want scriptable output:
 
 `skillminer.ps1` is the local PowerShell launcher. It sets `PYTHONPATH`, enables UTF-8 terminal I/O, and runs the project-local `.venv` Python, so the prototype behaves like a project command without requiring a global install.
 
-## Claude Code-Style UI
+## Terminal UI
 
-The UI was replicated by reading the local Claude Code source tree:
+The UI was originally replicated by reading the local Claude Code source tree:
 
 - Startup card: `D:\download\claude-code-main\src\components\LogoV2\LogoV2.tsx`
-- Clawd terminal logo: `D:\download\claude-code-main\src\components\LogoV2\Clawd.tsx`
+- Terminal mascot: `D:\download\claude-code-main\src\components\LogoV2\Clawd.tsx`
 - Right-side feeds: `D:\download\claude-code-main\src\components\LogoV2\feedConfigs.tsx`
 - Workspace trust dialog: `D:\download\claude-code-main\src\components\TrustDialog\TrustDialog.tsx`
 - Bottom prompt and footer: `D:\download\claude-code-main\src\components\PromptInput\PromptInput.tsx`
 
-SkillMiner's matching Python renderer lives in `ui/claude_style.py`, with the shell loop in `ui/interactive_shell.py`. It is not a full Ink/React terminal app; it is a lightweight Python terminal renderer that preserves the same first-screen structure, trust confirmation, orange bordered card, Clawd logo, feed column, prompt box, `? for shortcuts` footer, and `❯` input line.
+SkillMiner's renderer now lives in `ui/cli_style.py`, the prompt/menu input lives in `ui/prompt_bar.py`, and the shell loop lives in `ui/interactive_shell.py`. It is not a full Ink/React terminal app; it is a lightweight Python terminal renderer with a startup card, trust confirmation, feed column, live prompt bar, slash menu, keyboard selection, and multiline input via `Ctrl+J`.
 
 ## DeepSeek Chat Smoke Test
 

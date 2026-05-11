@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import shlex
+import getpass
 from typing import Callable
 
 from skillminer.cli import main as cli_main
 from skillminer.deepseek_chat import chat_completion, config_from_env, extract_assistant_text
+from skillminer.env import write_env_value
 
 from .cli_style import maybe_show_trust_dialog
 from .prompt_bar import read_prompt
@@ -20,6 +22,9 @@ Commands:
   /generate <cluster-id>   Generate candidate SKILL.md
   /verify <cluster-id/path> Verify candidate skill
   /demo                    Run full MVP demo
+  /model <name>            Set DEEPSEEK_MODEL and redraw dashboard
+  /baseurl <url>           Set DEEPSEEK_BASE_URL
+  /key <api-key>           Set DEEPSEEK_API_KEY without echoing it later
   /home                    Redraw dashboard
   /help                    Show this help
   /exit                    Quit
@@ -28,13 +33,33 @@ Anything else is sent to DeepSeek as a normal chat message.
 """.strip()
 
 
+class ChatConfigState:
+    def __init__(self) -> None:
+        self.value = None
+
+    def reset(self) -> None:
+        self.value = None
+
+
 def _run(argv: list[str]) -> None:
     code = cli_main(argv)
     if code:
         print(f"command exited with code {code}")
 
 
-def _dispatch_command(command: str) -> bool:
+def _set_env_command(key: str, value: str, chat_state: ChatConfigState, *, secret: bool = False) -> None:
+    if secret and not value.strip():
+        value = getpass.getpass("DEEPSEEK_API_KEY: ")
+    if not value.strip():
+        print(f"usage: /{key.lower().replace('deepseek_', '').replace('_', '')} <value>")
+        return
+    write_env_value(key, value.strip())
+    chat_state.reset()
+    shown = "***" if secret else value.strip()
+    print(f"{key} = {shown}")
+
+
+def _dispatch_command(command: str, chat_state: ChatConfigState) -> bool:
     try:
         parts = shlex.split(command, posix=False)
     except ValueError as exc:
@@ -61,6 +86,16 @@ def _dispatch_command(command: str) -> bool:
         return True
     if name in {"home", "dashboard"}:
         print(render_plain())
+        return True
+    if name == "model":
+        _set_env_command("DEEPSEEK_MODEL", " ".join(rest), chat_state)
+        print(render_plain())
+        return True
+    if name == "baseurl":
+        _set_env_command("DEEPSEEK_BASE_URL", " ".join(rest), chat_state)
+        return True
+    if name == "key":
+        _set_env_command("DEEPSEEK_API_KEY", " ".join(rest), chat_state, secret=True)
         return True
     if name in shortcuts:
         _run(shortcuts[name](rest))
@@ -89,7 +124,7 @@ def main() -> int:
             ),
         }
     ]
-    chat_config = None
+    chat_state = ChatConfigState()
 
     while True:
         try:
@@ -100,13 +135,13 @@ def main() -> int:
         if not command:
             continue
         if command.startswith("/"):
-            if not _dispatch_command(command):
+            if not _dispatch_command(command, chat_state):
                 return 0
             continue
 
-        if chat_config is None:
+        if chat_state.value is None:
             try:
-                chat_config = config_from_env(max_tokens=4096, no_thinking=True)
+                chat_state.value = config_from_env(max_tokens=4096, no_thinking=True)
             except Exception as exc:
                 print(f"chat unavailable: {exc}")
                 print("Use `/help` for local commands, or fix `.env` and try again.")
@@ -114,7 +149,7 @@ def main() -> int:
 
         messages.append({"role": "user", "content": command})
         try:
-            response = chat_completion(messages, chat_config)
+            response = chat_completion(messages, chat_state.value)
             answer = extract_assistant_text(response)
         except Exception as exc:
             print(f"chat error: {exc}")
