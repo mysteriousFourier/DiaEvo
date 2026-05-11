@@ -1,0 +1,226 @@
+from __future__ import annotations
+
+import re
+import shutil
+import textwrap
+from pathlib import Path
+
+from skillminer.paths import PROJECT_ROOT, REPORTS_DIR
+from skillminer.storage import read_json, write_json
+
+ESC = "\033["
+ORANGE = f"{ESC}38;5;209m"
+DIM = f"{ESC}2m"
+BOLD = f"{ESC}1m"
+ITALIC = f"{ESC}3m"
+RESET = f"{ESC}0m"
+ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
+
+GLYPHS = {
+    "h": "\u2500",
+    "v": "\u2502",
+    "tl": "\u256d",
+    "tr": "\u256e",
+    "bl": "\u2570",
+    "br": "\u256f",
+    "mid": "\u2502",
+    "prompt": "\u276f",
+    "dot": "\u00b7",
+}
+
+
+def _term_width(default: int = 120) -> int:
+    return max(80, shutil.get_terminal_size((default, 30)).columns)
+
+
+def _plain_len(text: str) -> int:
+    return len(ANSI_RE.sub("", text))
+
+
+def _pad(text: str, width: int, *, align: str = "left") -> str:
+    visible = _plain_len(text)
+    missing = max(0, width - visible)
+    if align == "center":
+        left = missing // 2
+        return f"{' ' * left}{text}{' ' * (missing - left)}"
+    if align == "right":
+        return f"{' ' * missing}{text}"
+    return f"{text}{' ' * missing}"
+
+
+def _truncate(text: str, width: int) -> str:
+    clean = ANSI_RE.sub("", str(text))
+    if len(clean) <= width:
+        return clean
+    return clean[: max(0, width - 1)] + "..."
+
+
+def _fit(text: str, width: int) -> str:
+    if _plain_len(text) <= width:
+        return text
+    return _truncate(text, width)
+
+
+def _frame_line(left: str, right: str, width: int, title: str = "") -> str:
+    if title:
+        title_width = _plain_len(title)
+        return f"{left}{GLYPHS['h']} {title}{GLYPHS['h'] * max(0, width - title_width - 4)}{right}"
+    return f"{left}{GLYPHS['h'] * (width - 2)}{right}"
+
+
+def clawd_lines() -> list[str]:
+    return [
+        f"{ORANGE} \u2590\u259b\u2588\u2588\u2588\u259c\u258c{RESET}",
+        f"{ORANGE}\u259d\u259c\u2588\u2588\u2588\u2588\u2588\u259b\u2598{RESET}",
+        f"{ORANGE}  \u2598\u2598 \u259d\u259d  {RESET}",
+    ]
+
+
+def _load_stats() -> tuple[dict, dict, dict]:
+    ingest = read_json(REPORTS_DIR / "ingest_summary.json", default={}) or {}
+    mining = read_json(REPORTS_DIR / "mining_report.json", default={}) or {}
+    recommendations = read_json(REPORTS_DIR / "recommendations.json", default={}) or {}
+    return ingest, mining, recommendations
+
+
+def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
+    clusters = mining.get("clusters", []) if isinstance(mining.get("clusters", []), list) else []
+    recs = recommendations.get("recommendations", []) if isinstance(recommendations.get("recommendations", []), list) else []
+    trace_count = ingest.get("processed_count") or mining.get("trace_count") or 0
+    rule_count = len(mining.get("association_rules", []) or [])
+    sequence_count = len(mining.get("frequent_sequences", []) or [])
+
+    lines = [
+        f"{ORANGE}{BOLD}Tips for getting started{RESET}",
+        "Run /ingest to load traces, then /mine to build skill memory",
+        "",
+        f"{ORANGE}{BOLD}Current workspace{RESET}",
+        f"Traces: {trace_count}    Clusters: {len(clusters)}",
+        f"Rules: {rule_count}     Sequences: {sequence_count}",
+        "",
+    ]
+    if clusters:
+        lines.append(f"{ORANGE}{BOLD}Mining snapshot{RESET}")
+        for cluster in clusters[:3]:
+            lines.append(
+                f"{cluster.get('id', '')}  gap {cluster.get('coverage_gap', '')}  "
+                f"{_truncate(cluster.get('representative_task', ''), 48)}"
+            )
+    else:
+        lines.extend(
+            [
+                f"{ORANGE}{BOLD}What's new{RESET}",
+                "Claude Code-style trust dialog and startup card",
+                "DeepSeek V4 Pro chat is available through .env",
+                f"{ITALIC}/demo for more{RESET}",
+            ]
+        )
+
+    if recs:
+        lines.extend(["", f"{ORANGE}{BOLD}Recommended skills{RESET}"])
+        for rec in recs[:2]:
+            lines.append(f"{rec.get('skill', '')}  score {rec.get('score', '')}")
+    return lines
+
+
+def render_logo_card() -> str:
+    ingest, mining, recommendations = _load_stats()
+    width = min(max(72, _term_width() - 4), 144)
+    left_width = 38
+    right_width = width - left_width - 5
+    title = f"{ORANGE}{BOLD}SkillMiner{RESET} {DIM}v0.1.0{RESET}"
+    divider = f"{DIM}{GLYPHS['mid']}{RESET}"
+    left = [
+        "",
+        f"{BOLD}Welcome back!{RESET}",
+        "",
+        *clawd_lines(),
+        "",
+        f"{DIM}DeepSeek V4 Pro {GLYPHS['dot']} Skill Mining{RESET}",
+        f"{DIM}{_truncate(str(PROJECT_ROOT), left_width - 2)}{RESET}",
+    ]
+    feed = _feed_lines(ingest, mining, recommendations)
+    height = max(len(left), len(feed), 10)
+
+    lines = [_frame_line(GLYPHS["tl"], GLYPHS["tr"], width, title)]
+    for index in range(height):
+        left_text = left[index] if index < len(left) else ""
+        right_text = feed[index] if index < len(feed) else ""
+        lines.append(
+            f"{GLYPHS['v']}{_pad(left_text, left_width, align='center')} "
+            f"{divider} {_pad(_fit(right_text, right_width), right_width)}{GLYPHS['v']}"
+        )
+    lines.append(_frame_line(GLYPHS["bl"], GLYPHS["br"], width))
+    return "\n".join(lines)
+
+
+def render_prompt_box() -> str:
+    width = min(max(72, _term_width() - 4), 144)
+    lines = [
+        _frame_line(GLYPHS["tl"], GLYPHS["tr"], width),
+        f"{GLYPHS['v']} {GLYPHS['prompt']} {' ' * (width - 4)}{GLYPHS['v']}",
+        _frame_line(GLYPHS["bl"], GLYPHS["br"], width),
+        f"  {DIM}? for shortcuts{RESET}",
+    ]
+    return "\n".join(lines)
+
+
+def render_home() -> str:
+    return f"{render_logo_card()}\n\n{render_prompt_box()}"
+
+
+def trust_state_path() -> Path:
+    return PROJECT_ROOT / ".skillminer" / "trust.json"
+
+
+def has_trusted_workspace() -> bool:
+    state = read_json(trust_state_path(), default={}) or {}
+    return state.get("trusted") is True and state.get("path") == str(PROJECT_ROOT)
+
+
+def save_trusted_workspace() -> None:
+    write_json(trust_state_path(), {"trusted": True, "path": str(PROJECT_ROOT)})
+
+
+def render_trust_dialog(selected: int = 1) -> str:
+    width = min(max(72, _term_width() - 4), 120)
+    body_width = width - 4
+    title = f"{ORANGE}Accessing workspace:{RESET}"
+    paragraphs = [
+        str(PROJECT_ROOT),
+        "",
+        "Quick safety check: Is this a project you created or one you trust? "
+        "(Like your own code, a well-known open source project, or work from your team). "
+        "If not, take a moment to review what's in this folder first.",
+        "",
+        "SkillMiner can read project traces, generate candidate skills, and run local verification commands here.",
+        "",
+        "Security guide",
+        "",
+        f"{GLYPHS['prompt'] if selected == 1 else ' '} 1. Yes, I trust this folder",
+        f"{GLYPHS['prompt'] if selected == 2 else ' '} 2. No, exit",
+        "",
+        f"{DIM}Enter to confirm {GLYPHS['dot']} Esc/Ctrl+C to cancel{RESET}",
+    ]
+
+    lines = [_frame_line(GLYPHS["tl"], GLYPHS["tr"], width, title)]
+    for paragraph in paragraphs:
+        wrapped = textwrap.wrap(paragraph, width=body_width) if paragraph else [""]
+        for line in wrapped:
+            lines.append(f"{GLYPHS['v']} {_pad(line, body_width)} {GLYPHS['v']}")
+    lines.append(_frame_line(GLYPHS["bl"], GLYPHS["br"], width))
+    return "\n".join(lines)
+
+
+def maybe_show_trust_dialog() -> bool:
+    if has_trusted_workspace():
+        return True
+    print(render_trust_dialog())
+    while True:
+        choice = input("Select 1 or 2 [1]: ").strip().lower()
+        if choice in {"", "1", "y", "yes"}:
+            save_trusted_workspace()
+            return True
+        if choice in {"2", "n", "no", "exit", "q"}:
+            return False
+        print("Please choose 1 or 2.")

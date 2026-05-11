@@ -6,15 +6,17 @@ from typing import Callable
 from skillminer.cli import main as cli_main
 from skillminer.deepseek_chat import chat_completion, config_from_env, extract_assistant_text
 
+from .claude_style import GLYPHS, maybe_show_trust_dialog
 from .terminal_home import render_plain
 
+DEFAULT_RECOMMEND_TASK = "给当前项目生成测试修复 skill"
 
 HELP_TEXT = """
 Commands:
   /ingest                  Load data/sample_traces.jsonl
   /mine                    Run mining pipeline
-  /recommend <task>         Recommend skills for a task
-  /generate <cluster-id>    Generate candidate SKILL.md
+  /recommend <task>        Recommend skills for a task
+  /generate <cluster-id>   Generate candidate SKILL.md
   /verify <cluster-id/path> Verify candidate skill
   /demo                    Run full MVP demo
   /home                    Redraw dashboard
@@ -39,17 +41,18 @@ def _dispatch_command(command: str) -> bool:
         return True
     if not parts:
         return True
-    name, rest = parts[0].lower(), parts[1:]
+
+    name, rest = parts[0].lower().removeprefix("/"), parts[1:]
     shortcuts: dict[str, Callable[[list[str]], list[str]]] = {
         "ingest": lambda args: ["ingest", "--input", "data/sample_traces.jsonl", *args],
         "mine": lambda args: ["mine", *args],
-        "recommend": lambda args: ["recommend", "--task", " ".join(args)] if args else ["recommend", "--task", "给当前项目生成测试修复 skill"],
+        "recommend": lambda args: ["recommend", "--task", " ".join(args) if args else DEFAULT_RECOMMEND_TASK],
         "generate": lambda args: ["generate", "--cluster-id", args[0] if args else "C03"],
         "verify": lambda args: ["verify", "--skill", args[0] if args else "outputs/candidate_skills/C03"],
         "demo": lambda args: ["demo", *args],
         "chat": lambda args: ["chat-test", "--interactive", *args],
     }
-    name = name.removeprefix("/")
+
     if name in {"exit", "quit", "q"}:
         return False
     if name in {"help", "?"}:
@@ -61,15 +64,17 @@ def _dispatch_command(command: str) -> bool:
     if name in shortcuts:
         _run(shortcuts[name](rest))
         return True
+
     print(f"unknown command: /{name}")
     print("type `/help` for commands")
     return True
 
 
 def main() -> int:
+    if not maybe_show_trust_dialog():
+        return 1
+
     print(render_plain())
-    print()
-    print("SkillMiner interactive shell. Type a prompt to chat, `/help` for commands, `/exit` to quit.")
     messages = [
         {
             "role": "system",
@@ -84,9 +89,10 @@ def main() -> int:
         }
     ]
     chat_config = None
+
     while True:
         try:
-            command = input("skillminer> ").strip()
+            command = input(f"\n{GLYPHS['prompt']} ").strip()
         except (EOFError, KeyboardInterrupt):
             print()
             return 0
@@ -96,13 +102,15 @@ def main() -> int:
             if not _dispatch_command(command):
                 return 0
             continue
+
         if chat_config is None:
             try:
-                chat_config = config_from_env(max_tokens=1024, no_thinking=True)
+                chat_config = config_from_env(max_tokens=4096, no_thinking=True)
             except Exception as exc:
                 print(f"chat unavailable: {exc}")
                 print("Use `/help` for local commands, or fix `.env` and try again.")
                 continue
+
         messages.append({"role": "user", "content": command})
         try:
             response = chat_completion(messages, chat_config)

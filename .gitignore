@@ -5,6 +5,7 @@ __pycache__/
 .env
 .env.*
 !.env.example
+.skillminer/
 .ruff_cache/
 .mypy_cache/
 .uv-cache/

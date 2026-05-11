@@ -1,6 +1,6 @@
 # SkillMiner
 
-SkillMiner is a Python MVP for a self-evolving Agent Skill acquisition and recommendation system. It follows the project plan in `D:\codex\自进化Agent项目计划.md`: ingest task traces, mine reusable patterns, recommend skills, generate candidate `SKILL.md` files, and verify them before installation.
+SkillMiner is a Python MVP for a self-evolving Agent skill acquisition and recommendation system. It ingests task traces, mines reusable workflow patterns, recommends existing skills, generates candidate `SKILL.md` files, and verifies them before installation.
 
 The implementation intentionally keeps the MVP light. It uses standard-library TF-IDF, K-Means, Apriori-style association rules, PrefixSpan-style subsequence mining, and Personalized PageRank. Heavier dependencies such as `sentence-transformers`, `mlxtend`, and `networkx` can replace these modules later without changing the CLI shape.
 
@@ -9,6 +9,19 @@ The implementation intentionally keeps the MVP light. It uses standard-library T
 ```powershell
 cd D:\codex\skillminer
 .\skillminer.ps1
+```
+
+Running `.\skillminer.ps1` with no arguments opens the Claude Code-style terminal shell. On first run, choose `1` to trust the workspace. Then type normal text to chat through DeepSeek, or use slash commands:
+
+```text
+/ingest
+/mine
+/recommend 给当前项目生成测试修复 skill
+/generate C03
+/verify C03
+/demo
+/home
+/exit
 ```
 
 Run explicit subcommands when you want scriptable output:
@@ -22,15 +35,19 @@ Run explicit subcommands when you want scriptable output:
 .\skillminer-home.ps1
 ```
 
-`skillminer.ps1` is the local PowerShell launcher. It gives this prototype a Claude Code-like entry point inside the project directory without requiring a global install.
-Inside the interactive shell, type normal text to chat through DeepSeek, or slash commands such as `/demo`, `/mine`, `/recommend 给当前项目生成测试修复 skill`, and `/exit`.
+`skillminer.ps1` is the local PowerShell launcher. It sets `PYTHONPATH`, enables UTF-8 terminal I/O, and runs the project-local `.venv` Python, so the prototype behaves like a project command without requiring a global install.
 
-If the machine does not have `python` on PATH, use `uv` with a project-local cache:
+## Claude Code-Style UI
 
-```powershell
-$env:UV_CACHE_DIR="$PWD\.uv-cache"
-uv run --with pytest python -m skillminer.cli demo
-```
+The UI was replicated by reading the local Claude Code source tree:
+
+- Startup card: `D:\download\claude-code-main\src\components\LogoV2\LogoV2.tsx`
+- Clawd terminal logo: `D:\download\claude-code-main\src\components\LogoV2\Clawd.tsx`
+- Right-side feeds: `D:\download\claude-code-main\src\components\LogoV2\feedConfigs.tsx`
+- Workspace trust dialog: `D:\download\claude-code-main\src\components\TrustDialog\TrustDialog.tsx`
+- Bottom prompt and footer: `D:\download\claude-code-main\src\components\PromptInput\PromptInput.tsx`
+
+SkillMiner's matching Python renderer lives in `ui/claude_style.py`, with the shell loop in `ui/interactive_shell.py`. It is not a full Ink/React terminal app; it is a lightweight Python terminal renderer that preserves the same first-screen structure, trust confirmation, orange bordered card, Clawd logo, feed column, prompt box, `? for shortcuts` footer, and `❯` input line.
 
 ## DeepSeek Chat Smoke Test
 
@@ -53,8 +70,7 @@ Run a tiny interactive conversation:
 .\skillminer.ps1 chat-test --interactive
 ```
 
-The command uses `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL` from `.env`. It defaults to `https://api.deepseek.com` and `deepseek-v4-pro`.
-`DEEPSEEK_MAX_TOKENS` controls maximum output length, not context length; the template uses `4096` as a practical default for testing.
+The command uses `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL` from `.env`. It defaults to `https://api.deepseek.com` and `deepseek-v4-pro`. `DEEPSEEK_MAX_TOKENS` controls maximum output length, not context length; the template uses `4096` as a practical default for testing.
 
 ## MVP Commands
 
@@ -95,6 +111,7 @@ Each JSONL trace contains:
 - Replace `skillminer/association_rules.py` with mlxtend FP-Growth.
 - Replace `skillminer/skill_graph.py` with networkx for richer heterogeneous graph analysis.
 - Add `skillminer/evaluation.py` for Precision@K, Recall@K, MRR, and NDCG experiments.
+- Add a richer terminal layer using Textual, prompt_toolkit, or Ink if you want true multi-line editing and live footer navigation.
 - Add an installation gate that requires user confirmation before moving verified skills into a live skill directory.
 
 ## Safety Boundary

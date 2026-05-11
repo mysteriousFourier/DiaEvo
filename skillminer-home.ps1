@@ -9,6 +9,10 @@ if (-not (Test-Path -LiteralPath $Python)) {
 }
 
 $env:PYTHONPATH = $ProjectRoot
+$env:PYTHONUTF8 = "1"
+$env:PYTHONIOENCODING = "utf-8"
+[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new()
+[Console]::InputEncoding = [System.Text.UTF8Encoding]::new()
 Push-Location $ProjectRoot
 try {
     & $Python -m ui.terminal_home @args
