@@ -145,7 +145,6 @@ def _load_stats() -> tuple[dict, dict, dict]:
 
 def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
     clusters = mining.get("clusters", []) if isinstance(mining.get("clusters", []), list) else []
-    recs = recommendations.get("recommendations", []) if isinstance(recommendations.get("recommendations", []), list) else []
     trace_count = ingest.get("trace_count") or ingest.get("processed_count") or mining.get("trace_count") or 0
     success_rate = ingest.get("success_rate", "")
     rule_count = len(mining.get("association_rules", []) or [])
@@ -170,40 +169,11 @@ def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
         + (f"  lang {top_languages}" if top_languages else ""),
         f"tools {top_tools}" if top_tools else "tools --",
         "",
+        f"{BLUE}{BOLD}Next actions{RESET}",
+        "/mine refreshes the mining report",
+        "/recommend <task> ranks reusable skills",
+        "/tools shows local tool schemas",
     ]
-    if clusters:
-        lines.append(f"{BLUE}{BOLD}Mining snapshot{RESET}")
-        for cluster in clusters[:3]:
-            cluster_id = str(cluster.get("id", ""))
-            gap = _as_float(cluster.get("coverage_gap", 0.0))
-            size = _as_int(cluster.get("size", 0))
-            tools = _top_items(cluster.get("top_tools", []), limit=2)
-            prefix = f"{cluster_id} size {size} gap {gap:.2f}"
-            suffix = f" tools {tools}" if tools else ""
-            lines.append(
-                f"{prefix}{suffix}"
-            )
-            lines.append(f"  {_truncate(cluster.get('representative_task', ''), 58)}")
-    else:
-        lines.extend(
-            [
-                f"{BLUE}{BOLD}What's new{RESET}",
-                "Claude Code-style trust dialog and startup card",
-                "DeepSeek V4 Pro chat is available through .env",
-                f"{ITALIC}/demo for more{RESET}",
-            ]
-        )
-
-    if recs:
-        lines.extend(["", f"{BLUE}{BOLD}Recommended skills{RESET}"])
-        for index, rec in enumerate(recs[:3], start=1):
-            skill = _truncate(str(rec.get("skill", "")), 26)
-            score = _as_float(rec.get("score", 0.0))
-            risk = _as_float(rec.get("risk", 0.0))
-            source = str(rec.get("source", ""))
-            lines.append(f"{index}. {skill}  {score:.3f}  risk {risk:.2f}  {source}")
-    else:
-        lines.extend(["", f"{BLUE}{BOLD}Recommended skills{RESET}", "Run /recommend <task> to rank skills"])
     return lines
 
 
@@ -213,15 +183,14 @@ def render_logo_card() -> str:
     model_name = os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro").strip() or "deepseek-v4-pro"
     width = min(max(72, _term_width() - 4), 144)
     left_width = 38
-    right_width = width - left_width - 5
+    column_gap = "   "
+    right_width = width - left_width - len(column_gap) - 2
     title = f"{BLUE}{BOLD}SkillMiner{RESET} {DIM}v0.1.0{RESET}"
-    divider = f"{BLUE}{GLYPHS['mid']}{RESET}"
     left = [
         "",
         f"{BOLD}Welcome back!{RESET}",
         "",
         *whale_lines(),
-        "",
         f"{DIM}{_truncate(model_name, left_width - 18)} {GLYPHS['dot']} Skill Mining{RESET}",
         f"{DIM}{_truncate(str(PROJECT_ROOT), left_width - 2)}{RESET}",
     ]
@@ -233,8 +202,8 @@ def render_logo_card() -> str:
         left_text = left[index] if index < len(left) else ""
         right_text = feed[index] if index < len(feed) else ""
         lines.append(
-            f"{BLUE}{GLYPHS['v']}{RESET}{_pad(left_text, left_width, align='center')} "
-            f"{divider} {_pad(_fit(right_text, right_width), right_width)}{BLUE}{GLYPHS['v']}{RESET}"
+            f"{BLUE}{GLYPHS['v']}{RESET}{_pad(left_text, left_width, align='center')}"
+            f"{column_gap}{_pad(_fit(right_text, right_width), right_width)}{BLUE}{GLYPHS['v']}{RESET}"
         )
     lines.append(_frame_line(GLYPHS["bl"], GLYPHS["br"], width))
     return "\n".join(lines)
