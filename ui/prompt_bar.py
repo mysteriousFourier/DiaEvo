@@ -74,6 +74,17 @@ def render_prompt(value: str = "") -> str:
     return "\n".join(pieces)
 
 
+def _cursor_to_input(rendered_lines: int, value: str) -> str:
+    lines_below_input = max(0, rendered_lines - 2)
+    right_moves = _display_width(f"{GLYPHS['prompt']} {value}")
+    return f"\033[{lines_below_input}A\r\033[{right_moves}C"
+
+
+def _cursor_to_bottom(rendered_lines: int) -> str:
+    lines_below_input = max(0, rendered_lines - 2)
+    return f"\033[{lines_below_input}B\r"
+
+
 def read_prompt() -> str:
     if msvcrt is None or not sys.stdin.isatty():
         return input(f"{GLYPHS['prompt']} ").strip()
@@ -84,16 +95,19 @@ def read_prompt() -> str:
     def redraw() -> None:
         nonlocal rendered_lines
         if rendered_lines:
+            sys.stdout.write(_cursor_to_bottom(rendered_lines))
             _erase_lines(rendered_lines)
         rendered = render_prompt(value)
         rendered_lines = rendered.count("\n") + 1
         sys.stdout.write(rendered)
+        sys.stdout.write(_cursor_to_input(rendered_lines, value))
         sys.stdout.flush()
 
     redraw()
     while True:
         char = msvcrt.getwch()
         if char in {"\r", "\n"}:
+            sys.stdout.write(_cursor_to_bottom(rendered_lines))
             sys.stdout.write("\n")
             sys.stdout.flush()
             return value.strip()
