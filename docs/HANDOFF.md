@@ -141,10 +141,20 @@ git status --short --ignored
 - Cursor movement inside the current input buffer is not implemented; editing is append/backspace only.
 - Slash menu selection supports up/down, Tab completion, and Enter confirmation for bare command prefixes.
 - The DeepSeek client is synchronous and non-streaming.
+- Web tools are not implemented yet. There is no built-in `web search`, `web fetch`, URL reader, page summarizer, or citation/source-tracking layer.
+- Coding-agent file tools are not implemented yet. There is no model-callable tool layer for listing files, reading files, creating files, editing files, deleting files, applying patches, running shell commands, or showing diffs with approval gates.
 - Generated skills are never auto-installed.
 
 ## Suggested Next Work
 
+- Add a Claude Code-style tool execution layer before positioning SkillMiner as a full coding agent. The next maintainer should reference Claude Code's behavior and, where local source is available, its terminal/tool interaction model:
+  - Keep chat, tool planning, tool execution, and terminal rendering as separate modules.
+  - Add explicit tool schemas for `web_search`, `web_fetch`, `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`, `apply_patch`, and `run_shell`.
+  - Require workspace boundary checks before writes/deletes, show diffs before destructive edits, and keep an approval gate for network, shell, delete, and dependency-install actions.
+  - Render tool calls and results in the shell as first-class blocks, similar to Claude Code, instead of hiding them inside model text.
+  - Store per-turn tool events so mined traces can include actual agent actions, not only user-provided JSONL samples.
+- Add web search/fetch support with source attribution. Implement search and fetch as separate tools, save URL/title/snippet/content metadata, and pass only bounded summaries back into the model.
+- Add codebase editing support with patch-first semantics. Prefer structured patches over ad hoc full-file rewrites, preserve user changes, and record before/after diffs for rollback and later skill mining.
 - Add a provider abstraction around `DeepSeekConfig` if OpenAI-compatible, Anthropic, or local models should be selectable.
 - Add streaming responses to make chat feel closer to coding-agent CLIs.
 - Replace `msvcrt` prompt handling with `prompt_toolkit` if full cursor movement and Shift+Enter are required.

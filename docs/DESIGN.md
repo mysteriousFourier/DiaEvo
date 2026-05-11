@@ -20,6 +20,8 @@ The MVP avoids heavy dependencies so it can run in constrained course environmen
 
 The interactive shell is intentionally still a lightweight Python terminal renderer rather than a full Ink/React application. It implements the pieces needed for the MVP: a startup card, workspace trust confirmation, prompt bar, slash command menu, keyboard selection, multiline input through `Ctrl+J`, and DeepSeek chat calls.
 
+The MVP is not yet a full coding-agent runtime. It does not include model-callable web search/fetch tools, repository file read/write/edit/delete tools, patch application, shell execution, approval gates, or tool-result rendering. Those capabilities should be added as a separate tool execution layer rather than mixed into the chat loop.
+
 ## Runtime Entry Points
 
 - `.\skillminer.ps1`: primary entry point. With no args it opens the interactive shell; with args it runs the scriptable CLI.
@@ -65,6 +67,9 @@ Normal non-slash text is sent to DeepSeek using the current `.env` values.
 
 ## Future Work
 
+- Add a Claude Code-style tool execution layer with explicit tool schemas, tool-call rendering, per-turn action logs, workspace boundary checks, and approval gates for network, shell, deletes, dependency installation, and other risky operations.
+- Add web search and web fetch as separate tools with URL/title/snippet/content metadata, bounded summaries, and source attribution.
+- Add codebase file tools for listing, reading, writing, editing, deleting, patching, and diff display. Prefer patch-first edits and preserve user changes.
 - Add real evaluation metrics: Precision@K, Recall@K, MRR, NDCG.
 - Add sandbox replay for historical tasks.
 - Add contextual bandit selection for cold start.
