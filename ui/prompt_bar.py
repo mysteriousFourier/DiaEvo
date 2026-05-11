@@ -56,6 +56,14 @@ def is_command_input(value: str) -> bool:
     return bool(active_command_name(value))
 
 
+def _submit_value(value: str, selected_index: int = 0) -> str:
+    matches = _matching_commands(value)
+    if matches and not active_command_name(value):
+        selected_index = max(0, min(selected_index, len(matches) - 1))
+        return matches[selected_index][0]
+    return value.rstrip("\n")
+
+
 def _highlight_command_line(line: str) -> str:
     name = active_command_name(line)
     if not name:
@@ -77,7 +85,7 @@ def render_prompt_line(value: str = "") -> str:
 
 
 def render_footer() -> str:
-    return f"  {DIM}Enter runs exact command {GLYPHS['dot']} Ctrl+J newline {GLYPHS['dot']} ? for shortcuts{RESET}"
+    return f"  {DIM}Enter runs command or selected menu {GLYPHS['dot']} Ctrl+J newline {GLYPHS['dot']} ? for shortcuts{RESET}"
 
 
 def render_command_menu(value: str, selected_index: int = 0) -> str:
@@ -159,10 +167,11 @@ def read_prompt() -> str:
             if not value.strip():
                 redraw()
                 continue
+            value = _submit_value(value, selected_index)
             sys.stdout.write(_cursor_to_bottom(rendered_lines, value))
             sys.stdout.write("\n")
             sys.stdout.flush()
-            return value.rstrip("\n")
+            return value
         if char == "\003":
             raise KeyboardInterrupt
         if char == "\032":
