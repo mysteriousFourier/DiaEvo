@@ -48,17 +48,18 @@ def render_footer() -> str:
     return f"  {DIM}? for shortcuts{RESET}"
 
 
-def render_command_menu(value: str) -> str:
+def render_command_menu(value: str, selected_index: int = 0) -> str:
     matches = _matching_commands(value)
     if not matches:
         return ""
+    selected_index = max(0, min(selected_index, len(matches) - 1))
     width = min(max(72, _term_width() - 4), 144)
     name_width = max(_display_width(name) for name, _ in matches) + 2
     lines = []
     for index, (name, description) in enumerate(matches):
         padding = " " * max(1, name_width - _display_width(name))
         desc = _fit(description, width - name_width - 1)
-        if index == 0:
+        if index == selected_index:
             lines.append(f"{BLUE}{name}{padding}{desc}{RESET}")
         else:
             lines.append(f"{name}{padding}{DIM}{desc}{RESET}")
@@ -67,6 +68,15 @@ def render_command_menu(value: str) -> str:
 
 def render_prompt(value: str = "") -> str:
     menu = render_command_menu(value)
+    pieces = [render_prompt_line(value)]
+    if menu:
+        pieces.append(menu)
+    pieces.append(render_footer())
+    return "\n".join(pieces)
+
+
+def render_prompt_state(value: str = "", selected_index: int = 0) -> str:
+    menu = render_command_menu(value, selected_index)
     pieces = [render_prompt_line(value)]
     if menu:
         pieces.append(menu)
@@ -90,6 +100,7 @@ def read_prompt() -> str:
         return input(f"{GLYPHS['prompt']} ").strip()
 
     value = ""
+    selected_index = 0
     rendered_lines = 0
 
     def redraw() -> None:
@@ -97,7 +108,7 @@ def read_prompt() -> str:
         if rendered_lines:
             sys.stdout.write(_cursor_to_bottom(rendered_lines))
             _erase_lines(rendered_lines)
-        rendered = render_prompt(value)
+        rendered = render_prompt_state(value, selected_index)
         rendered_lines = rendered.count("\n") + 1
         sys.stdout.write(rendered)
         sys.stdout.write(_cursor_to_input(rendered_lines, value))
@@ -107,6 +118,11 @@ def read_prompt() -> str:
     while True:
         char = msvcrt.getwch()
         if char in {"\r", "\n"}:
+            matches = _matching_commands(value)
+            exact_command = any(value.strip() == name for name, _ in matches)
+            bare_slash_prefix = value.strip().startswith("/") and " " not in value.strip()
+            if matches and bare_slash_prefix and not exact_command:
+                value = matches[selected_index][0]
             sys.stdout.write(_cursor_to_bottom(rendered_lines))
             sys.stdout.write("\n")
             sys.stdout.flush()
@@ -117,21 +133,32 @@ def read_prompt() -> str:
             raise EOFError
         if char == "\b":
             value = value[:-1]
+            selected_index = 0
             redraw()
             continue
         if char in {"\x00", "\xe0"}:
-            msvcrt.getwch()
+            key = msvcrt.getwch()
+            matches = _matching_commands(value)
+            if matches and key == "H":
+                selected_index = (selected_index - 1) % len(matches)
+                redraw()
+            elif matches and key == "P":
+                selected_index = (selected_index + 1) % len(matches)
+                redraw()
             continue
         if char == "\t":
             matches = _matching_commands(value)
             if matches:
-                value = matches[0][0] + " "
+                value = matches[selected_index][0] + " "
+                selected_index = 0
                 redraw()
             continue
         if char == "\x1b":
             value = ""
+            selected_index = 0
             redraw()
             continue
         if char.isprintable():
             value += char
+            selected_index = 0
             redraw()
