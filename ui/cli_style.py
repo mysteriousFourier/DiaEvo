@@ -10,12 +10,13 @@ from skillminer.paths import PROJECT_ROOT, REPORTS_DIR
 from skillminer.storage import read_json, write_json
 
 ESC = "\033["
-ORANGE = f"{ESC}38;5;209m"
 DIM = f"{ESC}2m"
 BOLD = f"{ESC}1m"
 ITALIC = f"{ESC}3m"
 RESET = f"{ESC}0m"
 BLUE = f"{ESC}38;5;111m"
+PURPLE = f"{ESC}38;5;141m"
+WHITE = f"{ESC}38;5;255m"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
 
 GLYPHS = {
@@ -89,15 +90,15 @@ def _frame_line(left: str, right: str, width: int, title: str = "") -> str:
     if title:
         title_width = _plain_len(title)
         tail = GLYPHS["h"] * max(0, width - title_width - 4)
-        return f"{ORANGE}{left}{GLYPHS['h']} {RESET}{title}{ORANGE}{tail}{right}{RESET}"
-    return f"{ORANGE}{left}{GLYPHS['h'] * (width - 2)}{right}{RESET}"
+        return f"{BLUE}{left}{GLYPHS['h']} {RESET}{title}{BLUE}{tail}{right}{RESET}"
+    return f"{BLUE}{left}{GLYPHS['h'] * (width - 2)}{right}{RESET}"
 
 
-def clawd_lines() -> list[str]:
+def whale_lines() -> list[str]:
     return [
-        f"{ORANGE} \u2590\u259b\u2588\u2588\u2588\u259c\u258c{RESET}",
-        f"{ORANGE}\u259d\u259c\u2588\u2588\u2588\u2588\u2588\u259b\u2598{RESET}",
-        f"{ORANGE}  \u2598\u2598 \u259d\u259d  {RESET}",
+        f"{BLUE}    \u2580\u2588\u2580{RESET}",
+        f"{BLUE} \u259f\u2599 \u259f\u259b\u2588\u2588\u2588\u2588\u259c\u258c{RESET}",
+        f"{BLUE} \u259c\u259b{WHITE}\u259d\u259c\u2588\u2588\u2588\u2588\u2588\u259b\u2598{RESET}"
     ]
 
 
@@ -116,16 +117,16 @@ def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
     sequence_count = len(mining.get("frequent_sequences", []) or [])
 
     lines = [
-        f"{ORANGE}{BOLD}Tips for getting started{RESET}",
+        f"{BLUE}{BOLD}Tips for getting started{RESET}",
         "Run /ingest to load traces, then /mine to build skill memory",
         "",
-        f"{ORANGE}{BOLD}Current workspace{RESET}",
+        f"{BLUE}{BOLD}Current workspace{RESET}",
         f"Traces: {trace_count}    Clusters: {len(clusters)}",
         f"Rules: {rule_count}     Sequences: {sequence_count}",
         "",
     ]
     if clusters:
-        lines.append(f"{ORANGE}{BOLD}Mining snapshot{RESET}")
+        lines.append(f"{BLUE}{BOLD}Mining snapshot{RESET}")
         for cluster in clusters[:3]:
             lines.append(
                 f"{cluster.get('id', '')}  gap {cluster.get('coverage_gap', '')}  "
@@ -134,7 +135,7 @@ def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
     else:
         lines.extend(
             [
-                f"{ORANGE}{BOLD}What's new{RESET}",
+                f"{BLUE}{BOLD}What's new{RESET}",
                 "Claude Code-style trust dialog and startup card",
                 "DeepSeek V4 Pro chat is available through .env",
                 f"{ITALIC}/demo for more{RESET}",
@@ -142,7 +143,7 @@ def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
         )
 
     if recs:
-        lines.extend(["", f"{ORANGE}{BOLD}Recommended skills{RESET}"])
+        lines.extend(["", f"{BLUE}{BOLD}Recommended skills{RESET}"])
         for rec in recs[:2]:
             lines.append(f"{rec.get('skill', '')}  score {rec.get('score', '')}")
     return lines
@@ -153,13 +154,13 @@ def render_logo_card() -> str:
     width = min(max(72, _term_width() - 4), 144)
     left_width = 38
     right_width = width - left_width - 5
-    title = f"{ORANGE}{BOLD}SkillMiner{RESET} {DIM}v0.1.0{RESET}"
-    divider = f"{ORANGE}{GLYPHS['mid']}{RESET}"
+    title = f"{BLUE}{BOLD}SkillMiner{RESET} {DIM}v0.1.0{RESET}"
+    divider = f"{BLUE}{GLYPHS['mid']}{RESET}"
     left = [
         "",
         f"{BOLD}Welcome back!{RESET}",
         "",
-        *clawd_lines(),
+        *whale_lines(),
         "",
         f"{DIM}DeepSeek V4 Pro {GLYPHS['dot']} Skill Mining{RESET}",
         f"{DIM}{_truncate(str(PROJECT_ROOT), left_width - 2)}{RESET}",
@@ -172,8 +173,8 @@ def render_logo_card() -> str:
         left_text = left[index] if index < len(left) else ""
         right_text = feed[index] if index < len(feed) else ""
         lines.append(
-            f"{ORANGE}{GLYPHS['v']}{RESET}{_pad(left_text, left_width, align='center')} "
-            f"{divider} {_pad(_fit(right_text, right_width), right_width)}{ORANGE}{GLYPHS['v']}{RESET}"
+            f"{BLUE}{GLYPHS['v']}{RESET}{_pad(left_text, left_width, align='center')} "
+            f"{divider} {_pad(_fit(right_text, right_width), right_width)}{BLUE}{GLYPHS['v']}{RESET}"
         )
     lines.append(_frame_line(GLYPHS["bl"], GLYPHS["br"], width))
     return "\n".join(lines)
@@ -210,7 +211,7 @@ def save_trusted_workspace() -> None:
 def render_trust_dialog(selected: int = 1) -> str:
     width = min(max(72, _term_width() - 4), 120)
     body_width = width - 4
-    title = f"{ORANGE}Accessing workspace:{RESET}"
+    title = f"{BLUE}Accessing workspace:{RESET}"
     paragraphs = [
         str(PROJECT_ROOT),
         "",
@@ -232,7 +233,7 @@ def render_trust_dialog(selected: int = 1) -> str:
     for paragraph in paragraphs:
         wrapped = textwrap.wrap(paragraph, width=body_width) if paragraph else [""]
         for line in wrapped:
-            lines.append(f"{ORANGE}{GLYPHS['v']}{RESET} {_pad(line, body_width)} {ORANGE}{GLYPHS['v']}{RESET}")
+            lines.append(f"{BLUE}{GLYPHS['v']}{RESET} {_pad(line, body_width)} {BLUE}{GLYPHS['v']}{RESET}")
     lines.append(_frame_line(GLYPHS["bl"], GLYPHS["br"], width))
     return "\n".join(lines)
 

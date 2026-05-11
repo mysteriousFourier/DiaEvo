@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from .claude_style import render_home
+from .cli_style import render_home
 
 if hasattr(sys.stdout, "reconfigure"):
     sys.stdout.reconfigure(encoding="utf-8", errors="replace")

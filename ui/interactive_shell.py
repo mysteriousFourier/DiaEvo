@@ -6,7 +6,7 @@ from typing import Callable
 from skillminer.cli import main as cli_main
 from skillminer.deepseek_chat import chat_completion, config_from_env, extract_assistant_text
 
-from .claude_style import maybe_show_trust_dialog
+from .cli_style import maybe_show_trust_dialog
 from .prompt_bar import read_prompt
 from .terminal_home import render_plain
 

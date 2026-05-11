@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from .claude_style import BLUE, DIM, GLYPHS, RESET, _display_width, _fit, _term_width
+from .cli_style import PURPLE, DIM, GLYPHS, RESET, _display_width, _fit, _term_width
 
 try:
     import msvcrt
@@ -65,7 +65,7 @@ def render_command_menu(value: str, selected_index: int = 0) -> str:
         padding = " " * max(1, name_width - _display_width(name))
         desc = _fit(description, width - name_width - 1)
         if index == selected_index:
-            lines.append(f"{BLUE}{name}{padding}{desc}{RESET}")
+            lines.append(f"{PURPLE}{name}{padding}{desc}{RESET}")
         else:
             lines.append(f"{name}{padding}{DIM}{desc}{RESET}")
     return "\n".join(lines)
