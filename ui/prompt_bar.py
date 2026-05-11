@@ -109,16 +109,18 @@ def read_prompt() -> str:
         return input(f"{GLYPHS['prompt']} ").strip()
 
     value = ""
+    rendered_value = ""
     selected_index = 0
     rendered_lines = 0
 
     def redraw() -> None:
-        nonlocal rendered_lines
+        nonlocal rendered_lines, rendered_value
         if rendered_lines:
-            sys.stdout.write(_cursor_to_bottom(rendered_lines, value))
+            sys.stdout.write(_cursor_to_bottom(rendered_lines, rendered_value))
             _erase_lines(rendered_lines)
         rendered = render_prompt_state(value, selected_index)
         rendered_lines = rendered.count("\n") + 1
+        rendered_value = value
         sys.stdout.write(rendered)
         sys.stdout.write(_cursor_to_input(rendered_lines, value))
         sys.stdout.flush()
@@ -144,6 +146,8 @@ def read_prompt() -> str:
         if char == "\032":
             raise EOFError
         if char == "\n":
+            if not value or value.endswith("\n"):
+                continue
             value += "\n"
             selected_index = 0
             redraw()
