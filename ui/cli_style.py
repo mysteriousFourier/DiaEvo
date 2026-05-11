@@ -89,6 +89,37 @@ def _fit(text: str, width: int) -> str:
     return _truncate(text, width)
 
 
+def _as_int(value: object, default: int = 0) -> int:
+    try:
+        return int(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _as_float(value: object, default: float = 0.0) -> float:
+    try:
+        return float(value)  # type: ignore[arg-type]
+    except (TypeError, ValueError):
+        return default
+
+
+def _metric(name: str, value: object) -> str:
+    return f"{name} {value}"
+
+
+def _percent(value: object) -> str:
+    return f"{_as_float(value) * 100:.0f}%"
+
+
+def _top_items(value: object, *, limit: int = 3) -> str:
+    if isinstance(value, dict):
+        items = sorted(value.items(), key=lambda item: (-_as_int(item[1]), str(item[0])))[:limit]
+        return ", ".join(f"{key} {count}" for key, count in items)
+    if isinstance(value, list):
+        return ", ".join(str(item) for item in value[:limit] if str(item).strip())
+    return ""
+
+
 def _frame_line(left: str, right: str, width: int, title: str = "") -> str:
     if title:
         title_width = _plain_len(title)
@@ -115,26 +146,44 @@ def _load_stats() -> tuple[dict, dict, dict]:
 def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
     clusters = mining.get("clusters", []) if isinstance(mining.get("clusters", []), list) else []
     recs = recommendations.get("recommendations", []) if isinstance(recommendations.get("recommendations", []), list) else []
-    trace_count = ingest.get("processed_count") or mining.get("trace_count") or 0
+    trace_count = ingest.get("trace_count") or ingest.get("processed_count") or mining.get("trace_count") or 0
+    success_rate = ingest.get("success_rate", "")
     rule_count = len(mining.get("association_rules", []) or [])
     sequence_count = len(mining.get("frequent_sequences", []) or [])
+    top_languages = _top_items(ingest.get("languages", {}), limit=2)
+    top_tools = _top_items(ingest.get("top_tools", {}), limit=3)
 
     lines = [
         f"{BLUE}{BOLD}Tips for getting started{RESET}",
         "Run /ingest to load traces, then /mine to build skill memory",
         "",
         f"{BLUE}{BOLD}Current workspace{RESET}",
-        f"Traces: {trace_count}    Clusters: {len(clusters)}",
-        f"Rules: {rule_count}     Sequences: {sequence_count}",
+        "  ".join(
+            [
+                _metric("traces", trace_count),
+                _metric("clusters", len(clusters)),
+                _metric("rules", rule_count),
+                _metric("seq", sequence_count),
+            ]
+        ),
+        f"success {_percent(success_rate) if success_rate != '' else '--'}"
+        + (f"  lang {top_languages}" if top_languages else ""),
+        f"tools {top_tools}" if top_tools else "tools --",
         "",
     ]
     if clusters:
         lines.append(f"{BLUE}{BOLD}Mining snapshot{RESET}")
         for cluster in clusters[:3]:
+            cluster_id = str(cluster.get("id", ""))
+            gap = _as_float(cluster.get("coverage_gap", 0.0))
+            size = _as_int(cluster.get("size", 0))
+            tools = _top_items(cluster.get("top_tools", []), limit=2)
+            prefix = f"{cluster_id} size {size} gap {gap:.2f}"
+            suffix = f" tools {tools}" if tools else ""
             lines.append(
-                f"{cluster.get('id', '')}  gap {cluster.get('coverage_gap', '')}  "
-                f"{_truncate(cluster.get('representative_task', ''), 48)}"
+                f"{prefix}{suffix}"
             )
+            lines.append(f"  {_truncate(cluster.get('representative_task', ''), 58)}")
     else:
         lines.extend(
             [
@@ -147,8 +196,14 @@ def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
 
     if recs:
         lines.extend(["", f"{BLUE}{BOLD}Recommended skills{RESET}"])
-        for rec in recs[:2]:
-            lines.append(f"{rec.get('skill', '')}  score {rec.get('score', '')}")
+        for index, rec in enumerate(recs[:3], start=1):
+            skill = _truncate(str(rec.get("skill", "")), 26)
+            score = _as_float(rec.get("score", 0.0))
+            risk = _as_float(rec.get("risk", 0.0))
+            source = str(rec.get("source", ""))
+            lines.append(f"{index}. {skill}  {score:.3f}  risk {risk:.2f}  {source}")
+    else:
+        lines.extend(["", f"{BLUE}{BOLD}Recommended skills{RESET}", "Run /recommend <task> to rank skills"])
     return lines
 
 
