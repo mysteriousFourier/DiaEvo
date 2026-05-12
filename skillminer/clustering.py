@@ -84,9 +84,15 @@ class ClusterSummary:
     top_terms: list[str]
     top_tools: list[str]
     top_errors: list[str]
+    top_failure_types: list[str]
     file_extensions: list[str]
     used_skills: list[str]
+    source_counts: dict[str, int]
+    event_count: int
+    tool_success_rate: float
+    tool_reuse_count: int
     coverage_gap: float
+    explanations: list[dict[str, object]]
     representative_task: str
 
     def to_mapping(self) -> dict[str, object]:
@@ -100,11 +106,82 @@ class ClusterSummary:
             "top_terms": self.top_terms,
             "top_tools": self.top_tools,
             "top_errors": self.top_errors,
+            "top_failure_types": self.top_failure_types,
             "file_extensions": self.file_extensions,
             "used_skills": self.used_skills,
+            "source_counts": self.source_counts,
+            "event_count": self.event_count,
+            "tool_success_rate": round(self.tool_success_rate, 4),
+            "tool_reuse_count": self.tool_reuse_count,
             "coverage_gap": round(self.coverage_gap, 4),
+            "explanations": self.explanations,
             "representative_task": self.representative_task,
         }
+
+
+def _cluster_explanations(
+    *,
+    failure_rate: float,
+    no_skill_rate: float,
+    retry_pressure: float,
+    coverage_gap: float,
+    top_errors: list[str],
+    top_failure_types: list[str],
+    top_tools: list[str],
+    tool_reuse_count: int,
+    tool_success_rate: float,
+    source_counts: dict[str, int],
+) -> list[dict[str, object]]:
+    explanations: list[dict[str, object]] = []
+    if coverage_gap >= 0.35 or no_skill_rate >= 0.5:
+        explanations.append(
+            {
+                "type": "coverage_gap",
+                "score": round(coverage_gap, 4),
+                "reason": "High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                "signals": {
+                    "failure_rate": round(failure_rate, 4),
+                    "no_skill_rate": round(no_skill_rate, 4),
+                    "retry_pressure": round(retry_pressure, 4),
+                },
+            }
+        )
+    if failure_rate >= 0.25 or top_errors or top_failure_types:
+        explanations.append(
+            {
+                "type": "failure_hotspot",
+                "score": round(max(failure_rate, 1.0 - tool_success_rate if source_counts.get("tool_event") else 0.0), 4),
+                "reason": "Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                "signals": {
+                    "top_errors": top_errors[:5],
+                    "tool_failure_types": top_failure_types[:5],
+                    "tool_success_rate": round(tool_success_rate, 4),
+                },
+            }
+        )
+    if tool_reuse_count > 0 or len(top_tools) >= 3:
+        explanations.append(
+            {
+                "type": "high_reuse_path",
+                "score": round(min(1.0, (tool_reuse_count / 5.0) + (len(top_tools) / 10.0)), 4),
+                "reason": "A recurring tool sequence can be captured as a reusable operational path.",
+                "signals": {
+                    "top_tools": top_tools[:6],
+                    "tool_reuse_count": tool_reuse_count,
+                    "source_counts": source_counts,
+                },
+            }
+        )
+    if not explanations:
+        explanations.append(
+            {
+                "type": "baseline_pattern",
+                "score": round(max(coverage_gap, 0.1), 4),
+                "reason": "The cluster groups semantically similar tasks but does not yet show a strong automation signal.",
+                "signals": {"top_tools": top_tools[:5]},
+            }
+        )
+    return explanations
 
 
 def summarize_clusters(
@@ -128,7 +205,23 @@ def summarize_clusters(
         failure_rate = 1.0 - (success_count / size if size else 0.0)
         no_skill_rate = 1.0 - (used_skill_count / size if size else 0.0)
         retry_pressure = min(1.0, sum(trace.retries for trace in members) / max(1, size * 3))
-        coverage_gap = (0.45 * failure_rate) + (0.35 * no_skill_rate) + (0.20 * retry_pressure)
+        event_count = sum(trace.event_count for trace in members)
+        tool_reuse_count = sum(trace.tool_reuse_count for trace in members)
+        event_traces = [trace for trace in members if trace.event_count]
+        tool_success_rate = (
+            sum(trace.tool_success_rate for trace in event_traces) / len(event_traces) if event_traces else 0.0
+        )
+        tool_failure_pressure = 1.0 - tool_success_rate if event_traces else 0.0
+        coverage_gap = (
+            (0.38 * failure_rate)
+            + (0.28 * no_skill_rate)
+            + (0.18 * retry_pressure)
+            + (0.16 * tool_failure_pressure)
+        )
+        top_tools = _dominant(tool for trace in members for tool in trace.tools)
+        top_errors = _dominant(trace.error_type for trace in members if trace.error_type)
+        top_failure_types = _dominant(failure for trace in members for failure in trace.tool_failure_types)
+        source_counts = dict(Counter(trace.source or "trace" for trace in members).most_common())
         summaries.append(
             ClusterSummary(
                 id=f"C{display_index:02d}",
@@ -138,11 +231,28 @@ def summarize_clusters(
                 failure_rate=failure_rate,
                 avg_retries=sum(trace.retries for trace in members) / size if size else 0.0,
                 top_terms=top_terms(center, features.vocabulary, limit=8),
-                top_tools=_dominant(tool for trace in members for tool in trace.tools),
-                top_errors=_dominant(trace.error_type for trace in members if trace.error_type),
+                top_tools=top_tools,
+                top_errors=top_errors,
+                top_failure_types=top_failure_types,
                 file_extensions=_dominant(ext for trace in members for ext in trace.file_extensions),
                 used_skills=_dominant(skill for trace in members for skill in trace.used_skills),
+                source_counts=source_counts,
+                event_count=event_count,
+                tool_success_rate=tool_success_rate,
+                tool_reuse_count=tool_reuse_count,
                 coverage_gap=coverage_gap,
+                explanations=_cluster_explanations(
+                    failure_rate=failure_rate,
+                    no_skill_rate=no_skill_rate,
+                    retry_pressure=retry_pressure,
+                    coverage_gap=coverage_gap,
+                    top_errors=top_errors,
+                    top_failure_types=top_failure_types,
+                    top_tools=top_tools,
+                    tool_reuse_count=tool_reuse_count,
+                    tool_success_rate=tool_success_rate,
+                    source_counts=source_counts,
+                ),
                 representative_task=traces[representative_index].task,
             )
         )

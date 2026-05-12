@@ -2,7 +2,7 @@ from ui import prompt_bar
 
 
 def test_slash_menu_scrolls_past_first_page() -> None:
-    menu = prompt_bar.render_command_menu("/", selected_index=9)
+    menu = prompt_bar.render_command_menu("/", selected_index=10)
     lines = menu.splitlines()
 
     assert len(lines) == prompt_bar.COMMAND_MENU_PAGE_SIZE
@@ -11,7 +11,7 @@ def test_slash_menu_scrolls_past_first_page() -> None:
 
 
 def test_submit_can_select_command_after_first_page() -> None:
-    assert prompt_bar._submit_value("/", selected_index=13) == "/exit"
+    assert prompt_bar._submit_value("/", selected_index=14) == "/exit"
 
 
 def test_menu_window_returns_to_top_after_last_selection() -> None:

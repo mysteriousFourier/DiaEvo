@@ -20,6 +20,7 @@ Running `.\skillminer.ps1` with no arguments opens the terminal shell. On first 
 /generate C03
 /verify C03
 /demo
+/feedback
 /tools
 /tool list_files path=. recursive=false
 /model deepseek-v4-flash
@@ -39,6 +40,8 @@ Run explicit subcommands when you want scriptable output:
 .\skillminer.ps1 recommend --task "给当前项目生成测试修复 skill" --language python --framework pytest
 .\skillminer.ps1 generate --cluster-id C03
 .\skillminer.ps1 verify --skill outputs/candidate_skills/C03
+.\skillminer.ps1 feedback
+.\skillminer.ps1 evaluate
 .\skillminer.ps1 tools
 .\skillminer.ps1 tool read_file --arg path=README.md --arg limit=5
 .\skillminer-home.ps1
@@ -83,14 +86,20 @@ The command uses `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL` f
 
 ## MVP Commands
 
-- `ingest`: validates JSONL traces and writes `data/processed_traces.jsonl`.
-- `mine`: writes `outputs/reports/mining_report.json` with clusters, rules, sequences, and graph stats.
-- `recommend`: writes `outputs/reports/recommendations.json` with score explanations.
-- `generate`: creates `outputs/candidate_skills/<cluster-id>/SKILL.md`.
-- `verify`: checks candidate skill format and static safety.
+- `ingest`: validates JSONL traces, folds `.skillminer/tool_events.jsonl` by default, and writes `data/processed_traces.jsonl`.
+- `mine`: writes `outputs/reports/mining_report.json` with clusters, rules, sequences, graph stats, coverage gaps, failure hotspots, high-reuse paths, and generation entrypoints.
+- `recommend`: writes `outputs/reports/recommendations.json` with score explanations using configurable weights from `data/recommender_weights.json`.
+- `generate`: creates trace-driven `outputs/candidate_skills/<cluster-id>/SKILL.md` drafts.
+- `verify`: checks candidate skill format, required trace-driven sections, optional `validation.json`, and static safety.
+- `evaluate`: writes `outputs/reports/baseline_metrics.json` with Precision@K, MRR, coverage-gap hit rate, verifier pass rate, duplicate rate, recommendation lift, and safety false-negative rate for the current baseline.
 - `demo`: runs the full loop on sample data.
+- `feedback`: explicitly folds tool event logs back into processed traces.
 - `tools`: lists local tool schemas, read/write classification, and approval requirements.
 - `tool`: executes a local tool with JSON args or repeated `--arg key=value` entries. Read-only workspace tools run directly; write, delete, patch, shell, and network tools return a preview unless `--approve` is supplied.
+
+## Research Boundary
+
+The closed loop is wired, but the optimization-algorithm survey and tuning work are still open. Current clustering, scoring, and generation logic are baselines, not yet research-optimized. The next owner should baseline the existing algorithms first, then improve them one slice at a time with measured before/after metrics.
 
 ## Local Tool Layer
 
@@ -131,7 +140,7 @@ Each JSONL trace contains:
 - Replace `skillminer/clustering.py` with HDBSCAN or scikit-learn K-Means.
 - Replace `skillminer/association_rules.py` with mlxtend FP-Growth.
 - Replace `skillminer/skill_graph.py` with networkx for richer heterogeneous graph analysis.
-- Add `skillminer/evaluation.py` for Precision@K, Recall@K, MRR, and NDCG experiments.
+- Extend `skillminer/evaluation.py` before replacing algorithms so every optimization has before/after metrics under the same report schema.
 - Add a richer terminal layer using Textual, prompt_toolkit, or Ink if you want true multi-line editing and live footer navigation.
 - Add an installation gate that requires user confirmation before moving verified skills into a live skill directory.
 

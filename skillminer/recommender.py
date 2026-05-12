@@ -16,11 +16,13 @@ from .storage import read_json, write_json
 
 
 DEFAULT_WEIGHTS = {
-    "similarity": 0.34,
-    "rules": 0.18,
-    "pagerank": 0.18,
+    "similarity": 0.32,
+    "rules": 0.17,
+    "pagerank": 0.17,
     "usage_decay": 0.10,
     "success_rate": 0.14,
+    "coverage_gap": 0.08,
+    "recent_reuse": 0.05,
     "risk": 0.17,
     "cost": 0.07,
 }
@@ -35,6 +37,8 @@ class Recommendation:
     pagerank: float
     usage_decay: float
     success_rate: float
+    coverage_gap: float
+    recent_reuse: float
     risk: float
     cost: float
     installed: bool
@@ -50,6 +54,8 @@ class Recommendation:
             "pagerank": round(self.pagerank, 4),
             "usage_decay": round(self.usage_decay, 4),
             "success_rate": round(self.success_rate, 4),
+            "coverage_gap": round(self.coverage_gap, 4),
+            "recent_reuse": round(self.recent_reuse, 4),
             "risk": round(self.risk, 4),
             "cost": round(self.cost, 4),
             "installed": self.installed,
@@ -87,6 +93,21 @@ def _candidate_skills(registry: list[SkillRecord], plugins: list[PluginRecord]) 
     return list(merged.values())
 
 
+def load_recommender_weights(path: str | Path | None = None) -> dict[str, float]:
+    target = Path(path) if path else DATA_DIR / "recommender_weights.json"
+    configured = read_json(target, default={})
+    active = dict(DEFAULT_WEIGHTS)
+    if isinstance(configured, dict):
+        for key, value in configured.items():
+            if key not in active:
+                continue
+            try:
+                active[key] = float(value)
+            except (TypeError, ValueError):
+                continue
+    return active
+
+
 def _pseudo_trace_for_task(task: str, project_language: str = "", frameworks: list[str] | None = None) -> TraceRecord:
     lowered = task.lower()
     tags: list[str] = []
@@ -114,6 +135,27 @@ def _pseudo_trace_for_task(task: str, project_language: str = "", frameworks: li
     )
 
 
+def _cluster_signal_for_skill(skill: SkillRecord, clusters: list[dict[str, Any]]) -> tuple[float, float]:
+    skill_terms = {token.lower() for token in [skill.name, *skill.tags]}
+    best_gap = 0.0
+    best_reuse = 0.0
+    for cluster in clusters:
+        cluster_terms = {
+            str(value).lower()
+            for value in [
+                *cluster.get("top_terms", []),
+                *cluster.get("top_tools", []),
+                *cluster.get("top_errors", []),
+                *cluster.get("top_failure_types", []),
+            ]
+        }
+        if not skill_terms.intersection(cluster_terms):
+            continue
+        best_gap = max(best_gap, float(cluster.get("coverage_gap", 0.0) or 0.0))
+        best_reuse = max(best_reuse, min(1.0, float(cluster.get("tool_reuse_count", 0) or 0) / 5.0))
+    return best_gap, best_reuse
+
+
 def recommend(
     task: str,
     traces_path: str | Path | None = None,
@@ -123,6 +165,7 @@ def recommend(
     project_language: str = "",
     frameworks: list[str] | None = None,
     weights: dict[str, float] | None = None,
+    weights_path: str | Path | None = None,
 ) -> dict[str, Any]:
     ensure_project_dirs()
     trace_source = Path(traces_path) if traces_path else DATA_DIR / "processed_traces.jsonl"
@@ -139,6 +182,9 @@ def recommend(
     rules = mining_report.get("association_rules", [])
     if not isinstance(rules, list):
         rules = []
+    clusters = mining_report.get("clusters", [])
+    if not isinstance(clusters, list):
+        clusters = []
     query_trace = _pseudo_trace_for_task(task, project_language=project_language, frameworks=frameworks)
     project_items = trace_items(query_trace)
     matched_rules = match_rules(project_items, rules)
@@ -150,7 +196,7 @@ def recommend(
     graph = build_skill_graph(traces, registry, plugins)
     ranks = personalized_pagerank(graph, seeds_for_task(task, project_items))
     max_rank = max((score for node, score in ranks.items() if node.startswith("skill:")), default=1.0)
-    active_weights = dict(DEFAULT_WEIGHTS)
+    active_weights = load_recommender_weights(weights_path)
     if weights:
         active_weights.update(weights)
     recommendations: list[Recommendation] = []
@@ -161,12 +207,15 @@ def recommend(
         rank_score = raw_rank / max_rank if max_rank else 0.0
         decay = usage_decay(skill)
         success = skill.success_rate
+        coverage_gap, recent_reuse = _cluster_signal_for_skill(skill, clusters)
         score = (
             active_weights["similarity"] * similarity
             + active_weights["rules"] * rule_score
             + active_weights["pagerank"] * rank_score
             + active_weights["usage_decay"] * decay
             + active_weights["success_rate"] * success
+            + active_weights["coverage_gap"] * coverage_gap
+            + active_weights["recent_reuse"] * recent_reuse
             - active_weights["risk"] * skill.risk
             - active_weights["cost"] * skill.cost
         )
@@ -179,6 +228,10 @@ def recommend(
             reason_parts.append("graph proximity")
         if skill.risk >= 0.7:
             reason_parts.append("high risk penalty")
+        if coverage_gap > 0:
+            reason_parts.append(f"coverage gap {coverage_gap:.2f}")
+        if recent_reuse > 0:
+            reason_parts.append(f"recent reuse {recent_reuse:.2f}")
         if not reason_parts:
             reason_parts.append("baseline prior")
         recommendations.append(
@@ -190,6 +243,8 @@ def recommend(
                 pagerank=rank_score,
                 usage_decay=decay,
                 success_rate=success,
+                coverage_gap=coverage_gap,
+                recent_reuse=recent_reuse,
                 risk=skill.risk,
                 cost=skill.cost,
                 installed=skill.installed,
@@ -202,6 +257,7 @@ def recommend(
         "task": task,
         "trace_source": str(trace_source),
         "top_k": top_k,
+        "weights": active_weights,
         "recommendations": [item.to_mapping() for item in recommendations[:top_k]],
     }
     write_json(REPORTS_DIR / "recommendations.json", result)

@@ -8,6 +8,7 @@ The current shell supports a terminal dashboard, workspace trust confirmation, l
 ## What Is Implemented
 
 - Trace ingestion from JSONL.
+- Tool-event ingestion from `.skillminer/tool_events.jsonl` into processed traces.
 - TF-IDF feature extraction.
 - In-repo K-Means clustering.
 - Association rule mining.
@@ -16,6 +17,7 @@ The current shell supports a terminal dashboard, workspace trust confirmation, l
 - Skill recommendation with score explanations.
 - Candidate `SKILL.md` generation.
 - Static skill verification.
+- Feedback folding via the `feedback` CLI command.
 - Local tool execution with workspace boundary checks, approval previews, terminal result blocks, and JSONL event logging.
 - DeepSeek chat tool bridge with OpenAI-compatible tool schemas, structured tool-call parsing, approval prompts, bounded tool-result messages, and legacy `function_call` support.
 - DeepSeek chat smoke test and interactive chat.
@@ -101,7 +103,8 @@ DEEPSEEK_TIMEOUT=60
 - Web tools still use best-effort HTML parsing rather than a robust search provider.
 - Write staleness tracking is basic; unlike Claude Code, the MVP does not yet require a prior read timestamp before writes or edits.
 - Generated skills are never auto-installed.
+- The current scoring, clustering, and generation heuristics are still baseline implementations; they have not been systematically optimized yet.
 
 ## Next Step
 
-The next phase is research-first and is documented in [docs/HANDOFF_AUTONOMOUS_EVOLUTION_RESEARCH.md](docs/HANDOFF_AUTONOMOUS_EVOLUTION_RESEARCH.md).
+The next phase is research-first and is documented in [docs/HANDOFF_AUTONOMOUS_EVOLUTION_RESEARCH.md](docs/HANDOFF_AUTONOMOUS_EVOLUTION_RESEARCH.md). The next owner should start by researching and optimizing the existing algorithms before changing the loop shape again.

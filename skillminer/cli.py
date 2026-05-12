@@ -6,6 +6,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
+from .evaluation import baseline_report
 from .generator import generate_skill
 from .ingest import ingest_traces
 from .miner import mine
@@ -36,6 +37,8 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser = subparsers.add_parser("ingest", help="Validate and normalize JSONL trace data.")
     ingest_parser.add_argument("--input", required=True, help="Input JSONL trace file.")
     ingest_parser.add_argument("--output", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed JSONL output path.")
+    ingest_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
+    ingest_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .skillminer/tool_events.jsonl.")
 
     mine_parser = subparsers.add_parser("mine", help="Run clustering, association, sequence, and graph mining.")
     mine_parser.add_argument("--traces", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
@@ -51,6 +54,7 @@ def build_parser() -> argparse.ArgumentParser:
     recommend_parser.add_argument("--traces", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
     recommend_parser.add_argument("--registry", default=str(DATA_DIR / "skill_registry.json"), help="Skill registry JSON path.")
     recommend_parser.add_argument("--plugins", default=str(DATA_DIR / "plugin_metadata.json"), help="Plugin metadata JSON path.")
+    recommend_parser.add_argument("--weights", default=None, help="Optional recommender weight JSON path.")
 
     generate_parser = subparsers.add_parser("generate", help="Generate a candidate SKILL.md from a mined cluster.")
     generate_parser.add_argument("--cluster-id", required=True, help="Cluster id such as C03.")
@@ -66,6 +70,24 @@ def build_parser() -> argparse.ArgumentParser:
     subparsers.add_parser("home", help="Open the dashboard and interactive shell.")
 
     subparsers.add_parser("tools", help="List local tool schemas and approval requirements.")
+
+    feedback_parser = subparsers.add_parser("feedback", help="Fold tool event logs into processed traces.")
+    feedback_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
+    feedback_parser.add_argument("--output", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed JSONL output path.")
+    feedback_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
+
+    eval_parser = subparsers.add_parser("evaluate", help="Run baseline metrics for the current engineering algorithms.")
+    eval_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
+    eval_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
+    eval_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
+    eval_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .skillminer/tool_events.jsonl.")
+    eval_parser.add_argument("--top-k", type=int, default=5, help="Top-K cutoff for recommendation metrics.")
+    eval_parser.add_argument(
+        "--duplicate-threshold",
+        type=float,
+        default=0.92,
+        help="Cosine similarity threshold for candidate duplicate pairs.",
+    )
 
     tool_parser = subparsers.add_parser("tool", help="Execute one local tool with JSON arguments.")
     tool_parser.add_argument("name", help="Tool name such as list_files or read_file.")
@@ -122,7 +144,12 @@ def main(argv: list[str] | None = None) -> int:
 
             return shell_main()
         if args.command == "ingest":
-            result = ingest_traces(args.input, args.output)
+            result = ingest_traces(
+                args.input,
+                args.output,
+                tool_events_path=args.tool_events,
+                include_tool_events=not args.no_tool_events,
+            )
         elif args.command == "mine":
             result = mine(args.traces, args.registry, args.plugins, args.clusters)
         elif args.command == "recommend":
@@ -134,6 +161,7 @@ def main(argv: list[str] | None = None) -> int:
                 top_k=args.top_k,
                 project_language=args.language,
                 frameworks=args.framework,
+                weights_path=args.weights,
             )
         elif args.command == "generate":
             result = generate_skill(args.cluster_id, args.output_dir)
@@ -143,6 +171,17 @@ def main(argv: list[str] | None = None) -> int:
             result = run_demo(args.task, args.cluster_id)
         elif args.command == "tools":
             result = {"tools": tool_schemas()}
+        elif args.command == "feedback":
+            result = ingest_traces(args.input, args.output, tool_events_path=args.tool_events, include_tool_events=True)
+        elif args.command == "evaluate":
+            result = baseline_report(
+                input_path=args.input,
+                processed_path=args.processed,
+                tool_events_path=args.tool_events,
+                include_tool_events=not args.no_tool_events,
+                top_k=args.top_k,
+                duplicate_threshold=args.duplicate_threshold,
+            )
         elif args.command == "tool":
             tool_args = parse_tool_args(args.args)
             tool_args.update(parse_tool_arg_pairs(args.arg))

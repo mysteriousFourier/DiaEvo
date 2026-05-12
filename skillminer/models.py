@@ -66,6 +66,12 @@ class TraceRecord:
     retries: int = 0
     feedback: str = ""
     tags: list[str] = field(default_factory=list)
+    source: str = "trace"
+    event_count: int = 0
+    tool_success_rate: float = 0.0
+    tool_failure_types: list[str] = field(default_factory=list)
+    tool_reuse_count: int = 0
+    source_event_ids: list[str] = field(default_factory=list)
     raw: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
@@ -92,6 +98,12 @@ class TraceRecord:
             retries=_as_int(value.get("retries")),
             feedback=str(value.get("feedback") or "").strip().lower(),
             tags=_as_list(value.get("tags")),
+            source=str(value.get("source") or "trace").strip() or "trace",
+            event_count=_as_int(value.get("event_count")),
+            tool_success_rate=max(0.0, min(1.0, _as_float(value.get("tool_success_rate")))),
+            tool_failure_types=_as_list(value.get("tool_failure_types")),
+            tool_reuse_count=_as_int(value.get("tool_reuse_count")),
+            source_event_ids=_as_list(value.get("source_event_ids")),
             raw=dict(value),
         )
 
@@ -117,7 +129,9 @@ class TraceRecord:
             " ".join(self.files),
             " ".join(self.tools),
             self.error_type,
+            " ".join(self.tool_failure_types),
             " ".join(self.tags),
+            self.source,
         ]
         return " ".join(part for part in parts if part)
 
@@ -139,6 +153,12 @@ class TraceRecord:
             "retries": self.retries,
             "feedback": self.feedback,
             "tags": self.tags,
+            "source": self.source,
+            "event_count": self.event_count,
+            "tool_success_rate": self.tool_success_rate,
+            "tool_failure_types": self.tool_failure_types,
+            "tool_reuse_count": self.tool_reuse_count,
+            "source_event_ids": self.source_event_ids,
         }
 
 

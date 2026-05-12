@@ -29,12 +29,30 @@ def mine(
     rules = mine_association_rules(traces)
     sequences = mine_frequent_sequences(traces)
     graph = build_skill_graph(traces, skills, plugins)
+    explanation_counts: dict[str, int] = {}
+    for cluster in clusters:
+        for explanation in cluster.explanations:
+            kind = str(explanation.get("type") or "unknown")
+            explanation_counts[kind] = explanation_counts.get(kind, 0) + 1
     result = {
         "trace_source": str(trace_source),
         "trace_count": len(traces),
         "feature_count": len(features.vocabulary),
         "assignments": {trace.id: f"C{assignments[index] + 1:02d}" for index, trace in enumerate(traces)},
         "clusters": [cluster.to_mapping() for cluster in clusters],
+        "cluster_explanation_counts": explanation_counts,
+        "generation_entrypoints": [
+            {
+                "cluster_id": cluster.id,
+                "primary_reason": cluster.explanations[0]["type"] if cluster.explanations else "unknown",
+                "coverage_gap": round(cluster.coverage_gap, 4),
+                "failure_rate": round(cluster.failure_rate, 4),
+                "tool_reuse_count": cluster.tool_reuse_count,
+                "recommended_action": "generate_candidate_skill",
+            }
+            for cluster in clusters
+            if cluster.coverage_gap >= 0.25 or cluster.tool_reuse_count > 0 or cluster.failure_rate > 0
+        ],
         "association_rules": rules[:100],
         "frequent_sequences": sequences[:100],
         "graph": {

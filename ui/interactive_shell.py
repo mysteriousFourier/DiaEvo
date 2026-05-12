@@ -31,6 +31,7 @@ Commands:
   /generate <cluster-id>   Generate candidate SKILL.md
   /verify <cluster-id/path> Verify candidate skill
   /demo                    Run full MVP demo
+  /feedback                Fold tool events into processed traces
   /tools                   List local tool schemas
   /tool <name> <json|key=value...> Run local tool; add --approve to execute gated tools
   /model <name>            Set DEEPSEEK_MODEL and redraw dashboard
@@ -100,6 +101,7 @@ def _dispatch_command(command: str, chat_state: ChatConfigState) -> bool:
         "generate": lambda args: ["generate", "--cluster-id", args[0] if args else "C03"],
         "verify": lambda args: ["verify", "--skill", args[0] if args else "outputs/candidate_skills/C03"],
         "demo": lambda args: ["demo", *args],
+        "feedback": lambda args: ["feedback", *args],
         "chat": lambda args: ["chat-test", "--interactive", *args],
     }
 

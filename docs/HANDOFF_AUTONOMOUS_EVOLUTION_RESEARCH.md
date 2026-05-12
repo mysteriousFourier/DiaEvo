@@ -7,6 +7,17 @@ The local tool bridge is connected to DeepSeek chat, gated tools require explici
 
 The next phase is research-first: identify a practical fully automatic evolution loop, compare it against the local codebase, and only then decide what to implement.
 
+## Research Boundary
+
+This pass did not complete a systematic survey or optimization of the existing algorithms. The loop is now wired end to end, but the current scoring, clustering, sequence mining, and candidate-generation logic are still engineering baselines.
+
+The next handoff owner should start with:
+
+1. Run `skillminer evaluate` to baseline the current algorithms on `data/sample_traces.jsonl` plus `.skillminer/tool_events.jsonl`.
+2. Compare the current implementations against stronger candidates from the paper corpus and standard optimization methods.
+3. Optimize one algorithmic slice at a time, with before/after metrics written to `outputs/reports/`.
+4. Keep human approval as the install/promote boundary until there is a validated promotion policy.
+
 ## Canonical Sources
 
 Use this directory as the paper corpus for the next phase:
@@ -81,6 +92,8 @@ Use these as the first-pass optimization menu for the research sweep:
 
 The MVP already has simple in-repo versions of several of these ideas, so the research task is to decide which ones deserve a stronger prototype and which ones should stay as future work.
 
+Treat the list above as a research queue, not as a claim that those algorithms have already been evaluated or improved.
+
 ## Research Questions
 
 - What does Hermes contribute that is not already covered by Claude Code or the paper corpus?
@@ -99,7 +112,8 @@ The MVP already has simple in-repo versions of several of these ideas, so the re
 3. Map each loop to existing modules in `skillminer/`.
 4. Separate algorithm candidates into research-only, prototype-ready, and later-phase buckets.
 5. Choose one loop for a prototype, probably starting with trace-driven discovery plus verification.
-6. Define evaluation metrics before implementation.
+6. Extend the existing evaluation report only when a new algorithm slice needs an additional metric.
+7. Do not claim an optimization improvement until a baseline and a measured delta exist.
 
 ## Relevant Code Paths
 
@@ -120,3 +134,4 @@ The MVP already has simple in-repo versions of several of these ideas, so the re
 - Keep research artifacts separate from implementation until the loop is chosen.
 - Use the local paper corpus before widening the search.
 - Treat Hermes as a design reference, not as a source of drop-in code.
+- Treat optimization of the existing algorithms as the next owner’s first research task.

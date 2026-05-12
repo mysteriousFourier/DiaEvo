@@ -16,6 +16,7 @@ COMMANDS = [
     ("/generate", "Generate candidate SKILL.md"),
     ("/verify", "Verify candidate skill"),
     ("/demo", "Run full MVP demo"),
+    ("/feedback", "Fold tool events into traces"),
     ("/tools", "List local tool schemas"),
     ("/tool", "Run a local tool with JSON args"),
     ("/model", "Set DEEPSEEK_MODEL for this project"),
