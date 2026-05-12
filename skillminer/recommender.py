@@ -108,6 +108,39 @@ def load_recommender_weights(path: str | Path | None = None) -> dict[str, float]
     return active
 
 
+def pareto_rerank_recommendations(recommendations: list[Recommendation]) -> list[Recommendation]:
+    objectives = ("score", "similarity", "rule_confidence", "pagerank", "success_rate", "coverage_gap", "recent_reuse")
+    frontier: list[Recommendation] = []
+    remaining = list(recommendations)
+    while remaining:
+        layer: list[Recommendation] = []
+        for item in remaining:
+            dominated = False
+            for other in remaining:
+                if other is item:
+                    continue
+                better_or_equal = (
+                    all(getattr(other, key) >= getattr(item, key) for key in objectives)
+                    and other.risk <= item.risk
+                    and other.cost <= item.cost
+                )
+                strictly_better = (
+                    any(getattr(other, key) > getattr(item, key) for key in objectives)
+                    or other.risk < item.risk
+                    or other.cost < item.cost
+                )
+                if better_or_equal and strictly_better:
+                    dominated = True
+                    break
+            if not dominated:
+                layer.append(item)
+        layer.sort(key=lambda value: (-value.score, value.risk, value.cost, value.skill))
+        frontier.extend(layer)
+        layer_ids = {id(item) for item in layer}
+        remaining = [item for item in remaining if id(item) not in layer_ids]
+    return frontier
+
+
 def _pseudo_trace_for_task(task: str, project_language: str = "", frameworks: list[str] | None = None) -> TraceRecord:
     lowered = task.lower()
     tags: list[str] = []
@@ -166,6 +199,7 @@ def recommend(
     frameworks: list[str] | None = None,
     weights: dict[str, float] | None = None,
     weights_path: str | Path | None = None,
+    rerank: str = "weighted",
 ) -> dict[str, Any]:
     ensure_project_dirs()
     trace_source = Path(traces_path) if traces_path else DATA_DIR / "processed_traces.jsonl"
@@ -253,11 +287,14 @@ def recommend(
             )
         )
     recommendations.sort(key=lambda item: item.score, reverse=True)
+    if rerank == "pareto":
+        recommendations = pareto_rerank_recommendations(recommendations)
     result = {
         "task": task,
         "trace_source": str(trace_source),
         "top_k": top_k,
         "weights": active_weights,
+        "rerank": rerank,
         "recommendations": [item.to_mapping() for item in recommendations[:top_k]],
     }
     write_json(REPORTS_DIR / "recommendations.json", result)

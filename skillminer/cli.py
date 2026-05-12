@@ -7,12 +7,15 @@ from pathlib import Path
 from typing import Any
 
 from .evaluation import baseline_report
+from .evolution import evolve_skill
 from .generator import generate_skill
 from .ingest import ingest_traces
 from .miner import mine
 from .paths import DATA_DIR, ensure_project_dirs
+from .promotion import PROMOTION_LABELS, label_promotion, promote, queue_promotion
 from .recommender import recommend
 from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
+from .validation_runner import run_validation
 from .verifier import verify_skill
 from .deepseek_chat import run_chat_test
 
@@ -55,6 +58,7 @@ def build_parser() -> argparse.ArgumentParser:
     recommend_parser.add_argument("--registry", default=str(DATA_DIR / "skill_registry.json"), help="Skill registry JSON path.")
     recommend_parser.add_argument("--plugins", default=str(DATA_DIR / "plugin_metadata.json"), help="Plugin metadata JSON path.")
     recommend_parser.add_argument("--weights", default=None, help="Optional recommender weight JSON path.")
+    recommend_parser.add_argument("--rerank", choices=["weighted", "pareto"], default="weighted", help="Optional reranking strategy.")
 
     generate_parser = subparsers.add_parser("generate", help="Generate a candidate SKILL.md from a mined cluster.")
     generate_parser.add_argument("--cluster-id", required=True, help="Cluster id such as C03.")
@@ -62,6 +66,37 @@ def build_parser() -> argparse.ArgumentParser:
 
     verify_parser = subparsers.add_parser("verify", help="Verify a candidate skill directory or SKILL.md.")
     verify_parser.add_argument("--skill", required=True, help="Candidate skill directory or SKILL.md path.")
+
+    evolve_parser = subparsers.add_parser("evolve", help="Evolve generated skill candidates with local metric/Pareto optimization.")
+    evolve_target = evolve_parser.add_mutually_exclusive_group()
+    evolve_target.add_argument("--cluster-id", default=None, help="Cluster id such as C03.")
+    evolve_target.add_argument("--all-entrypoints", action="store_true", help="Evolve all mining report generation entrypoints.")
+    evolve_parser.add_argument("--budget", type=int, default=50, help="Maximum local candidate variants per cluster.")
+    evolve_parser.add_argument("--output-dir", default=None, help="Optional target directory for a single evolved candidate.")
+
+    validate_parser = subparsers.add_parser("validate", help="Run approved validation.json commands for a candidate skill.")
+    validate_parser.add_argument("--skill", required=True, help="Candidate skill directory or SKILL.md path.")
+    validate_parser.add_argument("--approve", action="store_true", help="Execute validation commands after preview/safety checks.")
+
+    queue_parser = subparsers.add_parser("queue-promotion", help="Queue a verified candidate for human promotion review.")
+    queue_parser.add_argument("--skill", required=True, help="Candidate skill directory or SKILL.md path.")
+
+    promote_parser = subparsers.add_parser("promote", help="Promote an approved queue item into the local registry.")
+    promote_parser.add_argument("--queue-id", required=True, help="Promotion queue entry id.")
+    promote_parser.add_argument("--approve", action="store_true", help="Update the registry after human approval.")
+    promote_parser.add_argument("--registry", default=None, help="Optional registry JSON path.")
+
+    label_parser = subparsers.add_parser("label-promotion", help="Attach human review labels to a promotion queue item.")
+    label_parser.add_argument("--queue-id", required=True, help="Promotion queue entry id.")
+    label_parser.add_argument(
+        "--label",
+        action="append",
+        choices=sorted(PROMOTION_LABELS),
+        required=True,
+        help="Review label; can be repeated.",
+    )
+    label_parser.add_argument("--note", default="", help="Optional reviewer note.")
+    label_parser.add_argument("--reviewer", default="", help="Optional reviewer id.")
 
     demo_parser = subparsers.add_parser("demo", help="Run the full MVP pipeline on sample data.")
     demo_parser.add_argument("--task", default="给当前项目生成测试修复 skill", help="Task used for recommendation.")
@@ -88,6 +123,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=0.92,
         help="Cosine similarity threshold for candidate duplicate pairs.",
     )
+    eval_parser.add_argument("--variant", choices=["baseline", "evolved"], default="baseline", help="Evaluation variant.")
 
     tool_parser = subparsers.add_parser("tool", help="Execute one local tool with JSON arguments.")
     tool_parser.add_argument("name", help="Tool name such as list_files or read_file.")
@@ -162,11 +198,27 @@ def main(argv: list[str] | None = None) -> int:
                 project_language=args.language,
                 frameworks=args.framework,
                 weights_path=args.weights,
+                rerank=args.rerank,
             )
         elif args.command == "generate":
             result = generate_skill(args.cluster_id, args.output_dir)
         elif args.command == "verify":
             result = verify_skill(Path(args.skill))
+        elif args.command == "evolve":
+            result = evolve_skill(
+                args.cluster_id,
+                all_entrypoints=args.all_entrypoints,
+                budget=args.budget,
+                output_dir=args.output_dir,
+            )
+        elif args.command == "validate":
+            result = run_validation(args.skill, approve=args.approve)
+        elif args.command == "queue-promotion":
+            result = queue_promotion(args.skill)
+        elif args.command == "promote":
+            result = promote(args.queue_id, approve=args.approve, registry_path=args.registry)
+        elif args.command == "label-promotion":
+            result = label_promotion(args.queue_id, labels=args.label, note=args.note, reviewer=args.reviewer)
         elif args.command == "demo":
             result = run_demo(args.task, args.cluster_id)
         elif args.command == "tools":
@@ -181,6 +233,7 @@ def main(argv: list[str] | None = None) -> int:
                 include_tool_events=not args.no_tool_events,
                 top_k=args.top_k,
                 duplicate_threshold=args.duplicate_threshold,
+                variant=args.variant,
             )
         elif args.command == "tool":
             tool_args = parse_tool_args(args.args)

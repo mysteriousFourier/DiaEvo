@@ -1,94 +1,323 @@
-# Autonomous Evolution Loop
+# Autonomous Skill Evolution Loop
 
-This document fixes the current research and implementation target for SkillMiner's first automatic evolution loop. It uses the local paper corpus in `D:\download\claude-code-main\references` as architecture input, while keeping the runnable MVP dependency-free.
+## Purpose
 
-## Research Boundary
+This document defines the autonomous skill-evolution target for SkillMiner.
 
-This pass did not complete a systematic optimization-algorithm survey or tune the existing algorithms. The implemented work is an engineering baseline for the closed loop, plus a lightweight paper-to-architecture mapping. The next handoff owner must treat optimization research as the first task before changing the current scoring, clustering, sequence-mining, or generation-entrypoint algorithms.
+SkillMiner is an integrated CLI workbench. The autonomous loop is not a separate service: it is the learning layer behind the CLI. The CLI records real tool use and task outcomes, mines reusable patterns, recommends skills, generates candidates, evolves them, verifies safety, validates behavior, queues human review, and feeds outcomes back into the next run.
 
-Required next research deliverables:
-
-1. Audit the current in-repo algorithms: TF-IDF, K-Means, Apriori-style rules, PrefixSpan-style sequence mining, Personalized PageRank, coverage-gap scoring, and recommendation weights.
-2. Compare them against stronger candidates from the paper corpus and standard optimization methods: FP-Growth, HDBSCAN, UCB, Thompson Sampling, Pareto reranking, Bayesian optimization, and preference learning.
-3. Run `skillminer evaluate` before optimization to record Precision@K, MRR, coverage-gap hit rate, verifier pass rate, candidate duplicate rate, recommendation lift, and safety false-negative rate.
-4. Use the reproducible baseline on `data/sample_traces.jsonl` plus `.skillminer/tool_events.jsonl` as the before snapshot.
-5. Optimize one algorithmic slice at a time and record before/after metrics in `outputs/reports/baseline_metrics.json` or a derivative report.
-
-## Implemented Loop
-
-The current loop is:
+The final skill-evolution effect is:
 
 ```text
-tool_events -> ingest -> mine -> generate -> verify -> recommend -> feedback
+SkillMiner gets better at helping the user because the CLI learns reusable skills from the user's own tasks.
 ```
 
-The first safety boundary is deliberate: SkillMiner can generate and verify candidate skills, but it does not auto-install them. Promotion still requires human review.
+## Current Implemented Loop
 
-## Paper Comparison
+```text
+tool_events
+  -> ingest / feedback
+  -> mine
+  -> recommend existing skills
+  -> generate candidate SKILL.md
+  -> evolve candidate sections
+  -> verify
+  -> validate
+  -> queue-promotion
+  -> promote to local registry
+  -> evaluate
+  -> feed outcomes into future traces and memory
+```
 
-| Source | Relevant Pattern | SkillMiner Mapping | Status |
-| --- | --- | --- | --- |
-| BAGEL Bootstrapping Agents by Guiding Exploration with Language | Bootstrap useful agent behavior from guided exploration trajectories. | Treat `.skillminer/tool_events.jsonl` as early trajectory evidence that can be mined into reusable workflows. | Prototype-ready for real traces; synthetic exploration is later work. |
-| SkillWeaver Web Agents can Self-Improve by Discovering | Discover and reuse skills from repeated web-agent tasks. | Mine clusters, frequent tool paths, and missing-skill coverage gaps; generate candidate `SKILL.md` drafts. | Implemented as a lightweight trace-driven generator. |
-| CASCADE Cumulative Agentic Skill Creation | Skills accumulate over time and later tasks reuse prior skills. | `used_skills`, success rates, reuse counts, and recommendation weights form the cumulative layer. | Partially implemented; automatic promotion is still gated. |
-| Trial and Error Exploration-Based Trajectory Optimization | Optimize future behavior from trial outcomes. | Tool success rate, failure types, retries, and validation output are logged as feedback signals. | Implemented as feedback fields; no optimizer yet. |
-| LLMs in the Imaginarium | Simulated trial-and-error can improve tool use. | Could create sandbox replay traces before candidate promotion. | Future work. |
-| GC-DPG Graph-Constrained Dual-Phase Generation for Safe and | Constrain generation with graph and safety controls. | Existing skill graph plus verifier safety gates constrain recommendations and generated candidates. | Partially implemented; graph constraints are still scoring signals, not hard generation constraints. |
-| GraphRAG and KG-Guided RAG papers | Use graph structure to ground retrieval and reduce unsupported outputs. | Skill graph, association rules, and mined evidence are included in reports and generated candidates. | Lightweight grounding implemented. |
-| Hallucination review | Add explicit grounding and verification to reduce fabricated behavior. | Candidate skills include mined evidence, safety constraints, fallback guidance, and verifier gates. | Implemented for static checks; executable checks are a pluggable entry point. |
+The current optimizer is local metric/Pareto. It is conservative and dependency-free. It exists to prove the evaluator, memory, and safety gates before adding GEPA.
 
-## Current Implementation
+## Final Target
 
-| Layer | Files | Current Behavior |
-| --- | --- | --- |
-| Event capture | `skillminer/tool_layer.py` | Every local tool call appends a sanitized JSONL event to `.skillminer/tool_events.jsonl`. |
-| Ingestion | `skillminer/ingest.py`, `skillminer/models.py` | Base JSONL traces and tool events are normalized into `TraceRecord` objects with source, event count, tool success rate, failure types, and reuse counts. |
-| Mining | `skillminer/clustering.py`, `skillminer/miner.py` | Reports coverage gaps, failure hotspots, high-reuse paths, association rules, frequent sequences, and generation entrypoints. |
-| Generation | `skillminer/generator.py` | Produces trace-driven candidate `SKILL.md` files with usage scope, trigger signals, mined evidence, operating steps, fallbacks, validation suggestions, and safety constraints. |
-| Verification | `skillminer/verifier.py` | Checks required frontmatter, required candidate sections, dangerous commands, credential patterns, suspicious paths, dependency hints, and optional `validation.json`. |
-| Recommendation | `skillminer/recommender.py`, `data/recommender_weights.json` | Keeps static scoring while adding configurable success, recent reuse, risk, cost, and coverage-gap weights. |
-| Feedback | `skillminer/cli.py` | `ingest` folds tool events by default; `feedback` is an explicit alias for folding event logs into processed traces. |
-| Evaluation | `skillminer/evaluation.py` | Runs the current baseline and writes comparable recommendation, coverage, candidate, verifier, duplicate, lift, and safety metrics. |
+The final target is a safe self-evolving skill loop inside the CLI:
 
-## Implementation Gaps
+- The user works through `.\skillminer.ps1`.
+- Local tool use is captured as structured traces.
+- SkillMiner mines repeated workflows and failure modes.
+- The recommender suggests relevant existing skills before the user repeats work.
+- Coverage gaps produce candidate skills with mined evidence.
+- GEPA or the local optimizer improves structured skill text using rich ASI.
+- Validation and held-out traces prove usefulness.
+- Duplicate and merge policies prevent skill-library clutter.
+- Human review decides promotion.
+- Promoted skills influence future recommendations and future generation.
 
-| Gap | Impact | Suggested Next Step |
-| --- | --- | --- |
-| No candidate promotion workflow | Verified candidates remain drafts. | Add `promote --skill <dir>` with a human approval gate and registry update. |
-| No executable sandbox replay | `validation.json` is accepted but not produced by the verifier. | Add a runner that executes declared validation commands in a bounded workspace and writes `validation.json`. |
-| No bandit or preference learner | Weights are configurable but not learned from outcomes. | Add UCB or Thompson Sampling over skill choices using recommendation feedback after the baseline report has enough outcome volume. |
-| No replacement decision yet for stronger algorithms | Current weights and mining heuristics are engineering defaults, now with baseline metrics but not yet optimized. | Compare one algorithmic slice at a time against the `evaluate` report before tuning or replacing it. |
-| No diff-level quality signal | Tool events know tools and paths, but not semantic patch quality. | Add optional patch summaries and validation deltas to event logs. |
-| No duplicate skill merging | Similar generated candidates can accumulate. | Add candidate similarity checks against registry and previous candidate folders. |
-| Limited graph constraints | Graph proximity affects ranking, not generation policy. | Use graph neighborhoods to require evidence before generating high-risk workflow steps. |
+The system should eventually optimize skills, generator policy, validation suggestions, and graph-to-skill policy. Code evolution is only a later research phase after disposable sandbox replay and human labels are stable.
 
-## Hermes Layering
+## Phase Plan
 
-Hermes should be treated as an architecture reference rather than code to port. The useful layering for this prototype is:
+Current checkpoint: **Phase 2: Candidate Quality Hardening, pre-Phase 3 gate satisfied on the sample corpus**. Phase 0 and Phase 1 are implemented. Phase 2 now proves held-out usefulness with stable overlay metrics, duplicate decisions are reviewable, validation and promotion outcomes update memory, and safety false-negative rate remains `0.0`. GEPA belongs to Phase 3 and is not implemented yet.
 
-| Hermes-Like Layer | SkillMiner Equivalent | Practical Rule |
-| --- | --- | --- |
-| Cross-session memory | `data/processed_traces.jsonl`, `.skillminer/tool_events.jsonl`, `outputs/reports/*.json` | Store only sanitized operational evidence that can be re-mined. |
-| Experience abstraction | Clusters, rules, frequent sequences, skill graph | Convert raw actions into reusable signals before generation. |
-| Skill creation | `generator.py` candidate drafts | Generate candidates only from clusters with evidence and include fallback instructions. |
-| Skill improvement | Event feedback and verifier output | Update recommendation/generation evidence after every real tool run. |
-| Safety boundary | `verifier.py` plus human promotion | Never install or merge generated skills without explicit approval. |
+### Phase 0: Integrated CLI Foundation
 
-## Algorithm Buckets
+Goal: one local command surface for use and learning.
 
-| Bucket | Algorithms | Rationale |
-| --- | --- | --- |
-| Implemented now | TF-IDF, K-Means, Apriori-style rules, PrefixSpan-style subsequences, Personalized PageRank | These fit the dependency-free MVP and provide enough evidence for the first loop. |
-| Prototype-ready next | Pareto reranking, lightweight duplicate detection, UCB or Thompson Sampling overlays | These can improve recommendation and promotion decisions without heavy infrastructure once baseline metrics are stable. |
-| Later phase | HDBSCAN, sentence transformers, DPO/preference learning, Bayesian optimization, full GraphRAG | Useful after there is enough real event data to justify extra dependencies and evaluation cost. |
+Implemented capabilities:
 
-The bucket list above is not an optimization study. It is a starting queue for the next owner to evaluate with metrics and controlled changes.
+- `skillminer.ps1` interactive shell and scriptable CLI.
+- DeepSeek chat with local tool schemas.
+- Approval-gated workspace tools.
+- Tool event logging to `.skillminer/tool_events.jsonl`.
+- Dashboard and slash command menu.
+
+Completion criteria:
+
+- Read-only tools run directly.
+- Gated tools preview and require approval.
+- Tool events are sanitized and ingestible.
+
+### Phase 1: Conservative Skill Loop
+
+Goal: complete the basic generate/evolve/verify/validate/promote/evaluate loop without external install or code mutation.
+
+Implemented capabilities:
+
+- Trace ingestion and mining.
+- Candidate `SKILL.md` generation.
+- Local metric/Pareto evolution.
+- Verifier safety checks.
+- Approval-gated validation replay.
+- Human promotion queue and local registry update.
+- Baseline/evolved evaluation reports.
+
+Completion criteria:
+
+- `python -m pytest -q` passes.
+- `skillminer evaluate --variant evolved` writes metrics.
+- Safety false-negative rate remains `0.0`.
+- Promotion stays manual.
+
+### Phase 2: Candidate Quality Hardening
+
+Goal: make evolved skills demonstrably better before widening automation.
+
+Implemented:
+
+- Deterministic held-out trace split.
+- Held-out recommendation usefulness metrics.
+- Actionable duplicate checks against registry and candidates.
+- Validation feedback into evolution memory.
+- Promotion feedback into evolution memory.
+- Baseline-vs-evolved candidate comparisons.
+- Stable overlay recommendation gate plus raw augmented-registry diagnostics.
+
+Completion criteria:
+
+- Evolved candidates improve at least one held-out usefulness metric.
+- Duplicate recommendations are actionable: keep, specialize, merge, or reject.
+- Validation failures produce reusable memory patterns.
+- Safety false-negative rate remains `0.0`.
+
+Current sample-corpus result:
+
+```text
+heldout_usefulness_status == improved
+heldout_candidate_discovery_status == improved
+heldout_recommendation_status == neutral
+safety_false_negative_rate == 0.0
+```
+
+### Phase 3: Optional GEPA Adapter
+
+Goal: add GEPA as an optimizer backend behind the existing SkillMiner evaluator.
+
+Target module:
+
+```text
+skillminer/gepa_adapter.py
+```
+
+Target command:
+
+```text
+skillminer evaluate-gepa --cluster-id C03 --budget 50
+```
+
+Evaluator contract:
+
+```text
+structured candidate sections
+  -> render SKILL.md
+  -> verify
+  -> duplicate check
+  -> evidence alignment
+  -> optional validation feedback
+  -> held-out usefulness signal
+  -> scalar score + ASI
+```
+
+Completion criteria:
+
+- GEPA output is written to `outputs/reports/gepa_skill_optimization.json`.
+- GEPA candidates beat seed/local candidates on held-out usefulness.
+- GEPA candidates do not regress verifier pass rate or safety false-negative rate.
+- GEPA remains optional and dependency-gated.
+
+### Phase 4: Low-Cost GEPA/APO
+
+Goal: make GEPA affordable enough for repeated CLI use.
+
+Use `docs/talk_whit_GEPA.md` as the research source:
+
+- MemAPO-style memory:
+  - CTM: correct-template memory.
+  - EPM: error-pattern memory.
+- CAPO racing:
+  - early reject poor candidates before full evaluation.
+  - length penalty to prevent prompt/skill bloat.
+- PMPO/MoPPS-style selection:
+  - cheap pre-screening or bandit rollout selection.
+- Evaluation layering:
+  - dense automatic metric inner loop.
+  - sparse LLM-as-judge outer loop.
+
+Completion criteria:
+
+- Cost per accepted useful candidate is tracked.
+- Most candidate filtering happens through local metrics.
+- LLM judge calls are sparse and justified by uncertainty or metric volatility.
+- Memory reuse improves later GEPA starts.
+
+### Phase 5: Disposable Sandbox Validation
+
+Goal: make validation replay safe enough for richer ASI and future patch guidance.
+
+Required behavior:
+
+- Copy workspace into `.tmp/validation-runs/<id>`.
+- Run validation commands in the copy.
+- No network by default.
+- Timeout every command.
+- Capture stdout, stderr, return code, duration, touched files, and diff.
+- Never apply sandbox changes to the real workspace automatically.
+
+Completion criteria:
+
+- Validation feedback can include diff and touched-file evidence.
+- Failed validation leaves the real workspace untouched.
+- GEPA can use richer command output as ASI without direct production mutation.
+
+### Phase 6: Human Feedback Learning
+
+Goal: make promotion review outcomes train the system.
+
+Add labels:
+
+- accepted
+- rejected
+- merge-needed
+- too-broad
+- duplicate
+- unsafe
+- useful-after-use
+- not-useful-after-use
+
+Feed labels into:
+
+- evolution memory
+- duplicate policy
+- recommendation scoring
+- GEPA ASI
+- generator policy evaluation
+
+Completion criteria:
+
+- Promotion reports compare baseline vs evolved vs GEPA candidates.
+- Human labels affect future retrieval and candidate scoring.
+- Promotion remains manual.
+
+### Phase 7: Safe Code-Evolution Research
+
+Goal: explore GEPA/gskill-style code or patch evolution only after the skill loop is proven.
+
+Allowed sequence:
+
+1. Skill text only.
+2. Validation metadata suggestions.
+3. Natural-language patch strategy.
+4. Sandbox-only code patches.
+5. Human-reviewed application to real workspace.
+
+Required controls:
+
+- disposable sandbox
+- deterministic tests
+- patch diff capture
+- automatic rollback inside sandbox
+- no network by default
+- no workspace-external writes
+- final human review
+
+This phase is out of scope until held-out usefulness, sandbox replay, and human feedback labels are stable.
+
+## ASI Sources
+
+Actionable Side Information should include:
+
+- mined cluster summary
+- representative task
+- trace IDs
+- top terms/tools/errors/failure types
+- frequent sequences
+- association rules
+- graph neighborhoods
+- verifier findings
+- validation command output
+- duplicate nearest match and action
+- promotion labels
+- held-out recommendation failures
+- safety holdout results
+
+Weak ASI says "failed". Strong ASI says what failed, where it came from, and what edit direction is useful.
 
 ## Operating Policy
 
 1. Ingest real traces and tool events before mining.
-2. Generate candidates only from mining report entrypoints.
-3. Require verifier pass before a candidate can be recommended for promotion.
-4. Require human approval before install, merge, dependency installation, external network use, or workspace-external writes.
-5. Feed later tool events back through `skillminer feedback` so the next mining run reflects real outcomes.
-6. Do not claim an algorithm is improved until baseline and after-change metrics are recorded.
+2. Generate/evolve only from mining entrypoints or explicit cluster IDs.
+3. Keep generated skills as drafts.
+4. Require verifier pass before promotion review.
+5. Require approval for validation execution.
+6. Require human approval for promotion.
+7. Do not install external skills automatically.
+8. Do not mutate production code through the optimizer.
+9. Do not adopt GEPA results unless held-out usefulness improves and safety does not regress.
+10. Record before/after metrics for every algorithmic change.
+
+## Current Metrics To Watch
+
+- Precision@K
+- MRR
+- recommendation lift
+- coverage-gap hit rate
+- verifier pass rate
+- evolved verifier pass rate
+- candidate duplicate rate
+- actionable duplicate count
+- held-out evolved candidate top-K hit rate
+- held-out MRR delta
+- safety false-negative rate
+- validation pass/failure categories
+- human acceptance rate, once labels exist
+
+## Success Definition
+
+Short term:
+
+- The CLI can mine, generate, evolve, verify, validate, queue, promote, and evaluate skills.
+- Evolved skills are safe and measurable.
+
+Medium term:
+
+- Evolved skills improve held-out usefulness.
+- Duplicate/merge decisions reduce library clutter.
+- Validation and promotion feedback improve future candidates.
+
+Long term:
+
+- GEPA-backed skill evolution reliably produces skills that the CLI recommends and users accept.
+- The skill library improves from real use without weakening safety gates.
+- SkillMiner becomes a practical local CLI workbench that gets better the more it is used.

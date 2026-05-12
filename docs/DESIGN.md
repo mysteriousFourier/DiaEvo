@@ -1,88 +1,194 @@
-# SkillMiner MVP Design
+# SkillMiner Design
 
-## Problem
+## Product Shape
 
-Static Agent skill systems require users to know which skill exists and when to invoke it. SkillMiner adds a data-mining loop: observe task traces, identify reusable task clusters and tool sequences, rank existing or plugin-backed skills, generate candidate skills for coverage gaps, then verify safety before installation.
+SkillMiner is an integrated local CLI workbench for Agent skill operations. Its primary surface is:
+
+```powershell
+.\skillminer.ps1
+```
+
+The command opens an interactive terminal shell when no subcommand is supplied and acts as a scriptable JSON CLI when subcommands are supplied. The same project also exposes `skillminer` and `skillminer-home` console scripts through `pyproject.toml`.
+
+SkillMiner combines five roles in one local tool:
+
+1. Interactive DeepSeek-powered terminal assistant.
+2. Approval-gated local tool runner.
+3. Trace and tool-event recorder.
+4. Skill mining, recommendation, generation, verification, validation, and promotion CLI.
+5. Skill self-evolution benchmark and optimizer host.
+
+The design goal is a CLI that improves its skill system from actual use while keeping explicit user approval around risky operations.
+
+## End-To-End Data Flow
+
+```text
+user chat / slash command / scriptable CLI
+  -> local tools and skill commands
+  -> .skillminer/tool_events.jsonl + data/*.jsonl traces
+  -> ingest / feedback
+  -> mine
+  -> recommend or generate
+  -> evolve
+  -> verify
+  -> validate
+  -> queue-promotion
+  -> promote
+  -> evaluate
+  -> future runs use updated traces, registry, and evolution memory
+```
+
+This flow is deliberately conservative. The current system can evolve skill text and registry metadata, but it does not auto-install external skills or mutate production code.
 
 ## Architecture
 
-1. Data layer: JSONL task traces, seed skill registry, plugin metadata.
-2. Mining layer: TF-IDF features, K-Means clustering, association rules, frequent sequence mining, heterogeneous task-skill-tool graph.
-3. Recommendation layer: weighted scoring over semantic similarity, rule confidence, PageRank, usage decay, success rate, risk, and cost.
-4. Generation layer: creates trace-driven candidate `SKILL.md` directories from high-gap clusters, failure hotspots, and high-reuse tool paths.
-5. Verification layer: checks required frontmatter, required candidate sections, optional executable validation metadata, dangerous commands, credential-like text, and parent-path usage.
-6. Tool layer: explicit local tool schemas, workspace boundary checks, approval previews, and per-call event logging for agent actions that feeds back into trace ingestion.
-7. UI layer: local PowerShell launcher, terminal dashboard, live prompt bar, slash menu, tool result blocks, and DeepSeek chat bridge.
-8. Configuration layer: lightweight `.env` reader/writer for DeepSeek model, base URL, and API key.
+| Layer | Files | Responsibility |
+| --- | --- | --- |
+| CLI dispatch | `skillminer/cli.py`, `skillminer.ps1`, `skillminer-home.ps1` | Scriptable command surface, default interactive shell entry, UTF-8 and project-local Python setup. |
+| Interactive shell | `ui/interactive_shell.py`, `ui/prompt_bar.py`, `ui/cli_style.py`, `ui/tool_render.py`, `ui/terminal_home.py` | Dashboard, workspace trust, slash menu, prompt input, DeepSeek chat loop, model/base URL/API key commands, tool preview rendering. |
+| Chat bridge | `skillminer/deepseek_chat.py`, `skillminer/tool_chat.py`, `skillminer/env.py` | OpenAI-compatible DeepSeek calls, tool schema conversion, tool result messages, local `.env` loading and updates. |
+| Tool layer | `skillminer/tool_layer.py` | Workspace-bounded file tools, shell/network tools, approval gates, previews, event logging. |
+| Trace model | `skillminer/models.py`, `skillminer/ingest.py`, `skillminer/storage.py` | JSONL parsing, trace normalization, tool event conversion, registry/plugin loading, summary reports. |
+| Mining | `skillminer/features.py`, `skillminer/clustering.py`, `skillminer/association_rules.py`, `skillminer/sequence_mining.py`, `skillminer/skill_graph.py`, `skillminer/miner.py` | TF-IDF, seeded K-Means, association rules, frequent tool sequences, task-skill-tool graph, coverage-gap and generation-entrypoint reports. |
+| Recommendation | `skillminer/recommender.py`, `data/recommender_weights.json` | Rank registry and plugin-backed skills with similarity, rules, PageRank, usage, success, coverage, risk, and cost; optional Pareto reranking. |
+| Candidate generation | `skillminer/generator.py` | Render trace-grounded `SKILL.md` drafts from mining clusters. |
+| Verification | `skillminer/verifier.py` | Check frontmatter, required sections, safety patterns, credential patterns, suspicious paths, dependency hints, and validation metadata. |
+| Evolution | `skillminer/evolution.py`, `skillminer/quality.py`, `data/evolution_memory.json` | Local metric/Pareto section optimization, duplicate checks, memory retrieval/update, ASI-style feedback storage. |
+| Validation | `skillminer/validation_runner.py` | Approval-gated `validation.json` command replay with stdout/stderr/exit status captured. |
+| Promotion | `skillminer/promotion.py` | Human-reviewed promotion queue and local registry update gate. |
+| Evaluation | `skillminer/evaluation.py` | Baseline and evolved metrics, held-out split, recommendation metrics, candidate duplicate metrics, safety holdout. |
 
-## Current MVP Choices
+## Command Model
 
-The MVP avoids heavy dependencies so it can run in constrained course environments. It uses TF-IDF instead of neural embeddings and in-repo implementations instead of scikit-learn, mlxtend, or networkx. The modules are intentionally isolated so the full project can swap in stronger algorithms later.
+Commands are intentionally symmetric across script and interactive use.
 
-The interactive shell is intentionally still a lightweight Python terminal renderer rather than a full Ink/React application. It implements the pieces needed for the MVP: a startup card, workspace trust confirmation, prompt bar, slash command menu, keyboard selection, multiline input through `Ctrl+J`, and DeepSeek chat calls.
+Scriptable commands:
 
-The MVP is not yet a full coding-agent runtime. It now has a local tool execution layer with schemas for `web_search`, `web_fetch`, `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`, `apply_patch`, and `run_shell`; workspace boundary checks; approval previews; and per-call event logs. These tools are exposed through CLI, slash commands, and the interactive DeepSeek chat loop. Model-requested tool calls render as terminal blocks, gated tools require explicit approval, and bounded tool results are fed back into conversation history. Streaming tool progress is still out of scope.
+```text
+ingest, mine, recommend, generate, verify, evolve, validate,
+queue-promotion, promote, demo, home, tools, feedback, evaluate,
+tool, chat-test
+```
 
-The first autonomous evolution loop is now implemented as `tool_events -> ingest -> mine -> generate -> verify -> recommend -> feedback`. `ingest` folds `.skillminer/tool_events.jsonl` into processed traces by default, `mine` emits generation entrypoints, `generate` writes evidence-backed candidate skills, `verify` enforces the candidate contract, and `recommend` uses configurable weights from `data/recommender_weights.json`.
+Interactive slash commands:
 
-## Runtime Entry Points
+```text
+/ingest, /mine, /recommend, /generate, /verify, /demo, /feedback,
+/tools, /tool, /model, /baseurl, /key, /home, /help, /exit
+```
 
-- `.\skillminer.ps1`: primary entry point. With no args it opens the interactive shell; with args it runs the scriptable CLI.
-- `.\skillminer-home.ps1`: renders the dashboard only.
-- `python -m skillminer.cli <command>`: package-level CLI used by the launcher.
-- `python -m ui.terminal_home`: direct dashboard renderer.
+The interactive shell sends non-slash text to DeepSeek. The model can request local tools. Tool calls use the same `tool_layer.py` handlers as CLI tool commands, so traces and approval behavior stay consistent.
 
-The PowerShell launchers set `PYTHONPATH`, `PYTHONUTF8`, and `PYTHONIOENCODING`, then run the project-local `.venv` Python.
+## Safety Model
 
-## Interactive Commands
+Safety is implemented at multiple layers:
 
-- `/ingest`: load `data/sample_traces.jsonl`.
-- `/mine`: run clustering, rules, sequences, and graph mining.
-- `/recommend <task>`: rank skills for a task.
-- `/generate <cluster-id>`: create `outputs/candidate_skills/<cluster-id>/SKILL.md`.
-- `/verify <cluster-id/path>`: verify a generated candidate.
-- `/demo`: run the full MVP loop.
-- `/feedback`: fold `.skillminer/tool_events.jsonl` back into processed traces.
-- `/tools`: list local tool schemas and approval requirements.
-- `/tool <name> <json|key=value...> [--approve]`: execute a local tool. Gated tools return a preview unless `--approve` is present.
-- `/model <name>`: update `DEEPSEEK_MODEL` in `.env`, reset chat config, and redraw the dashboard.
-- `/baseurl <url>`: update `DEEPSEEK_BASE_URL` in `.env` and reset chat config.
-- `/key [api-key]`: update `DEEPSEEK_API_KEY`; without an argument it uses hidden input.
-- `/home`: redraw dashboard.
-- `/help`: print command help.
-- `/exit`: quit.
+- Workspace trust prompt before interactive use.
+- Workspace path boundary checks for file tools.
+- Approval previews for writes, edits, deletes, patches, shell commands, and network tools.
+- Sanitized tool event logging that redacts key/token/secret/password-like fields.
+- Candidate verifier for dangerous commands, credential-like text, parent paths, missing sections, and dependency hints.
+- Validation runner blocks dangerous, install, and network commands unless policy explicitly allows them.
+- Promotion requires manual approval and writes only to `data/skill_registry.json`.
+- Safety false-negative rate is measured in evaluation and should remain `0.0`.
 
-Normal non-slash text is sent to DeepSeek using the current `.env` values and local tool schemas.
+Safety constraints are not a weighted preference in the self-evolution loop. Dangerous candidates are hard failures.
 
-## File Responsibilities
+## Current Algorithm Choices
 
-- `skillminer/cli.py`: scriptable command dispatch and demo pipeline.
-- `skillminer/deepseek_chat.py`: DeepSeek-compatible chat completion client.
-- `skillminer/env.py`: local dotenv loader plus targeted key writer.
-- `skillminer/tool_layer.py`: local tool registry, schemas, workspace boundary checks, approval previews, execution, and event logging.
-- `docs/AUTONOMOUS_EVOLUTION_LOOP.md`: paper-to-implementation mapping, Hermes layering, current gaps, and algorithm buckets for the evolution loop.
-- `ui/cli_style.py`: dashboard, mascot, trust dialog, terminal colors, and model label.
-- `ui/prompt_bar.py`: live prompt rendering, slash menu, keyboard navigation, multiline input.
-- `ui/interactive_shell.py`: shell loop, slash command dispatch, DeepSeek chat state.
-- `ui/tool_render.py`: terminal rendering for tool call previews and results.
-- `ui/terminal_home.py`: dashboard-only entry point.
+The MVP stays dependency-free by default:
 
-## Recommended Screenshots
+- Standard-library TF-IDF in `features.py`.
+- In-repo seeded K-Means in `clustering.py`.
+- Apriori-style association rule enumeration in `association_rules.py`.
+- PrefixSpan-style subsequence support in `sequence_mining.py`.
+- Lightweight Personalized PageRank in `skill_graph.py`.
+- Local metric/Pareto evolution in `evolution.py`.
 
-1. `.\skillminer.ps1` after `demo`, showing the dashboard and current model label.
-2. Slash menu after typing `/`, including `/model`, `/baseurl`, and `/key`.
-3. `outputs/reports/mining_report.json` or terminal output of `.\skillminer.ps1 mine`.
-4. Candidate skill generation and `verify` output.
+Optional heavier dependencies are listed under the `full` extra in `pyproject.toml`, but current commands should run without them.
 
-## Future Work
+## Skill Self-Evolution Design
 
-- Add streaming progress and richer status updates for model-driven tool turns.
-- Harden web search/fetch with source attribution, bounded summaries, and a more robust provider than best-effort DuckDuckGo HTML parsing.
-- Expand codebase file tools with read-before-write staleness tracking, richer patch validation, and diff display controls.
-- Add real evaluation metrics: Precision@K, Recall@K, MRR, NDCG.
-- Add sandbox replay for historical tasks.
-- Add contextual bandit selection for cold start.
-- Integrate with Claude Code skill directories only after user confirmation.
-- Add PDF-backed citation verification for the final report.
-- Replace the lightweight prompt renderer with prompt_toolkit/Textual/Ink if full cursor movement, mouse selection, and richer autocompletion become necessary.
-- Add provider abstraction if models beyond DeepSeek-compatible chat completions are needed.
+The current skill evolution target is structured `SKILL.md` text, not production code.
+
+Candidate sections:
+
+```text
+When To Use
+Trigger Signals
+Operating Steps
+Failure Fallbacks
+Verification Suggestions
+Safety Constraints
+```
+
+The local optimizer generates variants and scores them using:
+
+- verifier pass/fail
+- warning cleanliness
+- mined evidence alignment
+- duplicate similarity
+- specificity
+- safety
+- bounded length
+
+Evolution memory stores:
+
+- successful templates
+- verifier error patterns
+- validation feedback patterns
+- duplicate patterns
+- promotion review patterns
+
+This local implementation is the baseline and scaffold for the later GEPA adapter.
+
+## GEPA Integration Boundary
+
+GEPA should be integrated as an optional optimizer behind the current evolution/evaluation interface.
+
+SkillMiner owns:
+
+- traces and tool-event normalization
+- cluster and graph mining
+- generation entrypoint selection
+- verification and validation gates
+- duplicate checks
+- recommendation and evaluation reports
+- promotion queue and human approval
+
+GEPA should own:
+
+- reflective mutation of structured candidates
+- candidate pool management
+- Pareto frontier selection
+- section-aware merge
+- optimization budget handling
+
+The first GEPA target is `SKILL.md` section optimization. Later targets can include generator policy, validation metadata suggestions, graph-to-skill policy, and, only after sandbox replay exists, patch guidance or code evolution research.
+
+## Phase Roadmap
+
+Current checkpoint: **Phase 2: Quality hardening, pre-Phase 3 gate satisfied on the sample corpus**. Phase 0 and Phase 1 are in place. Phase 2 reports improved held-out usefulness without safety false-negative regression. Phase 3 GEPA adapter work can start behind the existing evaluator and safety gate.
+
+| Phase | Engineering target | Main risk to control |
+| --- | --- | --- |
+| 0. Integrated CLI | Unified interactive/scriptable tool, tool schemas, event logging, DeepSeek bridge. | Tool execution safety and trace hygiene. |
+| 1. Conservative skill loop | Generate/evolve/verify/validate/queue/promote/evaluate skill candidates. | Candidate safety and manual promotion boundary. |
+| 2. Quality hardening | Held-out metrics, stable overlay gate, actionable duplicate checks, validation feedback memory, promotion reports. | Optimizing verifier compliance instead of usefulness. |
+| 3. GEPA adapter | Optional GEPA section optimizer using SkillMiner evaluator and ASI. | Cost and hallucinated unsupported instructions. |
+| 4. Low-cost APO/GEPA | CTM/EPM memory, CAPO racing, metric inner loop, sparse LLM judge. | Token/cost drift and overfitting tiny traces. |
+| 5. Disposable sandbox | Clone workspace for validation replay and diff capture. | Accidental real workspace mutation. |
+| 6. Human feedback learning | Add accepted/rejected/merge/unsafe labels into memory and promotion policy. | Premature auto-promotion. |
+| 7. Code evolution research | Sandbox-only GEPA/gskill-style patch guidance or code mutations. | Applying unreviewed code changes. |
+
+## Success Criteria For The Current Stage
+
+Before widening scope:
+
+- `python -m pytest -q` passes.
+- `skillminer evaluate --variant evolved` writes stable reports.
+- Safety false-negative rate remains `0.0`.
+- Evolved candidate verifier pass rate does not regress.
+- Duplicate recommendations are actionable.
+- Held-out usefulness improves on the sample corpus without disturbing existing skill ranking.
+- Human promotion remains required.

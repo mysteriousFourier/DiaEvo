@@ -12,7 +12,9 @@ __pycache__/
 .uv-cache/
 .venv/
 data/processed_traces.jsonl
+data/evolution_memory.json
 outputs/reports/*.json
+outputs/reports/heldout/
 outputs/candidate_skills/*
 !outputs/candidate_skills/.gitkeep
 outputs/screenshots/*
