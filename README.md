@@ -11,7 +11,7 @@ cd D:\codex\skillminer
 .\skillminer.ps1
 ```
 
-Running `.\skillminer.ps1` with no arguments opens the terminal shell. On first run, choose `1` to trust the workspace. Then type normal text to chat through DeepSeek, or use slash commands:
+Running `.\skillminer.ps1` with no arguments opens the terminal shell. On first run, choose `1` to trust the workspace. Then type normal text to chat through DeepSeek, let the model request local tools, or use slash commands:
 
 ```text
 /ingest
@@ -99,6 +99,7 @@ SkillMiner includes a Claude Code-inspired local tool layer for the first coding
 - Workspace tools: `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`, `apply_patch`.
 - Execution/network tools: `run_shell`, `web_search`, `web_fetch`.
 - Safety: all paths are constrained to the project root, writes show unified diffs, deletes are marked destructive, and shell/network tools require explicit approval.
+- Chat bridge: the interactive shell sends OpenAI-compatible tool schemas to DeepSeek. Read-only tools can run during a chat turn; gated tools show a terminal preview and ask for approval before execution. Tool results are summarized back into conversation history.
 - Traceability: every tool call appends a JSONL event under `.skillminer/tool_events.jsonl`, so future mining can learn from actual agent actions.
 
 ## Data Format

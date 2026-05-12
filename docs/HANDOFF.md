@@ -9,11 +9,12 @@ cd D:\codex\skillminer
 .\skillminer.ps1
 ```
 
-The shell supports a custom terminal dashboard, workspace trust confirmation, live prompt bar, slash command menu, keyboard navigation, multiline input with `Ctrl+J`, and DeepSeek chat through `.env`.
+The shell supports a custom terminal dashboard, workspace trust confirmation, live prompt bar, slash command menu, keyboard navigation, multiline input with `Ctrl+J`, DeepSeek chat through `.env`, and model-requested local tool calls with approval prompts.
 
 The latest important commits are:
 
-- Add local tool execution layer (current handoff phase)
+- Connect local tool execution layer to DeepSeek chat turns (current handoff phase)
+- Add local tool execution layer
 - `a791869 Adjust mascot accent color`
 - `5154d95 Add interactive DeepSeek config commands`
 - `aa23310 Apply custom shell colors and mascot`
@@ -34,6 +35,7 @@ The latest important commits are:
 - Candidate `SKILL.md` generation.
 - Static skill verification.
 - Claude Code-inspired local tool layer with explicit schemas, workspace boundary checks, approval previews, terminal result blocks, and JSONL event logging.
+- DeepSeek chat tool bridge with OpenAI-compatible tool schemas, structured tool-call parsing, interactive approval prompts, bounded tool-result messages, and support for legacy `function_call` responses.
 - DeepSeek chat smoke test and interactive chat.
 - Claude Code-inspired terminal UI, now customized with local colors and mascot.
 - Runtime model/base URL/API key configuration through slash commands.
@@ -95,6 +97,7 @@ DEEPSEEK_TIMEOUT=60
 - `docs/HANDOFF.md`: this handoff document.
 - `skillminer/cli.py`: scriptable CLI and demo pipeline.
 - `skillminer/deepseek_chat.py`: DeepSeek-compatible chat client.
+- `skillminer/tool_chat.py`: model-facing tool schemas, tool-call parsing, and tool-result message shaping.
 - `skillminer/env.py`: dotenv load/write helpers.
 - `skillminer/tool_layer.py`: tool schemas, workspace path checks, approval previews, execution handlers, and `.skillminer/tool_events.jsonl` logging.
 - `skillminer/ingest.py`: trace validation and normalization.
@@ -153,14 +156,14 @@ git status --short --ignored
 - Cursor movement inside the current input buffer is not implemented; editing is append/backspace only.
 - Slash menu selection supports up/down, Tab completion, and Enter confirmation for bare command prefixes.
 - The DeepSeek client is synchronous and non-streaming.
-- Web tools exist as gated `web_search` and `web_fetch` schemas/handlers, but they are not model-callable yet and currently use best-effort HTML parsing rather than a robust search provider.
-- Coding-agent file tools exist as CLI/slash-callable local tools for listing, reading, writing, editing, deleting, applying patches, and running shell commands. They are not integrated into DeepSeek tool calls yet.
+- Web tools exist as gated `web_search` and `web_fetch` schemas/handlers. They are model-callable but still use best-effort HTML parsing rather than a robust search provider.
+- Coding-agent file tools exist as CLI/slash-callable and model-callable local tools for listing, reading, writing, editing, deleting, applying patches, and running shell commands.
 - Write staleness tracking is basic; unlike Claude Code, the MVP does not yet require a prior read timestamp before writes/edits.
 - Generated skills are never auto-installed.
 
 ## Suggested Next Work
 
-- Connect the local tool layer to DeepSeek chat turns. The next maintainer should add structured tool-call parsing/planning, permission prompts, per-turn tool result messages, and model-facing result summaries instead of requiring `/tool`.
+- Add streaming tool progress and richer per-turn status display for model-driven tool calls.
 - Harden web search/fetch with source attribution. Keep search and fetch separate, save URL/title/snippet/content metadata, and pass only bounded summaries back into the model.
 - Add stronger codebase editing semantics. Require read-before-write staleness checks, preserve user changes, prefer structured patches, and record before/after diffs for rollback and later skill mining.
 - Add a provider abstraction around `DeepSeekConfig` if OpenAI-compatible, Anthropic, or local models should be selectable.

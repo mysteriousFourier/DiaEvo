@@ -11,7 +11,7 @@ from typing import Any
 from .env import load_env
 
 
-Message = dict[str, str]
+Message = dict[str, Any]
 
 
 @dataclass(slots=True)
@@ -54,7 +54,13 @@ def config_from_env(
     )
 
 
-def chat_completion(messages: list[Message], config: DeepSeekConfig) -> dict[str, Any]:
+def chat_completion(
+    messages: list[Message],
+    config: DeepSeekConfig,
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": config.model,
         "messages": messages,
@@ -62,6 +68,9 @@ def chat_completion(messages: list[Message], config: DeepSeekConfig) -> dict[str
         "max_tokens": config.max_tokens,
         "temperature": config.temperature,
     }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = tool_choice or "auto"
     if config.reasoning_effort:
         payload["reasoning_effort"] = config.reasoning_effort
     if config.thinking:

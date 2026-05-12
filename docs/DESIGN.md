@@ -21,7 +21,7 @@ The MVP avoids heavy dependencies so it can run in constrained course environmen
 
 The interactive shell is intentionally still a lightweight Python terminal renderer rather than a full Ink/React application. It implements the pieces needed for the MVP: a startup card, workspace trust confirmation, prompt bar, slash command menu, keyboard selection, multiline input through `Ctrl+J`, and DeepSeek chat calls.
 
-The MVP is not yet a full coding-agent runtime. It now has a local tool execution layer with schemas for `web_search`, `web_fetch`, `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`, `apply_patch`, and `run_shell`; workspace boundary checks; approval previews; and per-call event logs. These tools are exposed through CLI and slash commands, but they are not yet model-callable from the DeepSeek chat loop and do not yet support streaming tool progress.
+The MVP is not yet a full coding-agent runtime. It now has a local tool execution layer with schemas for `web_search`, `web_fetch`, `list_files`, `read_file`, `write_file`, `edit_file`, `delete_file`, `apply_patch`, and `run_shell`; workspace boundary checks; approval previews; and per-call event logs. These tools are exposed through CLI, slash commands, and the interactive DeepSeek chat loop. Model-requested tool calls render as terminal blocks, gated tools require explicit approval, and bounded tool results are fed back into conversation history. Streaming tool progress is still out of scope.
 
 ## Runtime Entry Points
 
@@ -49,7 +49,7 @@ The PowerShell launchers set `PYTHONPATH`, `PYTHONUTF8`, and `PYTHONIOENCODING`,
 - `/help`: print command help.
 - `/exit`: quit.
 
-Normal non-slash text is sent to DeepSeek using the current `.env` values.
+Normal non-slash text is sent to DeepSeek using the current `.env` values and local tool schemas.
 
 ## File Responsibilities
 
@@ -72,7 +72,7 @@ Normal non-slash text is sent to DeepSeek using the current `.env` values.
 
 ## Future Work
 
-- Connect the local tool execution layer to model-driven chat turns with structured tool-call parsing, permission prompts, progress updates, and tool-result messages.
+- Add streaming progress and richer status updates for model-driven tool turns.
 - Harden web search/fetch with source attribution, bounded summaries, and a more robust provider than best-effort DuckDuckGo HTML parsing.
 - Expand codebase file tools with read-before-write staleness tracking, richer patch validation, and diff display controls.
 - Add real evaluation metrics: Precision@K, Recall@K, MRR, NDCG.

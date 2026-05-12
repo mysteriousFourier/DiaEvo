@@ -2,7 +2,7 @@
 
 ## Scope Completed
 
-This phase adds a Claude Code-inspired local tool execution layer while keeping chat, execution, and rendering separate.
+This phase adds a Claude Code-inspired local tool execution layer while keeping chat, execution, and rendering separate. The follow-up bridge now exposes those tools to interactive DeepSeek chat turns.
 
 Implemented:
 
@@ -19,6 +19,8 @@ Implemented:
   - `list_files` and `read_file` execute directly.
   - writes, edits, deletes, patch application, shell, and network return a preview unless `--approve` is supplied.
 - Tool events are written to `.skillminer/tool_events.jsonl`, which remains ignored by git.
+- `skillminer/tool_chat.py` converts local tool schemas into OpenAI-compatible chat tools, parses model tool calls, and shapes bounded tool-result messages.
+- Interactive chat can execute model-requested tools. Read-only tools run directly; gated tools render a preview and ask for approval before execution.
 
 ## Verification Run
 
@@ -46,16 +48,15 @@ Reason: current `.venv` reports `No module named pytest`.
 
 ## Current Limits
 
-- Tools are CLI/slash-callable, not model-callable from DeepSeek chat turns yet.
-- Approval is a command flag (`--approve`), not an interactive permission dialog.
+- Tools are CLI/slash-callable and model-callable from DeepSeek chat turns.
+- CLI approval is still a command flag (`--approve`); model-requested interactive shell tool calls use a simple `Approve <tool>? [y/N]` prompt.
 - File write/edit staleness checks are basic and do not yet require prior `read_file` state.
 - Web search/fetch are gated but use best-effort standard-library networking and DuckDuckGo HTML parsing; source attribution summaries are not finished.
 - Tool event logs are recorded but not yet ingested into mining traces automatically.
 
 ## Next Phase
 
-1. Add structured tool-call planning/parsing in the DeepSeek chat loop.
-2. Render model-requested tool calls as first-class blocks with an interactive approval prompt.
-3. Feed bounded tool results back into conversation history.
-4. Add read-before-write staleness tracking and richer patch validation.
-5. Convert `.skillminer/tool_events.jsonl` into trace records so mining learns from actual agent actions.
+1. Add read-before-write staleness tracking and richer patch validation.
+2. Add streaming progress/status updates for longer model-driven tool runs.
+3. Harden web search/fetch with source attribution and bounded summaries.
+4. Convert `.skillminer/tool_events.jsonl` into trace records so mining learns from actual agent actions.

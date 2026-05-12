@@ -26,6 +26,7 @@ COMMANDS = [
     ("/exit", "Quit"),
 ]
 COMMAND_NAMES = tuple(name for name, _ in COMMANDS)
+COMMAND_MENU_PAGE_SIZE = 9
 
 
 def _erase_lines(count: int) -> None:
@@ -42,7 +43,27 @@ def _matching_commands(value: str) -> list[tuple[str, str]]:
         return []
     if any(char.isspace() for char in query):
         return []
-    return [(name, desc) for name, desc in COMMANDS if name.startswith(query)][:9]
+    return [(name, desc) for name, desc in COMMANDS if name.startswith(query)]
+
+
+def _command_menu_window(
+    matches: list[tuple[str, str]],
+    selected_index: int,
+) -> tuple[int, list[tuple[str, str]], int]:
+    if not matches:
+        return 0, [], 0
+    selected_index = max(0, min(selected_index, len(matches) - 1))
+    visible_count = min(COMMAND_MENU_PAGE_SIZE, len(matches))
+    max_offset = len(matches) - visible_count
+    offset = max(0, selected_index - visible_count + 1)
+    offset = min(offset, max_offset)
+    return offset, matches[offset : offset + visible_count], selected_index
+
+
+def _move_menu_selection(selected_index: int, match_count: int, delta: int) -> int:
+    if match_count <= 0:
+        return 0
+    return (selected_index + delta) % match_count
 
 
 def active_command_name(value: str) -> str:
@@ -94,11 +115,12 @@ def render_command_menu(value: str, selected_index: int = 0) -> str:
     matches = _matching_commands(value)
     if not matches:
         return ""
-    selected_index = max(0, min(selected_index, len(matches) - 1))
+    offset, visible_matches, selected_index = _command_menu_window(matches, selected_index)
     width = min(max(72, _term_width() - 4), 144)
-    name_width = max(_display_width(name) for name, _ in matches) + 2
+    name_width = max(_display_width(name) for name, _ in visible_matches) + 2
     lines = []
-    for index, (name, description) in enumerate(matches):
+    for visible_index, (name, description) in enumerate(visible_matches):
+        index = offset + visible_index
         padding = " " * max(1, name_width - _display_width(name))
         desc = _fit(description, width - name_width - 1)
         if index == selected_index:
@@ -194,10 +216,10 @@ def read_prompt() -> str:
             key = msvcrt.getwch()
             matches = _matching_commands(value)
             if matches and key == "H":
-                selected_index = (selected_index - 1) % len(matches)
+                selected_index = _move_menu_selection(selected_index, len(matches), -1)
                 redraw()
             elif matches and key == "P":
-                selected_index = (selected_index + 1) % len(matches)
+                selected_index = _move_menu_selection(selected_index, len(matches), 1)
                 redraw()
             continue
         if char == "\t":

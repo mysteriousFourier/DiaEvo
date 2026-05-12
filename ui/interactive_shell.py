@@ -8,6 +8,13 @@ from skillminer.cli import main as cli_main
 from skillminer.deepseek_chat import chat_completion, config_from_env, extract_assistant_text
 from skillminer.env import write_env_value
 from skillminer.tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
+from skillminer.tool_chat import (
+    assistant_message_for_history,
+    chat_tool_schemas,
+    extract_assistant_message,
+    requested_tool_calls,
+    tool_result_message_for_call,
+)
 
 from .cli_style import maybe_show_trust_dialog
 from .prompt_bar import is_command_input, read_prompt
@@ -35,6 +42,8 @@ Commands:
 
 Anything else is sent to DeepSeek as a normal chat message.
 """.strip()
+
+MAX_TOOL_ROUNDS = 5
 
 
 class ChatConfigState:
@@ -146,6 +155,62 @@ def _dispatch_command(command: str, chat_state: ChatConfigState) -> bool:
     return True
 
 
+def _approval_prompt(tool_name: str) -> bool:
+    answer = input(f"Approve {tool_name}? [y/N] ").strip().lower()
+    return answer in {"y", "yes"}
+
+
+def _execute_model_tool_call(call, *, turn_id: str) -> dict[str, object]:
+    if "__parse_error__" in call.args:
+        result = {"status": "error", "tool": call.name, "error": call.args["__parse_error__"]}
+        print(render_tool_result(result))
+        return result
+
+    result = execute_tool(call.name, call.args, turn_id=turn_id)
+    print(render_tool_result(result))
+    if result.get("status") != "requires_approval":
+        return result
+
+    if not _approval_prompt(call.name):
+        denied = {
+            "status": "denied",
+            "tool": call.name,
+            "message": "User denied approval for this tool call.",
+            "preview": result.get("preview", {}),
+        }
+        print(render_tool_result(denied))
+        return denied
+
+    approved = execute_tool(call.name, call.args, approve=True, turn_id=turn_id)
+    print(render_tool_result(approved))
+    return approved
+
+
+def _chat_turn_with_tools(messages: list[dict[str, object]], chat_state: ChatConfigState) -> str:
+    if chat_state.value is None:
+        chat_state.value = config_from_env(max_tokens=4096, no_thinking=True)
+
+    tools = chat_tool_schemas()
+    for round_index in range(MAX_TOOL_ROUNDS):
+        response = chat_completion(messages, chat_state.value, tools=tools)
+        message = extract_assistant_message(response)
+        calls = requested_tool_calls(message)
+        if not calls:
+            answer = extract_assistant_text(response)
+            messages.append({"role": "assistant", "content": answer})
+            return answer
+
+        messages.append(assistant_message_for_history(message))
+        turn_id = str(response.get("id") or f"chat-turn-{round_index}")
+        for call in calls:
+            result = _execute_model_tool_call(call, turn_id=turn_id)
+            messages.append(tool_result_message_for_call(call, result))
+
+    answer = "tool loop stopped: too many consecutive tool rounds."
+    messages.append({"role": "assistant", "content": answer})
+    return answer
+
+
 def main() -> int:
     if not maybe_show_trust_dialog():
         return 1
@@ -160,8 +225,10 @@ def main() -> int:
                 "请优先使用中文回答；如果用户明确使用其他语言，再切换到用户语言。"
                 "回答要简洁、可执行，不要编造不存在的命令。"
                 "当前交互式斜杠命令只有：/ingest、/mine、/recommend <task>、"
-                "/generate <cluster-id>、/verify <cluster-id/path>、/demo、/model <name>、"
+                "/generate <cluster-id>、/verify <cluster-id/path>、/demo、/tools、/tool、/model <name>、"
                 "/baseurl <url>、/key <api-key>、/home、/help、/exit。"
+                "你可以通过工具调用请求 list_files、read_file、write_file、edit_file、delete_file、apply_patch、run_shell、web_search 或 web_fetch。"
+                "需要审批的工具会先显示预览，只有用户同意后才会执行。"
                 "脚本式 PowerShell 启动器是 .\\skillminer.ps1，例如 .\\skillminer.ps1 demo "
                 "或 .\\skillminer.ps1 chat-test --interactive。"
             ),
@@ -182,21 +249,12 @@ def main() -> int:
                 return 0
             continue
 
-        if chat_state.value is None:
-            try:
-                chat_state.value = config_from_env(max_tokens=4096, no_thinking=True)
-            except Exception as exc:
-                print(f"chat unavailable: {exc}")
-                print("Use `/help` for local commands, or fix `.env` and try again.")
-                continue
-
+        history_len = len(messages)
         messages.append({"role": "user", "content": command})
         try:
-            response = chat_completion(messages, chat_state.value)
-            answer = extract_assistant_text(response)
+            answer = _chat_turn_with_tools(messages, chat_state)
         except Exception as exc:
             print(f"chat error: {exc}")
-            messages.pop()
+            del messages[history_len:]
             continue
-        messages.append({"role": "assistant", "content": answer})
         print(answer)
