@@ -25,6 +25,7 @@ DEFAULT_WEIGHTS = {
     "recent_reuse": 0.05,
     "risk": 0.17,
     "cost": 0.07,
+    "human_feedback": 0.08,
 }
 
 
@@ -39,6 +40,7 @@ class Recommendation:
     success_rate: float
     coverage_gap: float
     recent_reuse: float
+    human_feedback: float
     risk: float
     cost: float
     installed: bool
@@ -56,6 +58,7 @@ class Recommendation:
             "success_rate": round(self.success_rate, 4),
             "coverage_gap": round(self.coverage_gap, 4),
             "recent_reuse": round(self.recent_reuse, 4),
+            "human_feedback": round(self.human_feedback, 4),
             "risk": round(self.risk, 4),
             "cost": round(self.cost, 4),
             "installed": self.installed,
@@ -106,6 +109,73 @@ def load_recommender_weights(path: str | Path | None = None) -> dict[str, float]
             except (TypeError, ValueError):
                 continue
     return active
+
+
+def _as_list(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    if isinstance(value, tuple | set):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    return [text] if text else []
+
+
+def _skill_feedback_index(memory_path: str | Path | None = None) -> dict[str, dict[str, Any]]:
+    memory = read_json(Path(memory_path) if memory_path else DATA_DIR / "evolution_memory.json", default={})
+    if not isinstance(memory, dict):
+        return {}
+    indexed: dict[str, dict[str, Any]] = {}
+    for item in memory.get("promotion_patterns", []):
+        if not isinstance(item, dict):
+            continue
+        report = item.get("promotion_report") if isinstance(item.get("promotion_report"), dict) else {}
+        candidate = report.get("candidate") if isinstance(report.get("candidate"), dict) else {}
+        names = {
+            str(candidate.get("name") or "").strip().lower(),
+            Path(str(item.get("skill_dir") or "")).name.strip().lower(),
+            str(item.get("queue_id") or "").strip().lower(),
+        }
+        labels = set(_as_list(item.get("labels")))
+        policy = item.get("feedback_policy") if isinstance(item.get("feedback_policy"), dict) else {}
+        score = float(policy.get("score") or 0.0)
+        if not policy:
+            if labels.intersection({"accepted", "useful-after-use"}):
+                score += 0.28
+            if labels.intersection({"rejected", "not-useful-after-use", "merge-needed"}):
+                score -= 0.18
+            if labels.intersection({"unsafe", "duplicate", "too-broad"}):
+                score -= 0.32
+        for name in names:
+            if not name:
+                continue
+            entry = indexed.setdefault(name, {"score": 0.0, "labels": {}, "count": 0})
+            entry["score"] = max(-1.0, min(1.0, float(entry.get("score", 0.0)) + score))
+            entry["count"] = int(entry.get("count", 0) or 0) + 1
+            labels_map = entry.setdefault("labels", {})
+            if isinstance(labels_map, dict):
+                for label in labels:
+                    labels_map[label] = int(labels_map.get(label, 0) or 0) + 1
+    return indexed
+
+
+def _skill_human_feedback(skill: SkillRecord, index: dict[str, dict[str, Any]]) -> tuple[float, list[str]]:
+    keys = {
+        skill.name.strip().lower(),
+        Path(skill.path).name.strip().lower() if skill.path else "",
+    }
+    score = 0.0
+    labels: dict[str, int] = {}
+    for key in keys:
+        if not key or key not in index:
+            continue
+        item = index[key]
+        score += float(item.get("score") or 0.0)
+        item_labels = item.get("labels") if isinstance(item.get("labels"), dict) else {}
+        for label, count in item_labels.items():
+            labels[str(label)] = labels.get(str(label), 0) + int(count or 0)
+    normalized = max(0.0, min(1.0, 0.5 + max(-0.45, min(0.45, score))))
+    reasons = [f"{label}:{count}" for label, count in sorted(labels.items())[:6]]
+    return normalized, reasons
 
 
 def pareto_rerank_recommendations(recommendations: list[Recommendation]) -> list[Recommendation]:
@@ -233,6 +303,7 @@ def recommend(
     active_weights = load_recommender_weights(weights_path)
     if weights:
         active_weights.update(weights)
+    feedback_index = _skill_feedback_index()
     recommendations: list[Recommendation] = []
     for index, skill in enumerate(skills):
         similarity = cosine(query_vector, feature_store.vectors[skill_offset + index])
@@ -242,6 +313,7 @@ def recommend(
         decay = usage_decay(skill)
         success = skill.success_rate
         coverage_gap, recent_reuse = _cluster_signal_for_skill(skill, clusters)
+        human_feedback, feedback_reasons = _skill_human_feedback(skill, feedback_index)
         score = (
             active_weights["similarity"] * similarity
             + active_weights["rules"] * rule_score
@@ -250,6 +322,7 @@ def recommend(
             + active_weights["success_rate"] * success
             + active_weights["coverage_gap"] * coverage_gap
             + active_weights["recent_reuse"] * recent_reuse
+            + active_weights["human_feedback"] * (human_feedback - 0.5)
             - active_weights["risk"] * skill.risk
             - active_weights["cost"] * skill.cost
         )
@@ -266,6 +339,8 @@ def recommend(
             reason_parts.append(f"coverage gap {coverage_gap:.2f}")
         if recent_reuse > 0:
             reason_parts.append(f"recent reuse {recent_reuse:.2f}")
+        if feedback_reasons:
+            reason_parts.append(f"human feedback {human_feedback:.2f} ({', '.join(feedback_reasons)})")
         if not reason_parts:
             reason_parts.append("baseline prior")
         recommendations.append(
@@ -279,6 +354,7 @@ def recommend(
                 success_rate=success,
                 coverage_gap=coverage_gap,
                 recent_reuse=recent_reuse,
+                human_feedback=human_feedback,
                 risk=skill.risk,
                 cost=skill.cost,
                 installed=skill.installed,
@@ -294,6 +370,11 @@ def recommend(
         "trace_source": str(trace_source),
         "top_k": top_k,
         "weights": active_weights,
+        "human_feedback_policy": {
+            "memory_path": str(DATA_DIR / "evolution_memory.json"),
+            "indexed_skill_count": len(feedback_index),
+            "weight": active_weights.get("human_feedback", 0.0),
+        },
         "rerank": rerank,
         "recommendations": [item.to_mapping() for item in recommendations[:top_k]],
     }

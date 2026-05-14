@@ -21,6 +21,8 @@ def chat_tool_schemas() -> list[dict[str, Any]]:
     """Return OpenAI-compatible chat tool schemas for the local tool layer."""
     result: list[dict[str, Any]] = []
     for spec in tool_schemas():
+        if spec["name"] == "kg_answer":
+            continue
         approval = "Requires explicit user approval." if spec["approval_required"] else "Runs without approval."
         result.append(
             {

@@ -6,14 +6,43 @@ from pathlib import Path
 from typing import Any
 
 from .evolution import record_promotion_feedback
-from .paths import DATA_DIR, PROJECT_ROOT, REPORTS_DIR, ensure_project_dirs
-from .quality import collect_skill_texts, nearest_duplicate
+from .paths import CANDIDATE_SKILLS_DIR, DATA_DIR, PROJECT_ROOT, REPORTS_DIR, ensure_project_dirs
+from .quality import collect_skill_texts, extract_skill_sections, nearest_duplicate
 from .storage import read_json, write_json
 from .verifier import parse_frontmatter, verify_skill
 
 
 PROMOTION_QUEUE_PATH = REPORTS_DIR / "promotion_queue.json"
-PROMOTION_LABELS = {"accepted", "rejected", "merge-needed", "too-broad", "duplicate", "unsafe"}
+PROMOTION_LABELS = {
+    "accepted",
+    "rejected",
+    "merge-needed",
+    "too-broad",
+    "duplicate",
+    "unsafe",
+    "useful-after-use",
+    "not-useful-after-use",
+}
+PROMOTION_BLOCKING_LABELS = {"rejected", "unsafe", "duplicate", "too-broad"}
+REWRITE_ACTIONS = {"auto", "merge", "specialize", "reject_duplicate"}
+SECTION_TITLES = {
+    "when_to_use": "When To Use",
+    "trigger_signals": "Trigger Signals",
+    "operating_steps": "Operating Steps",
+    "failure_fallbacks": "Failure Fallbacks",
+    "verification_suggestions": "Verification Suggestions",
+    "safety_constraints": "Safety Constraints",
+    "mined_evidence": "Mined Evidence",
+}
+SECTION_ORDER = (
+    "when_to_use",
+    "trigger_signals",
+    "mined_evidence",
+    "operating_steps",
+    "failure_fallbacks",
+    "verification_suggestions",
+    "safety_constraints",
+)
 
 
 def _now() -> str:
@@ -153,7 +182,7 @@ def _apply_labels(entry: dict[str, Any], labels: list[str], *, note: str = "", r
         entry.setdefault("review_notes", [])
         if isinstance(entry["review_notes"], list):
             entry["review_notes"].append({"note": note, "recorded_at": _now(), "reviewer": reviewer})
-    if selected.intersection({"rejected", "unsafe", "duplicate", "too-broad"}):
+    if selected.intersection(PROMOTION_BLOCKING_LABELS):
         entry["state"] = "rejected"
     elif "accepted" in selected:
         entry["state"] = "approved"
@@ -289,7 +318,7 @@ def promote(queue_id: str, *, approve: bool = False, registry_path: str | Path |
             "approval_required": True,
             "entry": entry,
         }
-    blocking_labels = set(_active_labels(entry)).intersection({"rejected", "unsafe", "duplicate", "too-broad"})
+    blocking_labels = set(_active_labels(entry)).intersection(PROMOTION_BLOCKING_LABELS)
     if blocking_labels:
         return {
             "status": "blocked",
@@ -357,3 +386,207 @@ def _parse_tags(raw: str) -> list[str]:
     if text.startswith("[") and text.endswith("]"):
         text = text[1:-1]
     return [item.strip().strip('"').strip("'") for item in text.split(",") if item.strip()]
+
+
+def _queue_entry(queue_id: str) -> dict[str, Any]:
+    queue = _load_queue()
+    items = [item for item in queue.get("items", []) if isinstance(item, dict)]
+    entry = next((item for item in items if item.get("id") == queue_id), None)
+    if entry is None:
+        raise ValueError(f"promotion queue id not found: {queue_id}")
+    return entry
+
+
+def _rewrite_action(entry: dict[str, Any], action: str = "auto") -> str:
+    normalized = str(action or "auto").strip().lower().replace("-", "_")
+    if normalized == "reject-duplicate":
+        normalized = "reject_duplicate"
+    if normalized not in REWRITE_ACTIONS:
+        raise ValueError(f"rewrite action must be one of: {', '.join(sorted(REWRITE_ACTIONS))}")
+    if normalized != "auto":
+        return normalized
+    labels = set(_active_labels(entry))
+    duplicate = entry.get("duplicate") if isinstance(entry.get("duplicate"), dict) else {}
+    duplicate_action = str(duplicate.get("recommended_action") or "")
+    recommended = str(entry.get("recommended_action") or "")
+    if "duplicate" in labels or duplicate_action == "reject_duplicate" or recommended == "reject_duplicate":
+        return "reject_duplicate"
+    if "merge-needed" in labels or duplicate_action == "merge" or recommended == "merge":
+        return "merge"
+    if "too-broad" in labels or duplicate_action == "specialize" or recommended == "specialize":
+        return "specialize"
+    if "not-useful-after-use" in labels:
+        return "specialize"
+    return "specialize"
+
+
+def _as_lines(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = str(value or "").strip()
+    return [line.strip() for line in text.splitlines() if line.strip()]
+
+
+def _section_text(value: Any) -> str:
+    return "\n".join(_as_lines(value))
+
+
+def _rewrite_output_dir(queue_id: str, output_dir: str | Path | None = None) -> Path:
+    target = Path(output_dir) if output_dir else CANDIDATE_SKILLS_DIR / "_rewrites" / queue_id
+    if not target.is_absolute():
+        target = PROJECT_ROOT / target
+    resolved = target.resolve(strict=False)
+    try:
+        resolved.relative_to(PROJECT_ROOT.resolve())
+    except ValueError as exc:
+        raise ValueError(f"rewrite output path is outside workspace: {output_dir}") from exc
+    resolved.mkdir(parents=True, exist_ok=True)
+    return resolved
+
+
+def _render_rewritten_skill(
+    *,
+    original_text: str,
+    entry: dict[str, Any],
+    section_review: dict[str, Any],
+    action: str,
+) -> str:
+    meta, _body = parse_frontmatter(original_text)
+    sections = extract_skill_sections(original_text)
+    proposed_edits = section_review.get("proposed_edits") if isinstance(section_review.get("proposed_edits"), dict) else {}
+    for section, value in proposed_edits.items():
+        normalized = str(section).strip().lower().replace(" ", "_").replace("-", "_")
+        if normalized == "reviewer_note":
+            continue
+        replacement = _section_text(value)
+        if replacement:
+            sections[normalized] = replacement
+    if action == "specialize":
+        sections["failure_fallbacks"] = "\n".join(
+            [
+                sections.get("failure_fallbacks", "").strip(),
+                "- 如果任务只匹配最近重复 skill 的通用场景，停止使用此候选，改用已存在 skill。",
+            ]
+        ).strip()
+    meta["status"] = "candidate"
+    meta["name"] = meta.get("name") or str(entry.get("name") or "rewritten-promotion-candidate")
+    meta["description"] = meta.get("description") or str(entry.get("description") or "人工反馈重写后的候选 skill。")
+    meta["tags"] = meta.get("tags") or "[promotion, rewrite]"
+    meta["source_cluster"] = meta.get("source_cluster") or str(entry.get("source_cluster") or "")
+    frontmatter = ["---", *[f"{key}: {value}" for key, value in meta.items()], "---", ""]
+    title = meta.get("name") or str(entry.get("name") or "rewritten-promotion-candidate")
+    lines = [*frontmatter, f"# {title}", ""]
+    for section in SECTION_ORDER:
+        content = sections.get(section, "").strip()
+        if not content:
+            continue
+        lines.extend([f"## {SECTION_TITLES.get(section, section.replace('_', ' ').title())}", "", content, ""])
+    lines.extend(
+        [
+            "## Human Feedback Rewrite Notes",
+            "",
+            f"- 重写动作：`{action}`。",
+            f"- 来源 promotion queue：`{entry.get('id', '')}`。",
+            f"- 反馈标签：`{', '.join(_active_labels(entry)) or 'none'}`。",
+            f"- 重写依据：{section_review.get('summary') or '人工反馈触发的保守重写。'}",
+            "",
+        ]
+    )
+    return "\n".join(lines).strip() + "\n"
+
+
+def _write_merge_proposal(target: Path, entry: dict[str, Any], section_review: dict[str, Any], action: str) -> Path:
+    duplicate = entry.get("duplicate") if isinstance(entry.get("duplicate"), dict) else {}
+    proposed_edits = section_review.get("proposed_edits") if isinstance(section_review.get("proposed_edits"), dict) else {}
+    lines = [
+        "# Promotion Rewrite Proposal",
+        "",
+        f"- Queue id: `{entry.get('id', '')}`",
+        f"- Candidate: `{entry.get('name', '')}`",
+        f"- Action: `{action}`",
+        f"- Nearest skill: `{duplicate.get('nearest', '')}`",
+        f"- Nearest path: `{duplicate.get('nearest_path', '')}`",
+        f"- Labels: `{', '.join(_active_labels(entry)) or 'none'}`",
+        "",
+        "## Review Summary",
+        "",
+        str(section_review.get("summary") or "人工反馈触发的保守重写建议。"),
+        "",
+    ]
+    if proposed_edits:
+        lines.extend(["## Proposed Section Edits", ""])
+        for section, values in proposed_edits.items():
+            lines.extend([f"### {SECTION_TITLES.get(str(section), str(section))}", ""])
+            for value in _as_lines(values):
+                lines.append(value)
+            lines.append("")
+    preserve = section_review.get("preserve") if isinstance(section_review.get("preserve"), dict) else {}
+    if preserve:
+        lines.extend(["## Evidence To Preserve", ""])
+        for key, values in preserve.items():
+            rendered = ", ".join(_as_lines(values))
+            if rendered:
+                lines.append(f"- {key}: {rendered}")
+        lines.append("")
+    proposal_path = target / ("REJECT_DUPLICATE.md" if action == "reject_duplicate" else "MERGE_PROPOSAL.md")
+    proposal_path.write_text("\n".join(lines).strip() + "\n", encoding="utf-8")
+    return proposal_path
+
+
+def rewrite_promotion(
+    queue_id: str,
+    *,
+    action: str = "auto",
+    output_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    ensure_project_dirs()
+    entry = _queue_entry(queue_id)
+    selected_action = _rewrite_action(entry, action)
+    duplicate = entry.get("duplicate") if isinstance(entry.get("duplicate"), dict) else {}
+    section_review = duplicate.get("section_review") if isinstance(duplicate.get("section_review"), dict) else {}
+    if not section_review:
+        section_review = {
+            "action": selected_action,
+            "summary": "缺少 section review，已生成最小人工复核建议。",
+            "proposed_edits": {},
+        }
+    target = _rewrite_output_dir(queue_id, output_dir)
+    skill_path = Path(str(entry.get("skill_path") or ""))
+    if not skill_path.exists():
+        raise ValueError(f"queued skill path not found: {skill_path}")
+    original_text = skill_path.read_text(encoding="utf-8")
+    artifacts: dict[str, str] = {}
+    rewritten_skill_path = ""
+    if selected_action == "specialize":
+        rewritten = _render_rewritten_skill(
+            original_text=original_text,
+            entry=entry,
+            section_review={**section_review, "action": selected_action},
+            action=selected_action,
+        )
+        rewritten_skill = target / "SKILL.md"
+        rewritten_skill.write_text(rewritten, encoding="utf-8")
+        artifacts["skill_path"] = str(rewritten_skill)
+        rewritten_skill_path = str(rewritten_skill)
+    else:
+        proposal_path = _write_merge_proposal(target, entry, section_review, selected_action)
+        artifacts["proposal_path"] = str(proposal_path)
+    report = {
+        "status": "ok",
+        "queue_id": queue_id,
+        "action": selected_action,
+        "draft_written": bool(rewritten_skill_path),
+        "artifacts": artifacts,
+        "source_entry": {
+            "name": entry.get("name"),
+            "skill_path": entry.get("skill_path"),
+            "recommended_action": entry.get("recommended_action"),
+            "labels": _active_labels(entry),
+        },
+        "section_review": section_review,
+        "safety_boundary": "rewrite-promotion only writes review artifacts and never promotes or updates the registry",
+    }
+    report_path = target / "rewrite_report.json"
+    write_json(report_path, report)
+    report["report_path"] = str(report_path)
+    return report

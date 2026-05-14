@@ -24,24 +24,25 @@ from .tool_render import render_tool_result
 DEFAULT_RECOMMEND_TASK = "给当前项目生成测试修复 skill"
 
 HELP_TEXT = """
-Commands:
-  /ingest                  Load data/sample_traces.jsonl
-  /mine                    Run mining pipeline
-  /recommend <task>        Recommend skills for a task
-  /generate <cluster-id>   Generate candidate SKILL.md
-  /verify <cluster-id/path> Verify candidate skill
-  /demo                    Run full MVP demo
-  /feedback                Fold tool events into processed traces
-  /tools                   List local tool schemas
-  /tool <name> <json|key=value...> Run local tool; add --approve to execute gated tools
-  /model <name>            Set DEEPSEEK_MODEL and redraw dashboard
-  /baseurl <url>           Set DEEPSEEK_BASE_URL
-  /key <api-key>           Set DEEPSEEK_API_KEY without echoing it later
-  /home                    Redraw dashboard
-  /help                    Show this help
-  /exit                    Quit
+命令：
+  /ingest                  导入 data/sample_traces.jsonl
+  /mine                    运行挖掘流程
+  /kg                      打开可编辑知识图谱工作台
+  /recommend <任务>        按任务推荐技能
+  /generate <cluster-id>   生成候选 SKILL.md
+  /verify <cluster-id/path> 验证候选技能
+  /demo                    运行完整 MVP 演示
+  /feedback                将工具事件回灌为处理后的轨迹
+  /tools                   列出本地工具 schema
+  /tool <name> <json|key=value...> 运行本地工具；需要审批的工具请加 --approve
+  /model <name>            设置 DEEPSEEK_MODEL 并重绘仪表盘
+  /baseurl <url>           设置 DEEPSEEK_BASE_URL
+  /key <api-key>           设置 DEEPSEEK_API_KEY，后续不回显密钥
+  /home                    重绘仪表盘
+  /help                    显示帮助
+  /exit                    退出
 
-Anything else is sent to DeepSeek as a normal chat message.
+其他输入会作为普通聊天消息发送给 DeepSeek。
 """.strip()
 
 MAX_TOOL_ROUNDS = 5
@@ -58,7 +59,7 @@ class ChatConfigState:
 def _run(argv: list[str]) -> None:
     code = cli_main(argv)
     if code:
-        print(f"command exited with code {code}")
+        print(f"命令退出，状态码：{code}")
 
 
 def _set_env_command(
@@ -97,6 +98,7 @@ def _dispatch_command(command: str, chat_state: ChatConfigState) -> bool:
     shortcuts: dict[str, Callable[[list[str]], list[str]]] = {
         "ingest": lambda args: ["ingest", "--input", "data/sample_traces.jsonl", *args],
         "mine": lambda args: ["mine", *args],
+        "kg": lambda args: ["kg", *args],
         "recommend": lambda args: ["recommend", "--task", " ".join(args) if args else DEFAULT_RECOMMEND_TASK],
         "generate": lambda args: ["generate", "--cluster-id", args[0] if args else "C03"],
         "verify": lambda args: ["verify", "--skill", args[0] if args else "outputs/candidate_skills/C03"],
@@ -152,13 +154,13 @@ def _dispatch_command(command: str, chat_state: ChatConfigState) -> bool:
         _run(shortcuts[name](rest))
         return True
 
-    print(f"unknown command: /{name}")
-    print("type `/help` for commands")
+    print(f"未知命令：/{name}")
+    print("输入 `/help` 查看可用命令")
     return True
 
 
 def _approval_prompt(tool_name: str) -> bool:
-    answer = input(f"Approve {tool_name}? [y/N] ").strip().lower()
+    answer = input(f"批准执行 {tool_name}？[y/N] ").strip().lower()
     return answer in {"y", "yes"}
 
 
@@ -226,10 +228,11 @@ def main() -> int:
                 "用于归纳可复用操作模式、推荐已有技能、生成候选技能草稿并执行本地验证。"
                 "请优先使用中文回答；如果用户明确使用其他语言，再切换到用户语言。"
                 "回答要简洁、可执行，不要编造不存在的命令。"
-                "当前交互式斜杠命令只有：/ingest、/mine、/recommend <task>、"
+                "当前交互式斜杠命令包括：/ingest、/mine、/kg、/recommend <task>、"
                 "/generate <cluster-id>、/verify <cluster-id/path>、/demo、/tools、/tool、/model <name>、"
                 "/baseurl <url>、/key <api-key>、/home、/help、/exit。"
                 "你可以通过工具调用请求 list_files、read_file、write_file、edit_file、delete_file、apply_patch、run_shell、web_search 或 web_fetch。"
+                "不要自行选择知识图谱约束回答；严格 KG 回答是用户手动模式，只有用户运行 answer-kg --strict 或明确要求 KG 严格回答时才使用。"
                 "需要审批的工具会先显示预览，只有用户同意后才会执行。"
                 "脚本式 PowerShell 启动器是 .\\skillminer.ps1，例如 .\\skillminer.ps1 demo "
                 "或 .\\skillminer.ps1 chat-test --interactive。"

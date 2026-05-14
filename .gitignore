@@ -15,6 +15,7 @@ data/processed_traces.jsonl
 data/evolution_memory.json
 outputs/reports/*.json
 outputs/reports/heldout/
+outputs/reports/gepa/
 outputs/candidate_skills/*
 !outputs/candidate_skills/.gitkeep
 outputs/screenshots/*

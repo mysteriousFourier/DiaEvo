@@ -1,0 +1,4 @@
+{"created_at": "2026-05-13T11:28:51.366337+00:00", "id": "skill:test-failure-repair", "kind": "skill", "label": "test-failure-repair", "properties": {}}
+{"created_at": "2026-05-13T11:28:51.366337+00:00", "id": "task:27ef8d58840869", "kind": "task", "label": "给 Python CLI 项目补 pytest，并修复导入路径导致的测试失败", "properties": {}}
+{"created_at": "2026-05-13T11:28:51.366337+00:00", "id": "tool:pytest", "kind": "tool", "label": "pytest", "properties": {}}
+{"created_at": "2026-05-13T11:28:51.366337+00:00", "id": "trace:t001", "kind": "trace", "label": "T001", "properties": {"outcome": "success", "source": "trace", "success": true}}

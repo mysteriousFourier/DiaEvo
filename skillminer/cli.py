@@ -8,16 +8,63 @@ from typing import Any
 
 from .evaluation import baseline_report
 from .evolution import evolve_skill
+from .gepa_adapter import evaluate_gepa, evaluate_gepa_phase4
 from .generator import generate_skill
 from .ingest import ingest_traces
+from .knowledge_graph import (
+    KG_REVIEW_STATUSES,
+    answer_kg,
+    apply_kg_delta,
+    build_kg_delta,
+    export_kg_snapshot,
+    kg_workbench,
+    review_kg_delta,
+    visualize_kg,
+)
 from .miner import mine
+from .mining_snapshot import export_mining_snapshot
 from .paths import DATA_DIR, ensure_project_dirs
-from .promotion import PROMOTION_LABELS, label_promotion, promote, queue_promotion
+from .promotion import PROMOTION_LABELS, label_promotion, promote, queue_promotion, rewrite_promotion
 from .recommender import recommend
 from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
 from .validation_runner import run_validation
 from .verifier import verify_skill
 from .deepseek_chat import run_chat_test
+
+
+PUBLIC_COMMANDS = (
+    "ingest",
+    "mine",
+    "export-mining-snapshot",
+    "recommend",
+    "generate",
+    "verify",
+    "evolve",
+    "validate",
+    "queue-promotion",
+    "promote",
+    "label-promotion",
+    "rewrite-promotion",
+    "demo",
+    "home",
+    "tools",
+    "feedback",
+    "kg",
+    "answer-kg",
+    "evaluate",
+    "evaluate-gepa",
+    "evaluate-gepa-phase4",
+    "tool",
+    "chat-test",
+)
+
+
+class SkillMinerArgumentParser(argparse.ArgumentParser):
+    def error(self, message: str) -> None:
+        if "invalid choice" in message and "choose from" in message:
+            prefix = message.split("(choose from", 1)[0].rstrip()
+            message = f"{prefix}（可用命令：{', '.join(PUBLIC_COMMANDS)}）"
+        super().error(message)
 
 
 if hasattr(sys.stdout, "reconfigure"):
@@ -31,11 +78,18 @@ def print_json(value: Any) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = argparse.ArgumentParser(
+    parser = SkillMinerArgumentParser(
         prog="skillminer",
-        description="Mine, recommend, generate, and verify Agent skills from task traces.",
+        description="从任务轨迹中挖掘、推荐、生成和验证 Agent 技能。",
     )
-    subparsers = parser.add_subparsers(dest="command", required=False)
+    subparsers = parser.add_subparsers(dest="command", required=False, metavar="command")
+
+    def add_hidden_parser(name: str, **kwargs: Any) -> argparse.ArgumentParser:
+        hidden = subparsers.add_parser(name, **kwargs)
+        subparsers._choices_actions = [  # type: ignore[attr-defined]
+            action for action in subparsers._choices_actions if action.dest != name  # type: ignore[attr-defined]
+        ]
+        return hidden
 
     ingest_parser = subparsers.add_parser("ingest", help="Validate and normalize JSONL trace data.")
     ingest_parser.add_argument("--input", required=True, help="Input JSONL trace file.")
@@ -48,6 +102,17 @@ def build_parser() -> argparse.ArgumentParser:
     mine_parser.add_argument("--registry", default=str(DATA_DIR / "skill_registry.json"), help="Skill registry JSON path.")
     mine_parser.add_argument("--plugins", default=str(DATA_DIR / "plugin_metadata.json"), help="Plugin metadata JSON path.")
     mine_parser.add_argument("--clusters", type=int, default=None, help="Optional fixed K for K-Means.")
+
+    snapshot_parser = subparsers.add_parser("export-mining-snapshot", help="Export human-readable mining findings to data/mining_snapshots/YYMMDD.")
+    snapshot_parser.add_argument("--traces", default=None, help="Processed trace JSONL path; if omitted, input is ingested first.")
+    snapshot_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file used when --traces is omitted.")
+    snapshot_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path used when --traces is omitted.")
+    snapshot_parser.add_argument("--registry", default=str(DATA_DIR / "skill_registry.json"), help="Skill registry JSON path.")
+    snapshot_parser.add_argument("--plugins", default=str(DATA_DIR / "plugin_metadata.json"), help="Plugin metadata JSON path.")
+    snapshot_parser.add_argument("--clusters", type=int, default=None, help="Optional fixed K for K-Means.")
+    snapshot_parser.add_argument("--date", default=None, help="Snapshot date as YYMMDD or ISO date; defaults to today.")
+    snapshot_parser.add_argument("--output-dir", default=None, help="Optional explicit snapshot output directory.")
+    snapshot_parser.add_argument("--include-tool-events", action="store_true", help="Merge .skillminer/tool_events.jsonl when ingesting input.")
 
     recommend_parser = subparsers.add_parser("recommend", help="Recommend top-K skills for a task.")
     recommend_parser.add_argument("--task", required=True, help="Task description.")
@@ -98,6 +163,19 @@ def build_parser() -> argparse.ArgumentParser:
     label_parser.add_argument("--note", default="", help="Optional reviewer note.")
     label_parser.add_argument("--reviewer", default="", help="Optional reviewer id.")
 
+    rewrite_parser = subparsers.add_parser(
+        "rewrite-promotion",
+        help="根据 promotion 人工标签生成 merge/specialize/reject_duplicate 重写草案。",
+    )
+    rewrite_parser.add_argument("--queue-id", required=True, help="Promotion queue entry id.")
+    rewrite_parser.add_argument(
+        "--action",
+        choices=["auto", "merge", "specialize", "reject_duplicate"],
+        default="auto",
+        help="重写动作；auto 会根据标签和 duplicate 建议选择。",
+    )
+    rewrite_parser.add_argument("--output-dir", default=None, help="可选：重写草案输出目录。")
+
     demo_parser = subparsers.add_parser("demo", help="Run the full MVP pipeline on sample data.")
     demo_parser.add_argument("--task", default="给当前项目生成测试修复 skill", help="Task used for recommendation.")
     demo_parser.add_argument("--cluster-id", default="", help="Cluster to generate; defaults to highest coverage gap.")
@@ -110,6 +188,70 @@ def build_parser() -> argparse.ArgumentParser:
     feedback_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
     feedback_parser.add_argument("--output", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed JSONL output path.")
     feedback_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
+
+    kg_delta_parser = add_hidden_parser(
+        "build-kg-delta",
+        description="底层自动化命令：生成待审核的增量知识图谱候选。日常请使用 kg。",
+    )
+    kg_delta_parser.add_argument("--traces", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
+    kg_delta_parser.add_argument("--registry", default=str(DATA_DIR / "skill_registry.json"), help="Skill registry JSON path.")
+    kg_delta_parser.add_argument("--plugins", default=str(DATA_DIR / "plugin_metadata.json"), help="Plugin metadata JSON path.")
+    kg_delta_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
+    kg_delta_parser.add_argument("--conversation", default=None, help="Optional conversation JSONL path.")
+    kg_delta_parser.add_argument("--clusters", type=int, default=None, help="Optional fixed K for K-Means.")
+    kg_delta_parser.add_argument("--no-mining", action="store_true", help="Skip mining-report-derived KG candidates.")
+    kg_delta_parser.add_argument("--queue", default=None, help="Optional review queue JSONL path.")
+    kg_delta_parser.add_argument("--current-dir", default=None, help="Optional active KG directory.")
+    kg_delta_parser.add_argument("--delta-dir", default=None, help="Optional delta report directory.")
+
+    kg_review_parser = add_hidden_parser(
+        "review-kg-delta",
+        description="底层自动化命令：查看或标注知识图谱审核队列。日常请使用 kg。",
+    )
+    kg_review_parser.add_argument("--review-id", default=None, help="Review id to label; omitted lists pending items.")
+    kg_review_parser.add_argument("--status", choices=sorted(KG_REVIEW_STATUSES), default="accepted", help="Review status to apply.")
+    kg_review_parser.add_argument("--note", default="", help="Optional reviewer note.")
+    kg_review_parser.add_argument("--reviewer", default="", help="Optional reviewer id.")
+    kg_review_parser.add_argument("--queue", default=None, help="Optional review queue JSONL path.")
+    kg_review_parser.add_argument("--limit", type=int, default=20, help="Maximum pending items to list.")
+
+    kg_apply_parser = add_hidden_parser(
+        "apply-kg-delta",
+        description="底层自动化命令：把已接受的 KG 候选写入 active KG。日常请使用 kg。",
+    )
+    kg_apply_parser.add_argument("--queue", default=None, help="Optional review queue JSONL path.")
+    kg_apply_parser.add_argument("--current-dir", default=None, help="Optional active KG directory.")
+
+    kg_parser = subparsers.add_parser("kg", help="打开可编辑知识图谱工作台，或应用工作台导出的编辑 JSON。")
+    kg_parser.add_argument("--date", default=None, help="工作台导出日期，格式 YYMMDD 或 ISO 日期；默认今天。")
+    kg_parser.add_argument("--output-dir", default=None, help="可选：指定工作台导出目录。")
+    kg_parser.add_argument("--current-dir", default=None, help="可选：指定 active KG 目录。")
+    kg_parser.add_argument("--apply-edit", default=None, help="应用知识图谱编辑器导出的 JSON 文件。")
+    kg_parser.add_argument("--approve", action="store_true", help="确认把导出的 KG 编辑 JSON 写回 active KG。")
+
+    kg_snapshot_parser = add_hidden_parser(
+        "export-kg-snapshot",
+        description="底层自动化命令：导出已审核知识图谱。日常请使用 kg。",
+    )
+    kg_snapshot_parser.add_argument("--date", default=None, help="Snapshot date as YYMMDD or ISO date; defaults to today.")
+    kg_snapshot_parser.add_argument("--output-dir", default=None, help="Optional explicit snapshot output directory.")
+    kg_snapshot_parser.add_argument("--current-dir", default=None, help="Optional active KG directory.")
+
+    kg_visualize_parser = add_hidden_parser(
+        "visualize-kg",
+        description="底层兼容命令：生成 KG HTML。日常请使用 kg。",
+    )
+    kg_visualize_parser.add_argument("--date", default=None, help="Snapshot date as YYMMDD or ISO date; defaults to today.")
+    kg_visualize_parser.add_argument("--output-dir", default=None, help="Optional explicit visualization output directory.")
+    kg_visualize_parser.add_argument("--current-dir", default=None, help="Optional active KG directory.")
+
+    kg_answer_parser = subparsers.add_parser("answer-kg", help="显式使用已审核知识图谱回答；严格模式需手动开启。")
+    kg_answer_parser.add_argument("--query", required=True, help="要从 KG 中回答的问题。")
+    kg_answer_parser.add_argument("--strict", action="store_true", help="只使用 accepted KG 事实和已审核证据。")
+    kg_answer_parser.add_argument("--include-pending", action="store_true", help="同时搜索 pending 候选；严格模式会忽略。")
+    kg_answer_parser.add_argument("--current-dir", default=None, help="可选：指定 active KG 目录。")
+    kg_answer_parser.add_argument("--queue", default=None, help="可选：非严格模式使用的审核队列 JSONL 路径。")
+    kg_answer_parser.add_argument("--max-paths", type=int, default=5, help="最多返回多少条图谱证据路径。")
 
     eval_parser = subparsers.add_parser("evaluate", help="Run baseline metrics for the current engineering algorithms.")
     eval_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
@@ -124,6 +266,60 @@ def build_parser() -> argparse.ArgumentParser:
         help="Cosine similarity threshold for candidate duplicate pairs.",
     )
     eval_parser.add_argument("--variant", choices=["baseline", "evolved"], default="baseline", help="Evaluation variant.")
+
+    gepa_parser = subparsers.add_parser("evaluate-gepa", help="Run optional GEPA skill-section optimization for one cluster.")
+    gepa_parser.add_argument("--cluster-id", required=True, help="Cluster id such as C03.")
+    gepa_parser.add_argument("--budget", type=int, default=50, help="Maximum GEPA metric calls.")
+    gepa_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
+    gepa_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
+    gepa_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
+    gepa_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .skillminer/tool_events.jsonl.")
+    gepa_parser.add_argument("--top-k", type=int, default=3, help="Top-K cutoff for selected-cluster held-out metrics.")
+    gepa_parser.add_argument("--env", default=None, help="Path to .env; defaults to project .env.")
+    gepa_parser.add_argument("--model", default=None, help="Override DEEPSEEK_MODEL.")
+    gepa_parser.add_argument("--base-url", default=None, help="Override DEEPSEEK_BASE_URL.")
+    gepa_parser.add_argument("--max-tokens", type=int, default=None, help="Override DEEPSEEK_MAX_TOKENS.")
+    gepa_parser.add_argument("--temperature", type=float, default=None, help="Override DEEPSEEK_TEMPERATURE.")
+    gepa_parser.add_argument("--no-thinking", action="store_true", help="Disable DeepSeek thinking config for this run.")
+    gepa_parser.add_argument("--dry-run", action="store_true", help="Exercise seed/local comparison and safety gates without importing or calling GEPA.")
+    gepa_parser.add_argument("--output-dir", default=None, help="Optional target directory for the GEPA candidate.")
+    gepa_parser.add_argument("--condition", default="single_run", help="Experiment condition label recorded in the report.")
+    gepa_parser.add_argument(
+        "--memory-policy",
+        choices=["current", "none", "ctm", "epm", "ctm_epm"],
+        default="current",
+        help="Memory context policy for seed/background construction.",
+    )
+    gepa_parser.add_argument(
+        "--racing-policy",
+        choices=["off", "cheap_gates"],
+        default="off",
+        help="Cheap local gate policy for GEPA candidate evaluation.",
+    )
+    gepa_parser.add_argument(
+        "--judge-policy",
+        choices=["none", "uncertainty_only"],
+        default="none",
+        help="Sparse judge policy for uncertain candidates.",
+    )
+
+    phase4_parser = subparsers.add_parser("evaluate-gepa-phase4", help="Run Phase 4 GEPA/APO experiment matrix.")
+    phase4_parser.add_argument("--cluster-id", required=True, help="Cluster id such as C03.")
+    phase4_parser.add_argument("--budgets", default="5,10,25,50", help="Comma-separated GEPA budgets.")
+    phase4_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
+    phase4_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
+    phase4_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
+    phase4_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .skillminer/tool_events.jsonl.")
+    phase4_parser.add_argument("--top-k", type=int, default=3, help="Top-K cutoff for selected-cluster held-out metrics.")
+    phase4_parser.add_argument("--env", default=None, help="Path to .env; defaults to project .env.")
+    phase4_parser.add_argument("--model", default=None, help="Override DEEPSEEK_MODEL.")
+    phase4_parser.add_argument("--base-url", default=None, help="Override DEEPSEEK_BASE_URL.")
+    phase4_parser.add_argument("--max-tokens", type=int, default=None, help="Override DEEPSEEK_MAX_TOKENS.")
+    phase4_parser.add_argument("--temperature", type=float, default=None, help="Override DEEPSEEK_TEMPERATURE.")
+    phase4_parser.add_argument("--no-thinking", action="store_true", help="Disable DeepSeek thinking config for this run.")
+    phase4_parser.add_argument("--dry-run", action="store_true", help="Run the full matrix without importing or calling GEPA.")
+    phase4_parser.add_argument("--output-dir", default=None, help="Optional root directory for GEPA candidates.")
+    phase4_parser.add_argument("--no-resume", action="store_true", help="Ignore any existing Phase 4 report and rerun all rows.")
 
     tool_parser = subparsers.add_parser("tool", help="Execute one local tool with JSON arguments.")
     tool_parser.add_argument("name", help="Tool name such as list_files or read_file.")
@@ -188,6 +384,18 @@ def main(argv: list[str] | None = None) -> int:
             )
         elif args.command == "mine":
             result = mine(args.traces, args.registry, args.plugins, args.clusters)
+        elif args.command == "export-mining-snapshot":
+            result = export_mining_snapshot(
+                traces_path=args.traces,
+                input_path=args.input,
+                processed_path=args.processed,
+                registry_path=args.registry,
+                plugin_path=args.plugins,
+                k=args.clusters,
+                date=args.date,
+                output_dir=args.output_dir,
+                include_tool_events=args.include_tool_events,
+            )
         elif args.command == "recommend":
             result = recommend(
                 task=args.task,
@@ -219,12 +427,59 @@ def main(argv: list[str] | None = None) -> int:
             result = promote(args.queue_id, approve=args.approve, registry_path=args.registry)
         elif args.command == "label-promotion":
             result = label_promotion(args.queue_id, labels=args.label, note=args.note, reviewer=args.reviewer)
+        elif args.command == "rewrite-promotion":
+            result = rewrite_promotion(args.queue_id, action=args.action, output_dir=args.output_dir)
         elif args.command == "demo":
             result = run_demo(args.task, args.cluster_id)
         elif args.command == "tools":
             result = {"tools": tool_schemas()}
         elif args.command == "feedback":
             result = ingest_traces(args.input, args.output, tool_events_path=args.tool_events, include_tool_events=True)
+        elif args.command == "build-kg-delta":
+            result = build_kg_delta(
+                traces_path=args.traces,
+                registry_path=args.registry,
+                plugin_path=args.plugins,
+                tool_events_path=args.tool_events,
+                conversation_path=args.conversation,
+                k=args.clusters,
+                include_mining=not args.no_mining,
+                queue_path=args.queue,
+                current_dir=args.current_dir,
+                delta_dir=args.delta_dir,
+            )
+        elif args.command == "review-kg-delta":
+            result = review_kg_delta(
+                args.review_id,
+                status=args.status,
+                note=args.note,
+                reviewer=args.reviewer,
+                queue_path=args.queue,
+                limit=args.limit,
+            )
+        elif args.command == "apply-kg-delta":
+            result = apply_kg_delta(queue_path=args.queue, current_dir=args.current_dir)
+        elif args.command == "kg":
+            result = kg_workbench(
+                date=args.date,
+                output_dir=args.output_dir,
+                current_dir=args.current_dir,
+                edit_path=args.apply_edit,
+                approve=args.approve,
+            )
+        elif args.command == "export-kg-snapshot":
+            result = export_kg_snapshot(date=args.date, output_dir=args.output_dir, current_dir=args.current_dir)
+        elif args.command == "visualize-kg":
+            result = visualize_kg(date=args.date, output_dir=args.output_dir, current_dir=args.current_dir)
+        elif args.command == "answer-kg":
+            result = answer_kg(
+                args.query,
+                strict=args.strict,
+                include_pending=args.include_pending,
+                current_dir=args.current_dir,
+                queue_path=args.queue,
+                max_paths=args.max_paths,
+            )
         elif args.command == "evaluate":
             result = baseline_report(
                 input_path=args.input,
@@ -234,6 +489,47 @@ def main(argv: list[str] | None = None) -> int:
                 top_k=args.top_k,
                 duplicate_threshold=args.duplicate_threshold,
                 variant=args.variant,
+            )
+        elif args.command == "evaluate-gepa":
+            result = evaluate_gepa(
+                args.cluster_id,
+                budget=args.budget,
+                input_path=args.input,
+                processed_path=args.processed,
+                tool_events_path=args.tool_events,
+                include_tool_events=not args.no_tool_events,
+                top_k=args.top_k,
+                env_path=args.env,
+                model=args.model,
+                base_url=args.base_url,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                no_thinking=args.no_thinking,
+                dry_run=args.dry_run,
+                output_dir=args.output_dir,
+                condition=args.condition,
+                memory_policy=args.memory_policy,
+                racing_policy=args.racing_policy,
+                judge_policy=args.judge_policy,
+            )
+        elif args.command == "evaluate-gepa-phase4":
+            result = evaluate_gepa_phase4(
+                args.cluster_id,
+                budgets=args.budgets,
+                input_path=args.input,
+                processed_path=args.processed,
+                tool_events_path=args.tool_events,
+                include_tool_events=not args.no_tool_events,
+                top_k=args.top_k,
+                env_path=args.env,
+                model=args.model,
+                base_url=args.base_url,
+                max_tokens=args.max_tokens,
+                temperature=args.temperature,
+                no_thinking=args.no_thinking,
+                dry_run=args.dry_run,
+                output_dir=args.output_dir,
+                resume=not args.no_resume,
             )
         elif args.command == "tool":
             tool_args = parse_tool_args(args.args)

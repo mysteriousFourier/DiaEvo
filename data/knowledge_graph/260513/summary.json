@@ -1,0 +1,28 @@
+{
+  "claim_count": 0,
+  "current_dir": "D:\\codex\\skillminer\\data\\knowledge_graph\\current",
+  "date": "260513",
+  "entity_count": 4,
+  "evidence_path_count": 1,
+  "files": [
+    "README.md",
+    "claims.csv",
+    "confidence_summary.md",
+    "entities.csv",
+    "evidence_paths.md",
+    "graph_edges.csv",
+    "graph_vector_demo.md",
+    "graph_vector_index.json",
+    "graph_vector_retrieval.md",
+    "graph_visualization.html",
+    "summary.json",
+    "triples.csv"
+  ],
+  "graph_vector_document_count": 7,
+  "graph_vector_vocabulary_size": 34,
+  "retrieval_mode": "graph_vector_tfidf",
+  "snapshot_dir": "D:\\codex\\skillminer\\data\\knowledge_graph\\260513",
+  "status": "ok",
+  "triple_count": 3,
+  "visualization_path": "D:\\codex\\skillminer\\data\\knowledge_graph\\260513\\graph_visualization.html"
+}

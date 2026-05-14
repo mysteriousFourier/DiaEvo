@@ -17,6 +17,8 @@ def test_generate_and_verify_candidate_skill():
     assert "## Operating Steps" in text
     assert "## Failure Fallbacks" in text
     assert "## Verification Suggestions" in text
+    assert "任务关键词" in text
+    assert "人工审核" in text
     result = verify_skill(generated["skill_dir"])
     assert result["passed"]
     assert result["risk_score"] < 0.5

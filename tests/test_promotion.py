@@ -2,7 +2,7 @@ from pathlib import Path
 import shutil
 
 from skillminer import evolution
-from skillminer.promotion import label_promotion, promote, queue_promotion
+from skillminer.promotion import label_promotion, promote, queue_promotion, rewrite_promotion
 from skillminer.storage import read_json
 
 
@@ -153,3 +153,57 @@ def test_label_promotion_records_human_label_and_blocks_promotion(tmp_path):
     assert "too-broad" in labeled["labels"]
     assert labeled["entry"]["state"] == "rejected"
     assert promoted["status"] == "blocked"
+
+
+def test_label_promotion_accepts_after_use_labels_without_blocking(tmp_path):
+    skill_dir = Path(".tmp") / "tests" / tmp_path.name / "promotion-after-use-label"
+    shutil.rmtree(skill_dir.parent, ignore_errors=True)
+    _write_promotable_skill(skill_dir)
+    queued = queue_promotion(skill_dir)
+    registry = tmp_path / "registry.json"
+    registry.write_text("[]", encoding="utf-8")
+
+    labeled = label_promotion(
+        queued["queue_id"],
+        labels=["useful-after-use"],
+        note="worked well on a later task",
+    )
+    promoted = promote(queued["queue_id"], approve=True, registry_path=registry)
+
+    assert "useful-after-use" in labeled["labels"]
+    assert labeled["entry"]["state"] != "rejected"
+    assert promoted["status"] == "promoted"
+
+
+def test_rewrite_promotion_writes_specialized_draft_without_promoting(tmp_path):
+    skill_dir = Path(".tmp") / "tests" / tmp_path.name / "promotion-rewrite"
+    shutil.rmtree(skill_dir.parent, ignore_errors=True)
+    _write_promotable_skill(skill_dir)
+    queued = queue_promotion(skill_dir)
+    label_promotion(queued["queue_id"], labels=["too-broad"], note="needs narrower trigger")
+    output_dir = Path(".tmp") / "tests" / tmp_path.name / "rewrite-output"
+
+    result = rewrite_promotion(queued["queue_id"], action="specialize", output_dir=output_dir)
+
+    rewritten = output_dir / "SKILL.md"
+    assert result["status"] == "ok"
+    assert result["action"] == "specialize"
+    assert result["draft_written"] is True
+    assert rewritten.exists()
+    assert "Human Feedback Rewrite Notes" in rewritten.read_text(encoding="utf-8")
+    assert "never promotes" in result["safety_boundary"]
+
+
+def test_rewrite_promotion_writes_merge_proposal_for_merge_needed_label(tmp_path):
+    skill_dir = Path(".tmp") / "tests" / tmp_path.name / "promotion-merge-rewrite"
+    shutil.rmtree(skill_dir.parent, ignore_errors=True)
+    _write_promotable_skill(skill_dir)
+    queued = queue_promotion(skill_dir)
+    label_promotion(queued["queue_id"], labels=["merge-needed"], note="merge useful sections")
+    output_dir = Path(".tmp") / "tests" / tmp_path.name / "merge-output"
+
+    result = rewrite_promotion(queued["queue_id"], output_dir=output_dir)
+
+    assert result["status"] == "ok"
+    assert result["action"] == "merge"
+    assert (output_dir / "MERGE_PROPOSAL.md").exists()

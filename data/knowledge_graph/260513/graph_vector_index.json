@@ -1,0 +1,373 @@
+{
+  "backend": "local_tfidf",
+  "document_count": 7,
+  "documents": [
+    {
+      "id": "triple:3c2f130e2629d2cb",
+      "kind": "triple",
+      "nonzero_terms": 6,
+      "sparse_vector": [
+        {
+          "term": "3c2f130e2629d2cb",
+          "weight": 0.503063
+        },
+        {
+          "term": "uses_skill",
+          "weight": 0.503063
+        },
+        {
+          "term": "test-failure-repair",
+          "weight": 0.417586
+        },
+        {
+          "term": "triple",
+          "weight": 0.356938
+        },
+        {
+          "term": "t001",
+          "weight": 0.309897
+        },
+        {
+          "term": "trace",
+          "weight": 0.309897
+        }
+      ],
+      "text": "triple:3c2f130e2629d2cb T001 USES_SKILL test-failure-repair trace {}",
+      "top_terms": [
+        "3c2f130e2629d2cb",
+        "uses_skill",
+        "test-failure-repair",
+        "triple",
+        "t001",
+        "trace"
+      ]
+    },
+    {
+      "id": "triple:9694bbd373d8f197",
+      "kind": "triple",
+      "nonzero_terms": 25,
+      "sparse_vector": [
+        {
+          "term": "9694bbd373d8f197",
+          "weight": 0.244458
+        },
+        {
+          "term": "describes_task",
+          "weight": 0.244458
+        },
+        {
+          "term": "cli",
+          "weight": 0.202921
+        },
+        {
+          "term": "python",
+          "weight": 0.202921
+        },
+        {
+          "term": "修复",
+          "weight": 0.202921
+        },
+        {
+          "term": "入路",
+          "weight": 0.202921
+        },
+        {
+          "term": "复导",
+          "weight": 0.202921
+        },
+        {
+          "term": "失败",
+          "weight": 0.202921
+        },
+        {
+          "term": "导入",
+          "weight": 0.202921
+        },
+        {
+          "term": "导致",
+          "weight": 0.202921
+        },
+        {
+          "term": "并修",
+          "weight": 0.202921
+        },
+        {
+          "term": "并修复导入路径导致的测试失败",
+          "weight": 0.202921
+        },
+        {
+          "term": "径导",
+          "weight": 0.202921
+        },
+        {
+          "term": "测试",
+          "weight": 0.202921
+        },
+        {
+          "term": "的测",
+          "weight": 0.202921
+        },
+        {
+          "term": "目补",
+          "weight": 0.202921
+        },
+        {
+          "term": "给",
+          "weight": 0.202921
+        },
+        {
+          "term": "致的",
+          "weight": 0.202921
+        },
+        {
+          "term": "试失",
+          "weight": 0.202921
+        },
+        {
+          "term": "路径",
+          "weight": 0.202921
+        },
+        {
+          "term": "项目补",
+          "weight": 0.202921
+        },
+        {
+          "term": "triple",
+          "weight": 0.17345
+        },
+        {
+          "term": "pytest",
+          "weight": 0.150591
+        },
+        {
+          "term": "t001",
+          "weight": 0.150591
+        },
+        {
+          "term": "trace",
+          "weight": 0.150591
+        }
+      ],
+      "text": "triple:9694bbd373d8f197 T001 DESCRIBES_TASK 给 Python CLI 项目补 pytest，并修复导入路径导致的测试失败 trace {}",
+      "top_terms": [
+        "9694bbd373d8f197",
+        "describes_task",
+        "cli",
+        "python",
+        "修复",
+        "入路",
+        "复导",
+        "失败"
+      ]
+    },
+    {
+      "id": "triple:ee6aad05e48a3218",
+      "kind": "triple",
+      "nonzero_terms": 6,
+      "sparse_vector": [
+        {
+          "term": "ee6aad05e48a3218",
+          "weight": 0.524008
+        },
+        {
+          "term": "uses_tool",
+          "weight": 0.524008
+        },
+        {
+          "term": "triple",
+          "weight": 0.371799
+        },
+        {
+          "term": "pytest",
+          "weight": 0.322799
+        },
+        {
+          "term": "t001",
+          "weight": 0.322799
+        },
+        {
+          "term": "trace",
+          "weight": 0.322799
+        }
+      ],
+      "text": "triple:ee6aad05e48a3218 T001 USES_TOOL pytest trace {}",
+      "top_terms": [
+        "ee6aad05e48a3218",
+        "uses_tool",
+        "triple",
+        "pytest",
+        "t001",
+        "trace"
+      ]
+    },
+    {
+      "id": "skill:test-failure-repair",
+      "kind": "entity",
+      "nonzero_terms": 2,
+      "sparse_vector": [
+        {
+          "term": "skill",
+          "weight": 0.769449
+        },
+        {
+          "term": "test-failure-repair",
+          "weight": 0.638709
+        }
+      ],
+      "text": "skill:test-failure-repair skill test-failure-repair",
+      "top_terms": [
+        "skill",
+        "test-failure-repair"
+      ]
+    },
+    {
+      "id": "task:27ef8d58840869",
+      "kind": "entity",
+      "nonzero_terms": 22,
+      "sparse_vector": [
+        {
+          "term": "task",
+          "weight": 0.465352
+        },
+        {
+          "term": "27ef8d58840869",
+          "weight": 0.232676
+        },
+        {
+          "term": "cli",
+          "weight": 0.193141
+        },
+        {
+          "term": "python",
+          "weight": 0.193141
+        },
+        {
+          "term": "修复",
+          "weight": 0.193141
+        },
+        {
+          "term": "入路",
+          "weight": 0.193141
+        },
+        {
+          "term": "复导",
+          "weight": 0.193141
+        },
+        {
+          "term": "失败",
+          "weight": 0.193141
+        },
+        {
+          "term": "导入",
+          "weight": 0.193141
+        },
+        {
+          "term": "导致",
+          "weight": 0.193141
+        },
+        {
+          "term": "并修",
+          "weight": 0.193141
+        },
+        {
+          "term": "并修复导入路径导致的测试失败",
+          "weight": 0.193141
+        },
+        {
+          "term": "径导",
+          "weight": 0.193141
+        },
+        {
+          "term": "测试",
+          "weight": 0.193141
+        },
+        {
+          "term": "的测",
+          "weight": 0.193141
+        },
+        {
+          "term": "目补",
+          "weight": 0.193141
+        },
+        {
+          "term": "给",
+          "weight": 0.193141
+        },
+        {
+          "term": "致的",
+          "weight": 0.193141
+        },
+        {
+          "term": "试失",
+          "weight": 0.193141
+        },
+        {
+          "term": "路径",
+          "weight": 0.193141
+        },
+        {
+          "term": "项目补",
+          "weight": 0.193141
+        },
+        {
+          "term": "pytest",
+          "weight": 0.143333
+        }
+      ],
+      "text": "task:27ef8d58840869 task 给 Python CLI 项目补 pytest，并修复导入路径导致的测试失败",
+      "top_terms": [
+        "task",
+        "27ef8d58840869",
+        "cli",
+        "python",
+        "修复",
+        "入路",
+        "复导",
+        "失败"
+      ]
+    },
+    {
+      "id": "tool:pytest",
+      "kind": "entity",
+      "nonzero_terms": 2,
+      "sparse_vector": [
+        {
+          "term": "tool",
+          "weight": 0.851417
+        },
+        {
+          "term": "pytest",
+          "weight": 0.524489
+        }
+      ],
+      "text": "tool:pytest tool pytest",
+      "top_terms": [
+        "tool",
+        "pytest"
+      ]
+    },
+    {
+      "id": "trace:t001",
+      "kind": "entity",
+      "nonzero_terms": 2,
+      "sparse_vector": [
+        {
+          "term": "t001",
+          "weight": 0.707107
+        },
+        {
+          "term": "trace",
+          "weight": 0.707107
+        }
+      ],
+      "text": "trace:t001 trace T001",
+      "top_terms": [
+        "t001",
+        "trace"
+      ]
+    }
+  ],
+  "note": "本索引用 TF-IDF 向量化已审核 KG 节点、关系和声明；回答时先向量召回种子，再沿图关系扩展证据子图。",
+  "schema": "skillminer.kg_graph_vector_index.v1",
+  "vocabulary_size": 34
+}

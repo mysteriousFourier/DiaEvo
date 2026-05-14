@@ -1,0 +1,30 @@
+sequence,support,support_rate
+read,22,0.9565
+read -> edit,21,0.9130
+edit,21,0.9130
+rg -> read,11,0.4783
+rg,11,0.4783
+read -> edit -> pytest,10,0.4348
+rg -> read -> edit,10,0.4348
+edit -> pytest,10,0.4348
+read -> pytest,10,0.4348
+rg -> edit,10,0.4348
+pytest,10,0.4348
+read -> edit -> python,9,0.3913
+edit -> python,9,0.3913
+read -> python,9,0.3913
+python,9,0.3913
+rg -> read -> edit -> pytest,5,0.2174
+rg -> read -> edit -> python,5,0.2174
+rg -> edit -> pytest,5,0.2174
+rg -> edit -> python,5,0.2174
+rg -> read -> pytest,5,0.2174
+rg -> read -> python,5,0.2174
+rg -> pytest,5,0.2174
+rg -> python,5,0.2174
+read -> npm -> playwright,2,0.0870
+npm -> playwright,2,0.0870
+read -> npm,2,0.0870
+read -> playwright,2,0.0870
+npm,2,0.0870
+playwright,2,0.0870

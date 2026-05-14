@@ -6,7 +6,7 @@ GEPA is the intended reflective optimizer for SkillMiner's skill self-evolution 
 
 SkillMiner is the integrated CLI, data layer, evaluator, and safety layer. GEPA should not replace ingestion, mining, verification, validation, recommendation, evaluation, or promotion. GEPA should optimize text artifacts discovered and governed by SkillMiner.
 
-Current project phase: **Phase 2: Quality hardening**. GEPA integration is a Phase 3 target, not an implemented feature. The immediate gate is to make the existing local/Pareto evolved skills measurably better on held-out traces with safety false-negative rate fixed at `0.0`.
+Current project phase: **Phase 6 human feedback learning is complete; Phase 7 safe code-evolution research is next**. GEPA remains optional and dependency-gated. Any patch guidance or code evolution must stay sandbox-only until human review.
 
 Recommended architecture:
 
@@ -237,6 +237,13 @@ Minimal adapter responsibilities:
 8. Write comparison report: seed vs local evolved vs GEPA.
 
 GEPA must remain optional. If dependency or API key is missing, the command should fail clearly without breaking default SkillMiner commands.
+
+DeepSeek provider policy:
+
+- GEPA reflection/model calls use the existing project `.env` DeepSeek configuration.
+- Required keys are `DEEPSEEK_API_KEY`, `DEEPSEEK_BASE_URL`, and `DEEPSEEK_MODEL`; optional tuning uses `DEEPSEEK_MAX_TOKENS`, `DEEPSEEK_TEMPERATURE`, and `DEEPSEEK_TIMEOUT`.
+- The real `DEEPSEEK_API_KEY` must stay only in `.env`; reports may record provider/model/base URL and `api_key_configured`, but never the raw key.
+- `evaluate-gepa --dry-run` must not import GEPA or call DeepSeek/GEPA; it only exercises seed/local comparison, selected-cluster held-out metrics, report shape, and safety gates.
 
 ## Cost Strategy
 

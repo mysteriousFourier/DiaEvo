@@ -46,7 +46,7 @@ def _as_strings(values: Any) -> list[str]:
     return [str(item) for item in values if str(item)]
 
 
-def _list_items(values: list[str], empty: str = "No strong signal yet.") -> list[str]:
+def _list_items(values: list[str], empty: str = "暂无强信号。") -> list[str]:
     if not values:
         return [f"- {empty}"]
     return [f"- `{value}`" for value in values]
@@ -67,24 +67,24 @@ def _explanation_text(cluster: dict[str, Any]) -> list[str]:
         kind = str(item.get("type") or "unknown")
         reason = str(item.get("reason") or "")
         score = float(item.get("score") or 0.0)
-        lines.append(f"- `{kind}` score `{score:.2f}`: {reason}")
-    return lines or ["- `baseline_pattern`: Similar tasks appear in traces, but more evidence is needed before promotion."]
+        lines.append(f"- `{kind}` 分数 `{score:.2f}`：{reason}")
+    return lines or ["- `baseline_pattern`：轨迹中出现了相似任务，但在 promotion 前仍需要更多证据。"]
 
 
 def _workflow_steps(tools: list[str], errors: list[str], failure_types: list[str]) -> list[str]:
     steps = [
-        "Read the task, inspect the project files that match the cluster signals, and identify the smallest reproducible workflow.",
-        "Prefer the successful tool sequence mined from traces before introducing a new tool.",
+        "先阅读任务，检查与聚类信号匹配的项目文件，确认最小可复现工作流。",
+        "优先复用从成功轨迹中挖掘出的工具序列，不要一开始就引入新工具。",
     ]
     if tools:
-        steps.append("Run or emulate the recurring tool path: " + " -> ".join(f"`{tool}`" for tool in tools[:6]) + ".")
+        steps.append("运行或模拟反复出现的工具路径：" + " -> ".join(f"`{tool}`" for tool in tools[:6]) + "。")
     if errors or failure_types:
         joined = ", ".join(f"`{value}`" for value in [*errors, *failure_types][:6])
-        steps.append(f"If the task shows {joined}, reproduce the failing case before editing.")
+        steps.append(f"如果任务出现 {joined}，先复现失败场景，再开始编辑。")
     steps.extend(
         [
-            "Make the narrowest workspace-scoped change that addresses the observed failure or coverage gap.",
-            "Run the closest validation command from the trace evidence and record pass/fail feedback for later mining.",
+            "只做能解决当前失败或覆盖缺口的最小 workspace 范围修改。",
+            "运行轨迹证据中最接近的验证命令，并记录 pass/fail 反馈，供后续挖掘使用。",
         ]
     )
     return steps
@@ -102,7 +102,7 @@ def build_skill_markdown(cluster: dict[str, Any]) -> str:
     coverage_gap = float(cluster.get("coverage_gap", 0.0) or 0.0)
     name_terms = "-".join(terms[:3]) if terms else cluster_id.lower()
     name = slugify(f"{cluster_id}-{name_terms}")
-    description = f"Trace-driven workflow for tasks similar to: {representative[:120]}"
+    description = f"面向相似任务的轨迹驱动工作流：{representative[:120]}"
     risk = min(1.0, 0.20 + failure_rate * 0.30 + coverage_gap * 0.25)
     source_counts = cluster.get("source_counts", {})
     if not isinstance(source_counts, dict):
@@ -113,37 +113,37 @@ def build_skill_markdown(cluster: dict[str, Any]) -> str:
         "",
         "## When To Use",
         "",
-        f"Use this candidate when a task is similar to: `{representative}`.",
+        f"当任务与以下代表任务相似时使用本候选技能：`{representative}`。",
         "",
-        "This skill is a draft generated from mining evidence. Do not install or promote it until verification passes and a human approves the candidate.",
+        "本技能是由挖掘证据生成的草稿。只有通过 verification 且人工审核通过后，才能 promotion。",
         "",
         "## Trigger Signals",
         "",
-        "Task terms:",
+        "任务关键词：",
         *_list_items(terms[:6]),
         "",
-        "Files or extensions:",
-        *_list_items([f".{value}" for value in extensions[:5]], "No recurring file extension signal."),
+        "文件或扩展名：",
+        *_list_items([f".{value}" for value in extensions[:5]], "暂无反复出现的文件扩展名信号。"),
         "",
-        "Tools:",
-        *_list_items(tools[:6], "No recurring tool signal."),
+        "工具：",
+        *_list_items(tools[:6], "暂无反复出现的工具信号。"),
         "",
-        "Failures:",
-        *_list_items([*errors, *failure_types][:6], "No recurring failure signal."),
+        "失败类型：",
+        *_list_items([*errors, *failure_types][:6], "暂无反复出现的失败信号。"),
         "",
         "## Mined Evidence",
         "",
         *_explanation_text(cluster),
         "",
-        f"- Source cluster: `{cluster_id}`",
-        f"- Trace ids: `{', '.join(str(item) for item in cluster.get('trace_ids', []))}`",
-        f"- Cluster size: `{cluster.get('size', 0)}`",
-        f"- Source counts: `{source_counts}`",
-        f"- Failure rate: `{failure_rate:.2f}`",
-        f"- Coverage gap: `{coverage_gap:.2f}`",
-        f"- Event count: `{int(cluster.get('event_count', 0) or 0)}`",
-        f"- Tool success rate: `{float(cluster.get('tool_success_rate', 0.0) or 0.0):.2f}`",
-        f"- Tool reuse count: `{int(cluster.get('tool_reuse_count', 0) or 0)}`",
+        f"- 来源簇：`{cluster_id}`",
+        f"- 轨迹 ID：`{', '.join(str(item) for item in cluster.get('trace_ids', []))}`",
+        f"- 簇大小：`{cluster.get('size', 0)}`",
+        f"- 来源计数：`{source_counts}`",
+        f"- 失败率：`{failure_rate:.2f}`",
+        f"- 覆盖缺口：`{coverage_gap:.2f}`",
+        f"- 事件数量：`{int(cluster.get('event_count', 0) or 0)}`",
+        f"- 工具成功率：`{float(cluster.get('tool_success_rate', 0.0) or 0.0):.2f}`",
+        f"- 工具复用次数：`{int(cluster.get('tool_reuse_count', 0) or 0)}`",
         "",
         "## Operating Steps",
         "",
@@ -151,25 +151,25 @@ def build_skill_markdown(cluster: dict[str, Any]) -> str:
         "",
         "## Failure Fallbacks",
         "",
-        "- If validation fails, capture the exact command, failing output category, and files touched before retrying.",
-        "- If a tool requires approval, stop at preview and ask for explicit human approval before running it.",
-        "- If a command would write outside the current workspace, refuse the action and propose a workspace-local alternative.",
-        "- If the same validation fails twice, stop broadening the patch and summarize the smallest unresolved failure.",
-        "- If new dependencies are needed, treat installation as a separate approval-gated step.",
+        "- 如果验证失败，先记录准确命令、失败输出类别和涉及文件，再决定是否重试。",
+        "- 如果工具需要审批，停在 preview，等待用户明确批准后再执行。",
+        "- 如果命令会写出当前 workspace，拒绝执行，并提出 workspace-local 替代方案。",
+        "- 如果同一个验证连续失败两次，停止扩大改动范围，汇总最小未解决失败。",
+        "- 如果需要新增依赖，把安装作为单独的审批步骤处理。",
         "",
         "## Verification Suggestions",
         "",
-        "- Run `skillminer verify --skill <candidate-dir>` before considering promotion.",
-        "- Prefer the nearest validation command mined from the traces.",
-        "- Confirm the candidate has frontmatter, bounded scope, recovery guidance, and no credential or dangerous-command patterns.",
-        "- After use, feed tool events back through `skillminer ingest` so the recommendation and mining reports learn from the result.",
+        "- 在考虑 promotion 前运行 `skillminer verify --skill <candidate-dir>`。",
+        "- 优先使用从轨迹中挖掘出的最接近验证命令。",
+        "- 确认候选技能包含 frontmatter、边界清晰的适用范围、恢复建议，且没有 credential 或 dangerous-command pattern。",
+        "- 使用后通过 `skillminer ingest` 或 `feedback` 回灌工具事件，让推荐和挖掘报告学习结果。",
         "",
         "## Safety Constraints",
         "",
-        "- Keep all edits inside the active workspace unless the user explicitly approves a broader path.",
-        "- Never pipe downloaded content into a shell or PowerShell interpreter.",
-        "- Never include real API keys, tokens, passwords, or private credentials in this skill.",
-        "- Generated candidates are not installed automatically; promotion requires human review.",
+        "- 除非用户明确批准更大范围，否则所有编辑必须限制在当前 workspace 内。",
+        "- 不要把下载内容直接 pipe 到 shell 或 PowerShell 解释器。",
+        "- 不要在技能中包含真实 API key、token、password 或私有凭据。",
+        "- 生成的候选技能不会自动安装；promotion 必须经过人工审核。",
         "",
     ]
     return "\n".join(lines)

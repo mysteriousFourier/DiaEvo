@@ -1,0 +1,26 @@
+{
+  "association_rule_count": 30,
+  "cluster_count": 4,
+  "coverage_gap_count": 2,
+  "date": "260513",
+  "feature_count": 406,
+  "files": [
+    "README.md",
+    "association_rules.csv",
+    "association_rules.md",
+    "clusters.csv",
+    "clusters.md",
+    "frequent_sequences.csv",
+    "frequent_sequences.md",
+    "graph_edges.csv",
+    "skill_coverage_gaps.csv",
+    "skill_coverage_gaps.md",
+    "summary.json"
+  ],
+  "frequent_sequence_count": 29,
+  "graph_edge_count": 151,
+  "snapshot_dir": "D:\\codex\\skillminer\\data\\mining_snapshots\\260513",
+  "status": "ok",
+  "trace_count": 25,
+  "trace_source": "D:\\codex\\skillminer\\data\\processed_traces.jsonl"
+}

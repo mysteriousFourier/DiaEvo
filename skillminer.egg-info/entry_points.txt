@@ -1,0 +1,3 @@
+[console_scripts]
+skillminer = skillminer.cli:main
+skillminer-home = ui.terminal_home:main

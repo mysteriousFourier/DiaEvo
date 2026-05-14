@@ -1,0 +1,1 @@
+{"confidence": 0.95, "created_at": "2026-05-13T11:28:51.366337+00:00", "id": "evidence:0ad9c04de7de8f3f", "path": "data\\processed_traces.jsonl", "source_id": "T001", "source_type": "trace", "summary": "Trace T001: 给 Python CLI 项目补 pytest，并修复导入路径导致的测试失败", "url": ""}

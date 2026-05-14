@@ -4,6 +4,14 @@
 
 SkillMiner is a working integrated local CLI in `D:\codex\skillminer`.
 
+## Must-Read Language Rule
+
+The target user is Chinese and the default model interaction is Chinese. All user-facing content must be Chinese by default, including CLI help shown to users, slash-command descriptions, interactive prompts, generated reports, mining/KG snapshots, visible HTML pages, and prompt text that will be shown to or steer Chinese user interaction.
+
+Keep English only when it is required by a code/API contract, external standard, field name, command name, test fixture, or verifier contract. For example, `SKILL.md` section headings such as `When To Use`, `Trigger Signals`, and `Operating Steps` stay English because the verifier and Agent Skills contract depend on them, but generated section bodies should be Chinese.
+
+Do not make future handoff owners rediscover this requirement. Treat any new English user-facing text as a bug unless there is an explicit compatibility reason.
+
 It has two operating modes:
 
 - Interactive workbench: `.\skillminer.ps1` opens a terminal dashboard, slash commands, DeepSeek chat, and approval-gated local tools.
@@ -15,9 +23,31 @@ The implemented conservative skill self-evolution loop is:
 tool_events -> ingest -> mine -> generate -> evolve -> verify -> validate -> queue-promotion -> promote -> feedback/evaluate
 ```
 
+The implemented knowledge graph loop is:
+
+```text
+traces + tool_events + web_search/web_fetch + optional conversation log
+  -> reviewed active KG
+  -> editable KG workbench (`kg` / `/kg`)
+  -> optional answer-kg --strict / manual kg_answer tool
+```
+
 The current optimizer is local metric/Pareto. It is intentionally dependency-free and deterministic. GEPA is the intended optional next optimizer backend, but it should sit behind the existing evaluator and safety gates.
 
-Current checkpoint: **Phase 2: Quality hardening, pre-Phase 3 gate satisfied on the sample corpus**. Phase 0 and Phase 1 are implemented baselines. Phase 2 now proves improved held-out usefulness through stable candidate overlay metrics, section-aware duplicate checks, validation feedback, promotion feedback, and evolution memory. Phase 3 GEPA integration is not implemented.
+Historical checkpoints before Phase 6 are obsolete; use the latest checkpoint below as the source of truth.
+
+## Latest Checkpoint
+
+The older `Current checkpoint` line immediately above is superseded by this section.
+
+Phase 5 disposable sandbox validation is complete. Phase 6 human feedback learning is now complete. The next handoff owner can start Phase 7 safe code-evolution research directly.
+
+- Approved `validate` runs now execute `validation.json` commands inside `.tmp/validation-runs/<id>/workspace`.
+- The sandbox copy excludes `.git`, `.venv`, `.tmp`, caches, and recursive report outputs.
+- Validation captures stdout, stderr, exit code, duration, touched files, and a sandbox diff.
+- Sandbox changes are never applied back to the real workspace automatically.
+- Recent checks: `uv run --with pytest python -m pytest -q`; `.\.venv\Scripts\python.exe -m skillminer.cli evaluate --variant evolved --top-k 3 --no-tool-events`.
+- Current invariant remains `safety_false_negative_rate == 0.0`.
 
 ## Final Product Direction
 
@@ -43,13 +73,18 @@ The stage goal is skill self-evolution: evolved skills should become more useful
 | Tool layer | Workspace file tools, shell, web search/fetch, approval previews, event logging. |
 | Tool-to-trace feedback | `.skillminer/tool_events.jsonl` is converted into trace records by `ingest`/`feedback`. |
 | Mining | TF-IDF, K-Means, association rules, frequent sequences, task-skill-tool graph. |
+| Knowledge graph | Incremental entities/triples/claims/evidence paths from traces, tool events, web evidence, optional conversation logs, and mining reports; all candidates require review before becoming active facts. |
+| Editable KG | `kg` / `/kg` opens a graph workbench where users edit nodes and relations while viewing the graph, then export JSON edits for approved write-back. |
+| Graph-vector KG retrieval | Accepted KG nodes, triples, and claims are vectorized with a local TF-IDF sparse index; `answer-kg` retrieves vector seed hits and expands a graph evidence subgraph. |
+| KG answer switch | `answer-kg --strict` and the manual `kg_answer` tool constrain answers to accepted graph-vector evidence subgraphs when explicitly enabled; the model-facing chat tool list does not expose `kg_answer`. |
 | Recommendation | Weighted ranker with optional Pareto rerank and plugin-backed skill candidates. |
 | Candidate generation | Trace-grounded `SKILL.md` drafts from mining clusters. |
 | Verification | Static candidate contract and safety checks. |
 | Evolution | Local metric/Pareto structured-section optimization with evolution memory. |
-| Validation | Approval-gated `validation.json` command replay. |
-| Promotion | Human queue and local registry update only after approval. |
-| Evaluation | Baseline/evolved metrics, held-out split, stable overlay recommendation gate, raw augmented diagnostics, duplicate checks, safety holdout. |
+| Validation | Approval-gated `validation.json` command replay inside disposable sandbox workspace copies, with stdout/stderr/exit code/duration/touched files/diff captured. |
+| Promotion | Human queue and local registry update only after approval, with review labels and rewrite drafts feeding future scoring. |
+| Evaluation | Baseline/evolved metrics, held-out split, stable overlay recommendation gate, raw augmented diagnostics, duplicate checks, safety holdout, and human-feedback-aware scoring. |
+| Phase 4 GEPA/APO report | `evaluate-gepa-phase4` 会写出低成本 GEPA/APO 矩阵。当前报告是 C02、budget 5 的 dry-run，包含 7 行、0 个失败，安全 false-negative rate 为 `0.0`。 |
 
 ## Important Files
 
@@ -66,12 +101,14 @@ The stage goal is skill self-evolution: evolved skills should become more useful
 | `skillminer/tool_layer.py` | Local tools, approvals, event logging. |
 | `skillminer/ingest.py` | Trace and tool event normalization. |
 | `skillminer/miner.py` | Mining report orchestration. |
+| `skillminer/knowledge_graph.py` | KG delta generation, review queue, active graph application, snapshot export, and graph-constrained answering. |
 | `skillminer/recommender.py` | Skill recommendation. |
 | `skillminer/generator.py` | Seed candidate generation. |
 | `skillminer/evolution.py` | Local optimizer, memory, validation/promotion feedback recording. |
 | `skillminer/quality.py` | Shared duplicate/actionability helpers. |
 | `skillminer/evaluation.py` | Baseline/evolved/held-out/safety metrics. |
-| `skillminer/validation_runner.py` | Approved validation replay. |
+| `skillminer/gepa_adapter.py` | Optional GEPA adapter scaffold using DeepSeek `.env`, existing verifier/duplicate/evaluation gates, and JSON comparison reports. |
+| `skillminer/validation_runner.py` | Approved sandbox validation replay and artifact capture. |
 | `skillminer/promotion.py` | Promotion queue and registry gate. |
 
 ## Command Flow
@@ -89,8 +126,12 @@ cd D:\codex\skillminer
 .\skillminer.ps1 queue-promotion --skill outputs/candidate_skills/C03/evolved
 .\skillminer.ps1 label-promotion --queue-id <id> --label duplicate --note "covered by nearest skill"
 .\skillminer.ps1 promote --queue-id <id> --approve
+.\skillminer.ps1 kg --date 260513
+.\skillminer.ps1 kg --apply-edit path\to\skillminer_kg_edit_260513.json --approve
+.\skillminer.ps1 answer-kg --query "which tools support pytest traces?" --strict
 .\skillminer.ps1 feedback
 .\skillminer.ps1 evaluate --variant evolved --top-k 3
+.\skillminer.ps1 evaluate-gepa --cluster-id C03 --budget 50 --top-k 3
 ```
 
 Notes:
@@ -101,6 +142,25 @@ Notes:
 - Promotion updates only `data/skill_registry.json`.
 - Candidate outputs and reports are under `outputs/`.
 - Tool events live under `.skillminer/tool_events.jsonl`.
+- KG review data lives under `data/knowledge_graph/`; pending candidates must be accepted before `apply-kg-delta` makes them active.
+
+## Knowledge Graph Boundary
+
+The KG layer is separate from the existing PageRank skill graph. The PageRank graph remains a recommender feature; the KG is the stricter evidence layer for reviewed facts, claims, source paths, and confidence.
+
+Candidate KG facts are generated from structured sources only in v1: traces, tool events, approved web_search/web_fetch results, optional conversation JSONL, and mining reports. `web_fetch` evidence is scored above `web_search` snippets, and both remain pending until review. GC-DPG is treated only as an inspiration for graph-constrained answering: it is not used as the KG construction method.
+
+Strict answering is opt-in and user-controlled. Use `answer-kg --strict` or manual `/tool kg_answer ...` with `strict=true` when the model must answer only from accepted KG facts and cite evidence paths. Normal chat and recommendation are not forced into strict KG mode, and the Agent cannot silently select `kg_answer` through automatic tool calling.
+
+Accepted KG facts can be viewed and edited with:
+
+```powershell
+.\skillminer.ps1 kg --date 260513
+```
+
+The workbench writes `graph_visualization.html`, `entities.csv`, `triples.csv`, `claims.csv`, `graph_edges.csv`, `evidence_paths.md`, `confidence_summary.md`, `graph_vector_index.json`, `graph_vector_retrieval.md`, and `graph_vector_demo.md`, and returns `visualization_path`. Editing happens inside the HTML page; write-back requires exporting JSON from the page and applying it with `kg --apply-edit ... --approve`.
+
+Current KG type: this is now a reviewed GraphRAG-like graph-vector KG. It keeps symbolic entities/triples/claims, builds a local TF-IDF sparse vector index over accepted KG documents, retrieves vector seed hits, and expands a cited graph evidence subgraph for strict answers. It is not yet backed by a dense embedding model or external vector database, but the implemented path is graph-vector retrieval rather than plain symbolic lookup.
 
 ## Current Skill Evolution Behavior
 
@@ -148,7 +208,7 @@ The negative raw augmented MRR delta is retained as a diagnostic: inserting draf
 
 GEPA should be integrated after the current evaluator is stable enough to reward usefulness, not just verifier compliance.
 
-Next GEPA step:
+The Phase 3 scaffold is now:
 
 ```text
 skillminer/gepa_adapter.py
@@ -161,10 +221,24 @@ skillminer/gepa_adapter.py
 
 Do not replace mining, verification, recommendation, or promotion with GEPA. GEPA should optimize text artifacts discovered and governed by SkillMiner.
 
+GEPA model calls use the existing DeepSeek OpenAI-compatible API configuration from project `.env`:
+
+```text
+DEEPSEEK_API_KEY
+DEEPSEEK_BASE_URL
+DEEPSEEK_MODEL
+DEEPSEEK_MAX_TOKENS
+DEEPSEEK_TEMPERATURE
+DEEPSEEK_TIMEOUT
+```
+
+The real key stays in `.env`; do not copy it into docs, reports, candidate skills, ASI, or test snapshots. `evaluate-gepa --dry-run` exercises seed/local comparison and safety reporting without importing or calling GEPA. Without `--dry-run`, missing GEPA/LiteLLM dependencies fail clearly without breaking default commands.
+
 ## Known Limits
 
 - Validation replay currently runs approved commands in the real workspace; disposable clone replay is not implemented.
-- GEPA adapter is not implemented.
+- GEPA adapter scaffold is implemented and a real DeepSeek-backed smoke run completed; the first low-budget run was `not_adopted` because it did not beat local evolved usefulness.
+- Phase 4 矩阵报告已实现，并已完成一轮 dry-run 矩阵。它不是真实 non-dry-run GEPA cost sweep，因为 `dry_run=true` 行不会生成 GEPA candidates。
 - No external skill installation workflow is enabled.
 - No production-code mutation by the optimizer is enabled.
 - Human promotion labels are implemented, but no learned scoring policy uses them yet.
@@ -192,11 +266,11 @@ safety_false_negative_rate == 0.0
 
 Follow `docs/HANDOFF_ADVANCED_SKILL_EVOLUTION.md`.
 
-The next practical sequence is:
+Phase 6 is complete. The next practical phase is Phase 7: safe code-evolution research.
 
-1. Add optional GEPA adapter behind the existing evaluator.
-2. Compare seed vs local evolved vs GEPA under identical held-out/safety splits.
-3. Turn reviewer section merge proposals into an explicit merge/specialize rewrite command.
-4. Feed promotion labels into recommendation/evolution scoring, not just memory retrieval.
-5. Add low-cost GEPA/APO controls: CTM/EPM memory, CAPO racing, dense metric inner loop, sparse LLM judge.
-6. Add disposable sandbox validation before any patch guidance or code evolution.
+1. Keep promotion explicit and manual; do not add automatic promotion.
+2. Use sandbox replay artifacts, promotion labels, and rewrite drafts as richer ASI for the next optimizer loop.
+3. Keep `safety_false_negative_rate == 0.0` as the hard invariant.
+4. Only start patch guidance or code evolution after sandbox replay remains stable on real tasks.
+
+No Phase 5 work remains in this handoff.

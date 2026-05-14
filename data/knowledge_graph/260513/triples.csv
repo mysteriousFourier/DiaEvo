@@ -1,0 +1,4 @@
+id,subject,predicate,object,confidence,status,source_type,evidence
+triple:3c2f130e2629d2cb,T001,USES_SKILL,test-failure-repair,0.95,accepted,trace,evidence:0ad9c04de7de8f3f
+triple:9694bbd373d8f197,T001,DESCRIBES_TASK,给 Python CLI 项目补 pytest，并修复导入路径导致的测试失败,0.95,accepted,trace,evidence:0ad9c04de7de8f3f
+triple:ee6aad05e48a3218,T001,USES_TOOL,pytest,0.95,accepted,trace,evidence:0ad9c04de7de8f3f

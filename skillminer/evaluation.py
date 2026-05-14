@@ -464,7 +464,7 @@ def _candidate_record_names(registry_path: str | Path | None) -> set[str]:
         if not isinstance(item, dict):
             continue
         source = str(item.get("source") or "")
-        if source in {"seed-candidate", "evolved-candidate"} and item.get("name"):
+        if source in {"seed-candidate", "evolved-candidate", "gepa-candidate"} and item.get("name"):
             names.add(str(item["name"]))
     return names
 

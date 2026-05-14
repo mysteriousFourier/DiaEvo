@@ -1,0 +1,4 @@
+source,target,relation,confidence,status,source_type
+trace:t001,skill:test-failure-repair,USES_SKILL,0.95,accepted,trace
+trace:t001,task:27ef8d58840869,DESCRIBES_TASK,0.95,accepted,trace
+trace:t001,tool:pytest,USES_TOOL,0.95,accepted,trace

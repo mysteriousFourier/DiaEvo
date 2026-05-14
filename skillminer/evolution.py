@@ -39,6 +39,9 @@ EVOLUTION_REPORT_PATH = REPORTS_DIR / "evolution_report.json"
 
 HARD_REJECT_CODES = {"dangerous_command", "credential_pattern", "missing_required_section"}
 MAX_CANDIDATE_CHARS = 8_000
+POSITIVE_FEEDBACK_LABELS = {"accepted", "useful-after-use"}
+NEGATIVE_FEEDBACK_LABELS = {"rejected", "not-useful-after-use", "merge-needed"}
+BLOCKING_FEEDBACK_LABELS = {"unsafe", "duplicate", "too-broad"}
 
 
 @dataclass(slots=True)
@@ -188,6 +191,48 @@ def _validation_failure_category(item: dict[str, Any]) -> str:
     return "passed"
 
 
+def _read_artifact_excerpt(path_value: Any, limit: int = 1_500) -> str:
+    if not path_value:
+        return ""
+    try:
+        path = Path(str(path_value))
+        if not path.exists() or not path.is_file():
+            return ""
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError:
+        return ""
+    if len(text) <= limit:
+        return text
+    return text[:limit] + f"... <truncated {len(text) - limit} chars>"
+
+
+def _validation_artifacts(result: dict[str, Any]) -> dict[str, Any]:
+    touched_files = result.get("touched_files", [])
+    if not isinstance(touched_files, list):
+        touched_files = []
+    touched_summary = [
+        {
+            "path": item.get("path"),
+            "change": item.get("change"),
+            "size_before": item.get("size_before"),
+            "size_after": item.get("size_after"),
+        }
+        for item in touched_files[:20]
+        if isinstance(item, dict)
+    ]
+    return {
+        "sandbox_run_id": result.get("sandbox_run_id") or "",
+        "sandbox_dir": result.get("sandbox_dir") or "",
+        "artifacts_dir": result.get("artifacts_dir") or "",
+        "sandbox_report_path": result.get("sandbox_report_path") or "",
+        "diff_path": result.get("diff_path") or "",
+        "touched_files_path": result.get("touched_files_path") or "",
+        "touched_file_count": len(touched_files),
+        "touched_files": touched_summary,
+        "diff_summary": _read_artifact_excerpt(result.get("diff_path")),
+    }
+
+
 def record_validation_feedback(result: dict[str, Any], memory_path: str | Path | None = None) -> None:
     memory = _load_memory(memory_path)
     skill_dir = str(result.get("skill_dir") or "")
@@ -208,6 +253,7 @@ def record_validation_feedback(result: dict[str, Any], memory_path: str | Path |
                     "failure_category": _validation_failure_category(item),
                     "stdout_summary": str(item.get("stdout") or "")[:500],
                     "stderr_summary": str(item.get("stderr") or "")[:500],
+                    "artifacts": _validation_artifacts(result),
                     "recorded_at": _now(),
                 }
             )
@@ -221,10 +267,38 @@ def record_validation_feedback(result: dict[str, Any], memory_path: str | Path |
                 "returncode": None,
                 "failure_category": str(result.get("status") or "unknown"),
                 "findings": result.get("findings", []),
+                "artifacts": _validation_artifacts(result),
                 "recorded_at": _now(),
             }
         )
     _write_memory(_trim_memory(memory), memory_path)
+
+
+def _promotion_feedback_policy(labels: list[str], outcome: str = "") -> dict[str, Any]:
+    selected = set(labels)
+    score = 0.0
+    reasons: list[str] = []
+    for label in sorted(selected.intersection(POSITIVE_FEEDBACK_LABELS)):
+        score += 0.35 if label == "useful-after-use" else 0.22
+        reasons.append(label)
+    for label in sorted(selected.intersection(NEGATIVE_FEEDBACK_LABELS)):
+        score -= 0.22 if label == "not-useful-after-use" else 0.14
+        reasons.append(label)
+    for label in sorted(selected.intersection(BLOCKING_FEEDBACK_LABELS)):
+        score -= 0.35 if label == "unsafe" else 0.26
+        reasons.append(label)
+    if outcome == "approved" and "accepted" not in selected:
+        score += 0.12
+        reasons.append("approved")
+    if outcome == "rejected" and not selected.intersection(NEGATIVE_FEEDBACK_LABELS | BLOCKING_FEEDBACK_LABELS):
+        score -= 0.12
+        reasons.append("rejected")
+    return {
+        "score": max(-1.0, min(1.0, round(score, 4))),
+        "direction": "positive" if score > 0 else "negative" if score < 0 else "neutral",
+        "reasons": reasons,
+        "blocking": bool(selected.intersection(BLOCKING_FEEDBACK_LABELS)),
+    }
 
 
 def record_promotion_feedback(entry: dict[str, Any], memory_path: str | Path | None = None) -> None:
@@ -244,6 +318,7 @@ def record_promotion_feedback(entry: dict[str, Any], memory_path: str | Path | N
             "validation_status": validation.get("status") or "",
             "promotion_outcome": str(entry.get("state") or ""),
             "labels": active_labels,
+            "feedback_policy": _promotion_feedback_policy(active_labels, str(entry.get("state") or "")),
             "verifier_passed": verifier.get("passed") if isinstance(verifier, dict) else False,
             "duplicate_similarity": duplicate.get("similarity"),
             "duplicate_nearest": duplicate.get("nearest"),
@@ -305,6 +380,7 @@ def _memory_query_text(item: dict[str, Any]) -> str:
         " ".join(_safe_list(item.get("labels"))),
         item.get("recommended_action"),
         item.get("failure_category"),
+        item.get("feedback_policy", {}).get("direction") if isinstance(item.get("feedback_policy"), dict) else "",
     ]
     return " ".join(str(value) for value in fields if value)
 
@@ -350,6 +426,8 @@ def memory_summary(memory_path: str | Path | None = None) -> dict[str, Any]:
     duplicate_actions: dict[str, int] = {}
     promotion_outcomes: dict[str, int] = {}
     promotion_labels: dict[str, int] = {}
+    feedback_directions: dict[str, int] = {}
+    validation_artifact_count = 0
     for item in memory.get("validation_patterns", []):
         if not isinstance(item, dict):
             continue
@@ -358,6 +436,9 @@ def memory_summary(memory_path: str | Path | None = None) -> dict[str, Any]:
         category = str(item.get("failure_category") or "")
         if category:
             validation_failures[category] = validation_failures.get(category, 0) + 1
+        artifacts = item.get("artifacts") if isinstance(item.get("artifacts"), dict) else {}
+        if artifacts.get("sandbox_run_id") or artifacts.get("touched_file_count"):
+            validation_artifact_count += 1
     for item in memory.get("duplicate_patterns", []):
         if not isinstance(item, dict):
             continue
@@ -370,6 +451,9 @@ def memory_summary(memory_path: str | Path | None = None) -> dict[str, Any]:
         promotion_outcomes[outcome] = promotion_outcomes.get(outcome, 0) + 1
         for label in _safe_list(item.get("labels")):
             promotion_labels[label] = promotion_labels.get(label, 0) + 1
+        policy = item.get("feedback_policy") if isinstance(item.get("feedback_policy"), dict) else {}
+        direction = str(policy.get("direction") or "neutral")
+        feedback_directions[direction] = feedback_directions.get(direction, 0) + 1
     return {
         "counts": {
             "correct_templates": len([item for item in memory.get("correct_templates", []) if isinstance(item, dict)]),
@@ -383,6 +467,8 @@ def memory_summary(memory_path: str | Path | None = None) -> dict[str, Any]:
         "duplicate_actions": dict(sorted(duplicate_actions.items())),
         "promotion_outcomes": dict(sorted(promotion_outcomes.items())),
         "promotion_labels": dict(sorted(promotion_labels.items())),
+        "human_feedback_policy": dict(sorted(feedback_directions.items())),
+        "validation_artifact_pattern_count": validation_artifact_count,
     }
 
 
@@ -599,7 +685,39 @@ def _specificity_score(markdown: str, cluster: dict[str, Any]) -> float:
     return min(1.0, (evidence / 18.0) + activation_bonus * 0.15)
 
 
-def _score_candidate(candidate_id: str, candidate: dict[str, str], cluster: dict[str, Any], known_texts: list[SkillText]) -> tuple[CandidateEval, str]:
+def _human_feedback_score(markdown: str, cluster: dict[str, Any], memory_matches: list[dict[str, Any]] | None = None) -> tuple[float, list[str]]:
+    matches = [item for item in memory_matches or [] if isinstance(item, dict)]
+    score = 0.5
+    reasons: list[str] = []
+    cluster_id = str(cluster.get("id") or "")
+    text = markdown.lower()
+    for item in matches:
+        if str(item.get("schema") or "") != "promotion_feedback.v2":
+            continue
+        policy = item.get("feedback_policy") if isinstance(item.get("feedback_policy"), dict) else {}
+        raw_delta = float(policy.get("score") or 0.0)
+        if raw_delta == 0.0:
+            continue
+        relevance = float(item.get("similarity") or 0.15)
+        if str(item.get("source_cluster") or "") == cluster_id:
+            relevance = max(relevance, 0.55)
+        for label in _safe_list(item.get("labels")):
+            if label and label.lower() in text:
+                relevance = max(relevance, 0.35)
+        delta = max(-0.35, min(0.35, raw_delta * relevance))
+        score += delta
+        direction = policy.get("direction") or ("positive" if raw_delta > 0 else "negative")
+        reasons.append(f"{direction}:{','.join(_safe_list(item.get('labels'))) or item.get('promotion_outcome')}")
+    return max(0.0, min(1.0, score)), reasons[:8]
+
+
+def _score_candidate(
+    candidate_id: str,
+    candidate: dict[str, str],
+    cluster: dict[str, Any],
+    known_texts: list[SkillText],
+    memory_matches: list[dict[str, Any]] | None = None,
+) -> tuple[CandidateEval, str]:
     markdown = render_candidate_skill(candidate, cluster, candidate_id)
     duplicate = nearest_duplicate(markdown, known_texts)
     duplicate_similarity = float(duplicate["similarity"])
@@ -620,6 +738,7 @@ def _score_candidate(candidate_id: str, candidate: dict[str, str], cluster: dict
     duplicate_score = max(0.0, 1.0 - duplicate_similarity)
     specificity = _specificity_score(markdown, cluster)
     safety = 0.0 if hard_reject else max(0.0, 1.0 - float(verify_result.get("risk_score", 0.0) or 0.0))
+    human_feedback, human_feedback_reasons = _human_feedback_score(markdown, cluster, memory_matches)
     score = (
         0.30 * verifier_score
         + 0.16 * warning_score
@@ -628,6 +747,7 @@ def _score_candidate(candidate_id: str, candidate: dict[str, str], cluster: dict
         + 0.12 * specificity
         + 0.11 * safety
         + 0.05 * length_score
+        + 0.04 * (human_feedback - 0.5)
     )
     rejected = hard_reject or length > MAX_CANDIDATE_CHARS or duplicate_similarity >= 0.985
     reasons = []
@@ -645,6 +765,7 @@ def _score_candidate(candidate_id: str, candidate: dict[str, str], cluster: dict
         "duplicate": duplicate,
         "evidence_alignment": round(evidence_score, 4),
         "specificity": round(specificity, 4),
+        "human_feedback_reasons": human_feedback_reasons,
         "section_lengths": {key: len(value) for key, value in extract_skill_sections(markdown).items()},
     }
     return (
@@ -659,6 +780,7 @@ def _score_candidate(candidate_id: str, candidate: dict[str, str], cluster: dict
                 "specificity": specificity,
                 "safety": safety,
                 "length": length_score,
+                "human_feedback": human_feedback,
             },
             passed=bool(verify_result.get("passed")),
             rejected=rejected,
@@ -677,7 +799,7 @@ def _score_candidate(candidate_id: str, candidate: dict[str, str], cluster: dict
 def pareto_frontier(evaluations: list[CandidateEval]) -> list[CandidateEval]:
     active = [item for item in evaluations if not item.rejected]
     frontier: list[CandidateEval] = []
-    objectives = ("verifier", "evidence_alignment", "non_duplicate", "specificity", "safety", "length")
+    objectives = ("verifier", "evidence_alignment", "non_duplicate", "specificity", "safety", "length", "human_feedback")
     for candidate in active:
         dominated = False
         for other in active:
@@ -831,7 +953,7 @@ def evolve_skill(
         evaluations: list[CandidateEval] = []
         rendered: dict[str, str] = {}
         for candidate_id, candidate in _candidate_variants(seed, cluster, max(1, budget)):
-            eval_result, markdown = _score_candidate(candidate_id, candidate, cluster, known_texts)
+            eval_result, markdown = _score_candidate(candidate_id, candidate, cluster, known_texts, matches)
             evaluations.append(eval_result)
             rendered[candidate_id] = markdown
             if eval_result.rejected and len(evaluations) >= max(3, min(budget, 5)):

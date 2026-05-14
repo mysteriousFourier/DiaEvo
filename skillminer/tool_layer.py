@@ -17,6 +17,7 @@ from urllib.error import HTTPError, URLError
 from urllib.parse import quote_plus, urlparse
 from urllib.request import Request, urlopen
 
+from .knowledge_graph import answer_kg
 from .paths import PROJECT_ROOT
 
 WORKSPACE_ROOT = PROJECT_ROOT.resolve()
@@ -478,6 +479,26 @@ def _web_search(args: dict[str, Any], approved: bool) -> dict[str, Any]:
     }
 
 
+def _kg_answer(args: dict[str, Any], approved: bool) -> dict[str, Any]:
+    query = str(args.get("query") or "").strip()
+    if not query:
+        raise ToolError("kg_answer requires query")
+    strict = bool(args.get("strict", True))
+    include_pending = bool(args.get("include_pending", False))
+    max_paths = max(1, min(int(args.get("max_paths") or 5), 20))
+    current_dir = args.get("current_dir") or None
+    queue_path = args.get("queue_path") or None
+    result = answer_kg(
+        query,
+        strict=strict,
+        include_pending=include_pending,
+        current_dir=current_dir,
+        queue_path=queue_path,
+        max_paths=max_paths,
+    )
+    return {"status": "ok", "tool": "kg_answer", **result}
+
+
 def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
     return {"type": "object", "properties": properties, "required": required or [], "additionalProperties": False}
 
@@ -616,6 +637,28 @@ _register(
         destructive=False,
         handler=_web_search,
         risk="network",
+    )
+)
+_register(
+    ToolSpec(
+        name="kg_answer",
+        description="Answer from the reviewed graph-vector KG. strict=true uses only accepted graph-vector evidence subgraphs.",
+        input_schema=_schema(
+            {
+                "query": {"type": "string"},
+                "strict": {"type": "boolean", "default": True},
+                "include_pending": {"type": "boolean", "default": False},
+                "max_paths": {"type": "integer", "default": 5},
+                "current_dir": {"type": "string", "default": ""},
+                "queue_path": {"type": "string", "default": ""},
+            },
+            ["query"],
+        ),
+        read_only=True,
+        approval_required=False,
+        destructive=False,
+        handler=_kg_answer,
+        risk="low",
     )
 )
 

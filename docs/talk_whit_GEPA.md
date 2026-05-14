@@ -201,6 +201,58 @@ Output:
   memory updates
 ```
 
+## Phase 4 Experimental Protocol
+
+Phase 4 should be run as a controlled research phase. The goal is not to prove that a larger GEPA budget is automatically better; the goal is to learn which controls produce more held-out usefulness per cost while preserving the existing safety invariant.
+
+Hypotheses to test:
+
+| Hypothesis | Measurement |
+| --- | --- |
+| CTM/EPM memory improves GEPA starts. | Higher held-out candidate hit rate or MRR at the same budget. |
+| CAPO-style racing reduces wasted calls. | Lower metric/reflection calls per non-rejected candidate without lower usefulness. |
+| Sparse judge helps ambiguous candidates. | Better adoption decisions only on near-duplicate, metric-disagreement, or held-out-regression cases. |
+| Larger budgets help only after ASI is strong. | Budget sweep improves usefulness per cost, not only static verifier score. |
+
+Recommended experiment matrix:
+
+| Condition | Memory | Racing | Judge | Budgets |
+| --- | --- | --- | --- | --- |
+| local baseline | current local memory | n/a | none | n/a |
+| GEPA seed only | none | off | none | 5, 10 |
+| GEPA memory | CTM+EPM | off | none | 5, 10, 25 |
+| GEPA racing | CTM+EPM | on | none | 10, 25 |
+| GEPA sparse judge | CTM+EPM | on | uncertainty only | 10, 25 |
+
+Every experiment row should write a stable record:
+
+```json
+{
+  "condition": "gepa_racing",
+  "cluster_id": "C03",
+  "budget": 25,
+  "memory_policy": "ctm_epm",
+  "racing_policy": "cheap_gates",
+  "judge_policy": "none",
+  "metric_calls": 0,
+  "reflection_calls": 0,
+  "judge_calls": 0,
+  "elapsed_sec": 0.0,
+  "heldout": {},
+  "safety_false_negative_rate": 0.0,
+  "adoption_status": "not_adopted",
+  "not_adopted_reason": ""
+}
+```
+
+Analysis rules:
+
+- Compare each condition to `local_evolved` and to the previous cheaper GEPA condition.
+- Treat verifier-only gains as insufficient.
+- Treat `not_adopted` as useful evidence, not a failed run.
+- Stop increasing budget when held-out usefulness is flat and duplicate/safety pressure rises.
+- Do not add sparse judge calls until local metrics show uncertainty or disagreement.
+
 ## Practical Defaults
 
 Initial defaults for SkillMiner:
@@ -233,6 +285,15 @@ The GEPA adapter should report:
 - cost per held-out improvement
 - cost per human-accepted candidate, once labels exist
 
+Phase 4 implementation report:
+
+- `skillminer evaluate-gepa` records a single experiment row in `outputs/reports/gepa_skill_optimization.json`.
+- `skillminer evaluate-gepa-phase4` writes the batch matrix to `outputs/reports/gepa_phase4_experiments.json`.
+- Each row records `condition`, `budget`, `memory_policy`, `racing_policy`, `judge_policy`, local metric calls, GEPA reflection calls when exposed by GEPA, sparse judge calls, token counts when exposed by provider results, elapsed time, held-out metrics, safety false-negative rate, and adoption status.
+- The default matrix compares `local_evolved`, `gepa_seed_only`, `gepa_ctm`, `gepa_epm`, `gepa_ctm_epm`, `gepa_racing`, and `gepa_sparse_judge`.
+- Batch reports are written after every row and resume completed rows by default because real GEPA sweeps can exceed one shell timeout.
+- `--dry-run` runs the same matrix without importing or calling GEPA, which is the default CI-safe check.
+
 ## What Not To Do Yet
 
 - Do not call LLM-as-judge every round.
@@ -258,3 +319,12 @@ Medium term:
 Long term:
 
 - SkillMiner's CLI becomes a low-cost self-improving skill workbench: real usage creates traces, traces create candidate skills, GEPA improves them, SkillMiner verifies and recommends them, humans govern promotion, and outcomes feed the next cycle.
+
+## References
+
+- Agrawal, L. et al. GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning. arXiv:2507.19457, 2025. Accessed 2026-05-13. https://arxiv.org/abs/2507.19457
+- GEPA AI. Optimize Anything API. Accessed 2026-05-13. https://gepa-ai.github.io/gepa/api/optimize_anything/optimize_anything/
+- GEPA AI. LiteLLM adapter `make_litellm_lm`. Accessed 2026-05-13. https://gepa-ai.github.io/gepa/api/optimize_anything/make_litellm_lm/
+- Zehle, S. et al. Cost-Aware Prompt Optimization. Proceedings of Machine Learning Research 293, 2025. Accessed 2026-05-13. https://proceedings.mlr.press/v293/zehle25a.html
+- Liang, J. et al. Generalizable Self-Evolving Memory for Automatic Prompt Optimization. arXiv:2603.21520, 2026. Accessed 2026-05-13. https://arxiv.org/abs/2603.21520
+- Zhao, Z. et al. Probabilistic Metric Prompt Optimization for Small and Large Language Models. Findings of EMNLP 2025. Accessed 2026-05-13. https://aclanthology.org/2025.findings-emnlp.795/

@@ -50,7 +50,9 @@ The system should eventually optimize skills, generator policy, validation sugge
 
 ## Phase Plan
 
-Current checkpoint: **Phase 2: Candidate Quality Hardening, pre-Phase 3 gate satisfied on the sample corpus**. Phase 0 and Phase 1 are implemented. Phase 2 now proves held-out usefulness with stable overlay metrics, duplicate decisions are reviewable, validation and promotion outcomes update memory, and safety false-negative rate remains `0.0`. GEPA belongs to Phase 3 and is not implemented yet.
+Current source-of-truth checkpoint: **Phase 6 human feedback learning is complete; Phase 7 safe code-evolution research is next**. Older Phase 4/Phase 5-start checkpoint text below is historical.
+
+Historical Phase 4/5 checkpoint is obsolete; use the source-of-truth checkpoint above.
 
 ### Phase 0: Integrated CLI Foundation
 
@@ -159,7 +161,15 @@ Completion criteria:
 
 ### Phase 4: Low-Cost GEPA/APO
 
-Goal: make GEPA affordable enough for repeated CLI use.
+Goal: make GEPA affordable enough for repeated CLI use through controlled experiments, not by assuming a single cost strategy will work.
+
+当前实现状态：
+
+- `evaluate-gepa-phase4` 已存在，并会写入 `outputs/reports/gepa_phase4_experiments.json`。
+- 当前报告是 C02、budget 5 的 dry-run 矩阵，包含 7 行：`local_evolved`、`gepa_seed_only`、`gepa_ctm`、`gepa_epm`、`gepa_ctm_epm`、`gepa_racing`、`gepa_sparse_judge`。
+- 当前报告没有 failures，所有行都保持 `safety_false_negative_rate == 0.0`。
+- 所有 adoption status 都是 `not_applicable`，因为 dry-run 模式不会生成真实 GEPA candidate。
+- 这足以进入 Phase 5 sandbox validation；真实 non-dry-run cost sweep 是可选后续证据。
 
 Use `docs/talk_whit_GEPA.md` as the research source:
 
@@ -175,16 +185,38 @@ Use `docs/talk_whit_GEPA.md` as the research source:
   - dense automatic metric inner loop.
   - sparse LLM-as-judge outer loop.
 
+Research protocol:
+
+- Treat Phase 4 as an experiment suite over GEPA controls, budgets, and memory inputs.
+- Keep one fixed evaluation split per experiment batch so seed, local evolved, and GEPA remain comparable.
+- Change one main variable at a time: memory context, racing policy, budget, judge policy, or candidate selector.
+- Record both success and failure cases, including `not_adopted` runs, because repeated failure patterns are EPM input.
+- Do not promote any GEPA candidate from Phase 4 automatically; promotion remains a later human decision.
+
+Initial experiment matrix:
+
+| Condition | Purpose |
+| --- | --- |
+| `local_evolved` | Conservative baseline. |
+| `gepa_seed_only` | Measure GEPA with the current seed and no extra memory summary. |
+| `gepa_ctm_epm` | Test whether retrieved memory improves GEPA starts. |
+| `gepa_racing` | Test whether cheap hard gates reduce wasted metric calls. |
+| `gepa_sparse_judge` | Test whether judge calls help only on uncertain candidates. |
+| `gepa_budget_sweep` | Compare budgets such as 5, 10, 25, and 50 under the same split. |
+
 Completion criteria:
 
 - Cost per accepted useful candidate is tracked.
 - Most candidate filtering happens through local metrics.
 - LLM judge calls are sparse and justified by uncertainty or metric volatility.
 - Memory reuse improves later GEPA starts.
+- The experiment report identifies which control improved usefulness per cost and which controls should be rejected or deferred.
 
 ### Phase 5: Disposable Sandbox Validation
 
 Goal: make validation replay safe enough for richer ASI and future patch guidance.
+
+Status: complete. Phase 5 and Phase 6 no longer need a handoff owner; the next handoff owner starts at Phase 7. Phase 5 did not require waiting for a real non-dry-run GEPA cost win; sandbox validation was the safety blocker for richer replay and future code evolution.
 
 Required behavior:
 
@@ -200,6 +232,13 @@ Completion criteria:
 - Validation feedback can include diff and touched-file evidence.
 - Failed validation leaves the real workspace untouched.
 - GEPA can use richer command output as ASI without direct production mutation.
+
+Implemented behavior:
+
+- Approved validation creates `.tmp/validation-runs/<id>/workspace`.
+- The sandbox copy excludes `.git`, `.venv`, `.tmp`, caches, and recursive report outputs.
+- The report captures stdout, stderr, exit code, duration, touched files, and diff artifacts.
+- Sandbox changes are never applied back to the real workspace automatically.
 
 ### Phase 6: Human Feedback Learning
 
@@ -229,6 +268,10 @@ Completion criteria:
 - Promotion reports compare baseline vs evolved vs GEPA candidates.
 - Human labels affect future retrieval and candidate scoring.
 - Promotion remains manual.
+- `rewrite-promotion` emits explicit merge/specialize/reject_duplicate draft artifacts without updating the registry.
+- Validation sandbox diff/touched-file evidence is retained as ASI for later phases.
+
+Status: complete.
 
 ### Phase 7: Safe Code-Evolution Research
 

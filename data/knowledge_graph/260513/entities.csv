@@ -1,0 +1,5 @@
+id,kind,label,properties
+skill:test-failure-repair,skill,test-failure-repair,{}
+task:27ef8d58840869,task,给 Python CLI 项目补 pytest，并修复导入路径导致的测试失败,{}
+tool:pytest,tool,pytest,{}
+trace:t001,trace,T001,"{'outcome': 'success', 'source': 'trace', 'success': True}"

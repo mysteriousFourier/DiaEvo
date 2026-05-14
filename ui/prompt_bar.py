@@ -10,21 +10,22 @@ except ImportError:  # pragma: no cover - Windows is the primary target.
     msvcrt = None
 
 COMMANDS = [
-    ("/ingest", "Load data/sample_traces.jsonl"),
-    ("/mine", "Run mining pipeline"),
-    ("/recommend", "Recommend skills for a task"),
-    ("/generate", "Generate candidate SKILL.md"),
-    ("/verify", "Verify candidate skill"),
-    ("/demo", "Run full MVP demo"),
-    ("/feedback", "Fold tool events into traces"),
-    ("/tools", "List local tool schemas"),
-    ("/tool", "Run a local tool with JSON args"),
-    ("/model", "Set DEEPSEEK_MODEL for this project"),
-    ("/baseurl", "Set DEEPSEEK_BASE_URL for this project"),
-    ("/key", "Set DEEPSEEK_API_KEY for this project"),
-    ("/home", "Redraw dashboard"),
-    ("/help", "Show local commands"),
-    ("/exit", "Quit"),
+    ("/ingest", "导入 data/sample_traces.jsonl"),
+    ("/mine", "运行挖掘流程"),
+    ("/kg", "打开可编辑知识图谱"),
+    ("/recommend", "按任务推荐技能"),
+    ("/generate", "生成候选 SKILL.md"),
+    ("/verify", "验证候选技能"),
+    ("/demo", "运行完整 MVP 演示"),
+    ("/feedback", "将工具事件回灌为轨迹"),
+    ("/tools", "列出本地工具 schema"),
+    ("/tool", "用 JSON 参数运行本地工具"),
+    ("/model", "设置本项目的 DEEPSEEK_MODEL"),
+    ("/baseurl", "设置本项目的 DEEPSEEK_BASE_URL"),
+    ("/key", "设置本项目的 DEEPSEEK_API_KEY"),
+    ("/home", "重绘仪表盘"),
+    ("/help", "显示本地命令"),
+    ("/exit", "退出"),
 ]
 COMMAND_NAMES = tuple(name for name, _ in COMMANDS)
 COMMAND_MENU_PAGE_SIZE = 9
@@ -109,7 +110,7 @@ def render_prompt_line(value: str = "") -> str:
 
 
 def render_footer() -> str:
-    return f"  {DIM}Enter runs command or selected menu {GLYPHS['dot']} Ctrl+J newline {GLYPHS['dot']} ? for shortcuts{RESET}"
+    return f"  {DIM}Enter 运行命令或当前菜单项 {GLYPHS['dot']} Ctrl+J 换行 {GLYPHS['dot']} ? 查看快捷键{RESET}"
 
 
 def render_command_menu(value: str, selected_index: int = 0) -> str:

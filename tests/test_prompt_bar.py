@@ -6,12 +6,19 @@ def test_slash_menu_scrolls_past_first_page() -> None:
     lines = menu.splitlines()
 
     assert len(lines) == prompt_bar.COMMAND_MENU_PAGE_SIZE
-    assert "/ingest" not in menu
-    assert "/baseurl" in lines[-1]
+    assert "/kg" in menu
+    assert "/exit" not in menu
 
 
 def test_submit_can_select_command_after_first_page() -> None:
-    assert prompt_bar._submit_value("/", selected_index=14) == "/exit"
+    assert prompt_bar._submit_value("/", selected_index=len(prompt_bar.COMMANDS) - 1) == "/exit"
+
+
+def test_kg_is_single_user_facing_command() -> None:
+    names = [name for name, _ in prompt_bar.COMMANDS]
+
+    assert "/kg" in names
+    assert not any(name.startswith("/kg-") for name in names)
 
 
 def test_menu_window_returns_to_top_after_last_selection() -> None:
