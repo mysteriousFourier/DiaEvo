@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import difflib
 import fnmatch
@@ -18,10 +18,9 @@ from urllib.parse import quote_plus, urlparse
 from urllib.request import Request, urlopen
 
 from .knowledge_graph import answer_kg
-from .paths import PROJECT_ROOT
+from .paths import DIAEVO_DIR, WORKSPACE_ROOT
 
-WORKSPACE_ROOT = PROJECT_ROOT.resolve()
-DEFAULT_EVENT_LOG = PROJECT_ROOT / ".skillminer" / "tool_events.jsonl"
+DEFAULT_EVENT_LOG = DIAEVO_DIR / "tool_events.jsonl"
 MAX_TEXT_BYTES = 240_000
 MAX_LOG_STRING = 2_000
 
@@ -415,7 +414,7 @@ def _fetch_url(url: str, max_bytes: int) -> dict[str, Any]:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"}:
         raise ToolError("web tools only support http and https URLs")
-    request = Request(url, headers={"User-Agent": "SkillMiner/0.1"})
+    request = Request(url, headers={"User-Agent": "diaevo/0.1"})
     try:
         with urlopen(request, timeout=20) as response:
             data = response.read(max_bytes + 1)

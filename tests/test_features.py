@@ -1,4 +1,4 @@
-from skillminer.features import FeatureStore, cosine, tokenize
+﻿from diaevo.features import FeatureStore, cosine, tokenize
 
 
 def test_tokenize_keeps_chinese_bigrams_and_ascii_terms():

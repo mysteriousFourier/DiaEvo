@@ -3,7 +3,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from .paths import PROJECT_ROOT
+from .paths import INSTALL_ROOT, WORKSPACE_ROOT
 
 
 def _strip_quotes(value: str) -> str:
@@ -15,7 +15,9 @@ def _strip_quotes(value: str) -> str:
 
 def load_env(path: str | Path | None = None, override: bool = False) -> dict[str, str]:
     """Load a small dotenv file without adding a runtime dependency."""
-    target = Path(path) if path else PROJECT_ROOT / ".env"
+    target = Path(path) if path else WORKSPACE_ROOT / ".env"
+    if path is None and not target.exists():
+        target = INSTALL_ROOT / ".env"
     loaded: dict[str, str] = {}
     if not target.exists():
         return loaded
@@ -40,7 +42,8 @@ def load_env(path: str | Path | None = None, override: bool = False) -> dict[str
 
 def write_env_value(key: str, value: str, path: str | Path | None = None) -> None:
     """Update or append a single dotenv key while preserving unrelated lines."""
-    target = Path(path) if path else PROJECT_ROOT / ".env"
+    target = Path(path) if path else WORKSPACE_ROOT / ".env"
+    target.parent.mkdir(parents=True, exist_ok=True)
     lines = target.read_text(encoding="utf-8").splitlines() if target.exists() else []
     updated = False
     output: list[str] = []

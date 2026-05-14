@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import os
 import io
@@ -212,7 +212,7 @@ def _import_gepa_stack() -> dict[str, Any]:
     except ImportError as exc:
         raise GEPAUnavailableError(
             "GEPA dependency is not installed. Install the optional GEPA/LiteLLM stack before running "
-            "`skillminer evaluate-gepa` without `--dry-run`."
+            "`DiaEvo evaluate-gepa` without `--dry-run`."
         ) from exc
     return {
         "EngineConfig": EngineConfig,
@@ -459,7 +459,7 @@ def _run_sparse_judge(
             "verdict": "skipped",
         }
     prompt = (
-        "Judge whether this draft SkillMiner skill candidate should continue GEPA optimization. "
+        "Judge whether this draft DiaEvo skill candidate should continue GEPA optimization. "
         "Return compact JSON with keys verdict, reason. Use verdict continue or reject.\n\n"
         f"Uncertainty reasons: {', '.join(reasons)}\n"
         f"Scores: {scored.get('side_info', {}).get('scores', {})}\n"
@@ -777,7 +777,7 @@ def _experiment_row_from_report_parts(
 
 def _build_objective(cluster: dict[str, Any]) -> str:
     return (
-        "Optimize structured SKILL.md sections for a SkillMiner candidate. "
+        "Optimize structured SKILL.md sections for a DiaEvo candidate. "
         "Improve held-out discoverability and reuse while preserving verifier safety, workspace boundaries, "
         "manual validation, and manual promotion. Do not invent unsupported tools or credentials."
     )

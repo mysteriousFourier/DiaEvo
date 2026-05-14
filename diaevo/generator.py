@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 from pathlib import Path
@@ -159,10 +159,10 @@ def build_skill_markdown(cluster: dict[str, Any]) -> str:
         "",
         "## Verification Suggestions",
         "",
-        "- 在考虑 promotion 前运行 `skillminer verify --skill <candidate-dir>`。",
+        "- 在考虑 promotion 前运行 `DiaEvo verify --skill <candidate-dir>`。",
         "- 优先使用从轨迹中挖掘出的最接近验证命令。",
         "- 确认候选技能包含 frontmatter、边界清晰的适用范围、恢复建议，且没有 credential 或 dangerous-command pattern。",
-        "- 使用后通过 `skillminer ingest` 或 `feedback` 回灌工具事件，让推荐和挖掘报告学习结果。",
+        "- 使用后通过 `DiaEvo ingest` 或 `feedback` 回灌工具事件，让推荐和挖掘报告学习结果。",
         "",
         "## Safety Constraints",
         "",

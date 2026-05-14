@@ -1,4 +1,4 @@
-"""SkillMiner MVP package."""
+﻿"""DiaEvo MVP package."""
 
 __all__ = ["__version__"]
 

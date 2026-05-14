@@ -1,6 +1,6 @@
-from skillminer.ingest import ingest_traces
-from skillminer.miner import mine
-from skillminer.recommender import recommend
+﻿from diaevo.ingest import ingest_traces
+from diaevo.miner import mine
+from diaevo.recommender import recommend
 
 
 def test_recommendation_penalizes_high_risk_plugin():

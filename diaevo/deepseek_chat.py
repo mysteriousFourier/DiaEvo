@@ -9,9 +9,12 @@ from dataclasses import dataclass
 from typing import Any
 
 from .env import load_env
+from ui.output_policy import print_assistant, sanitize_no_emoji
+from ui.progress import status
 
 
 Message = dict[str, Any]
+NO_EMOJI_SYSTEM_RULE = "Do not use emoji in any user-facing text, code, comments, lists, or tool explanations."
 
 
 @dataclass(slots=True)
@@ -106,17 +109,19 @@ def extract_assistant_text(response: dict[str, Any]) -> str:
     message = choices[0].get("message") or {}
     content = message.get("content")
     if isinstance(content, str):
-        return content
+        return sanitize_no_emoji(content)
     if isinstance(content, list):
         parts = [item.get("text", "") for item in content if isinstance(item, dict)]
-        return "".join(parts)
-    return str(content or "")
+        return sanitize_no_emoji("".join(parts))
+    return sanitize_no_emoji(str(content or ""))
 
 
 def chat_once(prompt: str, system: str, config: DeepSeekConfig) -> tuple[str, dict[str, Any]]:
     messages: list[Message] = []
     if system:
-        messages.append({"role": "system", "content": system})
+        messages.append({"role": "system", "content": f"{system}\n\n{NO_EMOJI_SYSTEM_RULE}"})
+    else:
+        messages.append({"role": "system", "content": NO_EMOJI_SYSTEM_RULE})
     messages.append({"role": "user", "content": prompt})
     response = chat_completion(messages, config)
     return extract_assistant_text(response), response
@@ -125,7 +130,9 @@ def chat_once(prompt: str, system: str, config: DeepSeekConfig) -> tuple[str, di
 def interactive_chat(system: str, config: DeepSeekConfig) -> int:
     messages: list[Message] = []
     if system:
-        messages.append({"role": "system", "content": system})
+        messages.append({"role": "system", "content": f"{system}\n\n{NO_EMOJI_SYSTEM_RULE}"})
+    else:
+        messages.append({"role": "system", "content": NO_EMOJI_SYSTEM_RULE})
     print("DeepSeek chat-test. Type /exit to quit.")
     while True:
         try:
@@ -138,10 +145,12 @@ def interactive_chat(system: str, config: DeepSeekConfig) -> int:
         if prompt in {"/exit", "/quit"}:
             return 0
         messages.append({"role": "user", "content": prompt})
-        response = chat_completion(messages, config)
+        with status("正在请求模型"):
+            response = chat_completion(messages, config)
         answer = extract_assistant_text(response)
         messages.append({"role": "assistant", "content": answer})
-        print(f"\nassistant> {answer}")
+        print("\nassistant>")
+        print_assistant(answer)
 
 
 def run_chat_test(
@@ -165,8 +174,9 @@ def run_chat_test(
     )
     if interactive:
         return interactive_chat(system, config)
-    answer, response = chat_once(prompt, system, config)
-    print(answer)
+    with status("正在请求模型"):
+        answer, response = chat_once(prompt, system, config)
+    print_assistant(answer)
     usage = response.get("usage")
     if usage:
         print(f"\nusage: {json.dumps(usage, ensure_ascii=False, sort_keys=True)}", file=sys.stderr)

@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import re
 import shutil
@@ -7,9 +7,9 @@ import unicodedata
 import os
 from pathlib import Path
 
-from skillminer.paths import PROJECT_ROOT, REPORTS_DIR
-from skillminer.env import load_env
-from skillminer.storage import read_json, write_json
+from diaevo.paths import DIAEVO_DIR, WORKSPACE_ROOT, REPORTS_DIR
+from diaevo.env import load_env
+from diaevo.storage import read_json, write_json
 
 ESC = "\033["
 DIM = f"{ESC}2m"
@@ -184,37 +184,36 @@ def render_logo_card() -> str:
     width = min(max(72, _term_width() - 4), 144)
     left_width = 38
     column_gap = "   "
-    right_width = width - left_width - len(column_gap) - 2
-    title = f"{BLUE}{BOLD}SkillMiner{RESET} {DIM}v0.1.0{RESET}"
+    right_width = width - left_width - len(column_gap)
+    title = f"{BLUE}{BOLD}DiaEvo{RESET} {DIM}v0.1.0{RESET}"
     left = [
         "",
         f"{BOLD}Welcome back!{RESET}",
         "",
         *whale_lines(),
         f"{DIM}{_truncate(model_name, left_width - 18)} {GLYPHS['dot']} Skill Mining{RESET}",
-        f"{DIM}{_truncate(str(PROJECT_ROOT), left_width - 2)}{RESET}",
+        f"{DIM}{_truncate(str(WORKSPACE_ROOT), left_width - 2)}{RESET}",
+        title,
+        "",
     ]
     feed = _feed_lines(ingest, mining, recommendations)
     height = max(len(left), len(feed), 10)
 
-    lines = [_frame_line(GLYPHS["tl"], GLYPHS["tr"], width, title)]
+    lines = []
     for index in range(height):
         left_text = left[index] if index < len(left) else ""
         right_text = feed[index] if index < len(feed) else ""
         lines.append(
-            f"{BLUE}{GLYPHS['v']}{RESET}{_pad(left_text, left_width, align='center')}"
-            f"{column_gap}{_pad(_fit(right_text, right_width), right_width)}{BLUE}{GLYPHS['v']}{RESET}"
+            f"{_pad(left_text, left_width, align='center')}"
+            f"{column_gap}{_pad(_fit(right_text, right_width), right_width)}"
         )
-    lines.append(_frame_line(GLYPHS["bl"], GLYPHS["br"], width))
     return "\n".join(lines)
 
 
 def render_prompt_box() -> str:
     width = min(max(72, _term_width() - 4), 144)
     lines = [
-        f"{DIM}{GLYPHS['h'] * width}{RESET}",
-        f"{GLYPHS['v']} {GLYPHS['prompt']} {' ' * (width - 4)}{GLYPHS['v']}",
-        f"{DIM}{GLYPHS['h'] * width}{RESET}",
+        f"{GLYPHS['prompt']} {' ' * max(0, width - 2)}",
         f"  {DIM}? for shortcuts{RESET}",
     ]
     return "\n".join(lines)
@@ -225,16 +224,16 @@ def render_home() -> str:
 
 
 def trust_state_path() -> Path:
-    return PROJECT_ROOT / ".skillminer" / "trust.json"
+    return DIAEVO_DIR / "trust.json"
 
 
 def has_trusted_workspace() -> bool:
     state = read_json(trust_state_path(), default={}) or {}
-    return state.get("trusted") is True and state.get("path") == str(PROJECT_ROOT)
+    return state.get("trusted") is True and state.get("path") == str(WORKSPACE_ROOT)
 
 
 def save_trusted_workspace() -> None:
-    write_json(trust_state_path(), {"trusted": True, "path": str(PROJECT_ROOT)})
+    write_json(trust_state_path(), {"trusted": True, "path": str(WORKSPACE_ROOT)})
 
 
 def render_trust_dialog(selected: int = 1) -> str:
@@ -242,13 +241,13 @@ def render_trust_dialog(selected: int = 1) -> str:
     body_width = width - 4
     title = f"{BLUE}Accessing workspace:{RESET}"
     paragraphs = [
-        str(PROJECT_ROOT),
+        str(WORKSPACE_ROOT),
         "",
         "Quick safety check: Is this a project you created or one you trust? "
         "(Like your own code, a well-known open source project, or work from your team). "
         "If not, take a moment to review what's in this folder first.",
         "",
-        "SkillMiner can read project traces, generate candidate skills, and run local verification commands here.",
+        "DiaEvo can read project traces, generate candidate skills, and run local verification commands here.",
         "",
         "Security guide",
         "",

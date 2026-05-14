@@ -1,9 +1,9 @@
-from pathlib import Path
+﻿from pathlib import Path
 import shutil
 
-from skillminer import evolution
-from skillminer.promotion import label_promotion, promote, queue_promotion, rewrite_promotion
-from skillminer.storage import read_json
+from diaevo import evolution
+from diaevo.promotion import label_promotion, promote, queue_promotion, rewrite_promotion
+from diaevo.storage import read_json
 
 
 def _write_promotable_skill(root: Path) -> None:

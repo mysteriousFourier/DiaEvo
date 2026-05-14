@@ -100,12 +100,11 @@ def render_prompt_line(value: str = "") -> str:
     width = min(max(72, _term_width() - 4), 144)
     inner_width = width - 2
     value_lines = value.split("\n") or [""]
-    rendered = [f"{DIM}{GLYPHS['h'] * width}{RESET}"]
+    rendered = []
     for index, line in enumerate(value_lines):
         prefix = f"{GLYPHS['prompt']} " if index == 0 else "  "
         visible_line = _highlight_command_line(line) if index == 0 else line
         rendered.append(_fit(f"{prefix}{visible_line}", inner_width))
-    rendered.append(f"{DIM}{GLYPHS['h'] * width}{RESET}")
     return "\n".join(rendered)
 
 
@@ -153,7 +152,7 @@ def render_prompt_state(value: str = "", selected_index: int = 0) -> str:
 def _cursor_to_input(rendered_lines: int, value: str) -> str:
     value_lines = value.split("\n") or [""]
     last_line = value_lines[-1]
-    lines_below_input = max(0, rendered_lines - 1 - len(value_lines))
+    lines_below_input = max(0, rendered_lines - len(value_lines))
     prefix = f"{GLYPHS['prompt']} " if len(value_lines) == 1 else "  "
     right_moves = _display_width(f"{prefix}{last_line}")
     return f"\033[{lines_below_input}A\r\033[{right_moves}C"
@@ -161,7 +160,7 @@ def _cursor_to_input(rendered_lines: int, value: str) -> str:
 
 def _cursor_to_bottom(rendered_lines: int, value: str) -> str:
     value_lines = value.split("\n") or [""]
-    lines_below_input = max(0, rendered_lines - 1 - len(value_lines))
+    lines_below_input = max(0, rendered_lines - len(value_lines))
     return f"\033[{lines_below_input}B\r"
 
 

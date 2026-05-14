@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 from .evolution import record_promotion_feedback
-from .paths import CANDIDATE_SKILLS_DIR, DATA_DIR, PROJECT_ROOT, REPORTS_DIR, ensure_project_dirs
+from .paths import CANDIDATE_SKILLS_DIR, DATA_DIR, WORKSPACE_ROOT, REPORTS_DIR, ensure_project_dirs
 from .quality import collect_skill_texts, extract_skill_sections, nearest_duplicate
 from .storage import read_json, write_json
 from .verifier import parse_frontmatter, verify_skill
@@ -54,10 +54,10 @@ def _skill_dir(value: str | Path) -> Path:
     if target.is_file():
         target = target.parent
     if not target.is_absolute():
-        target = PROJECT_ROOT / target
+        target = WORKSPACE_ROOT / target
     resolved = target.resolve(strict=False)
     try:
-        resolved.relative_to(PROJECT_ROOT.resolve())
+        resolved.relative_to(WORKSPACE_ROOT.resolve())
     except ValueError as exc:
         raise ValueError(f"skill path is outside workspace: {value}") from exc
     return resolved
@@ -434,10 +434,10 @@ def _section_text(value: Any) -> str:
 def _rewrite_output_dir(queue_id: str, output_dir: str | Path | None = None) -> Path:
     target = Path(output_dir) if output_dir else CANDIDATE_SKILLS_DIR / "_rewrites" / queue_id
     if not target.is_absolute():
-        target = PROJECT_ROOT / target
+        target = WORKSPACE_ROOT / target
     resolved = target.resolve(strict=False)
     try:
-        resolved.relative_to(PROJECT_ROOT.resolve())
+        resolved.relative_to(WORKSPACE_ROOT.resolve())
     except ValueError as exc:
         raise ValueError(f"rewrite output path is outside workspace: {output_dir}") from exc
     resolved.mkdir(parents=True, exist_ok=True)

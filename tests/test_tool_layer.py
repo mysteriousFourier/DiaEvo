@@ -1,6 +1,6 @@
-from pathlib import Path
+﻿from pathlib import Path
 
-from skillminer.tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, resolve_workspace_path, tool_schemas
+from diaevo.tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, resolve_workspace_path, tool_schemas
 
 
 def test_tool_schemas_mark_gated_tools():
@@ -30,7 +30,7 @@ def test_read_file_executes_and_logs(tmp_path):
     )
     assert result["status"] == "ok"
     assert result["path"] == "README.md"
-    assert "SkillMiner" in result["content"]
+    assert "DiaEvo" in result["content"]
     assert log_path.exists()
     assert '"tool": "read_file"' in log_path.read_text(encoding="utf-8")
 

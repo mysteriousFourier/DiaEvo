@@ -1,10 +1,10 @@
-# 挖掘快照 260513
+﻿# 挖掘快照 260513
 
-本文件夹是 SkillMiner 从任务轨迹中导出的可读挖掘证据包，用于直观看到聚类、关联规则、频繁序列、覆盖缺口和图边。
+本文件夹是 DiaEvo 从任务轨迹中导出的可读挖掘证据包，用于直观看到聚类、关联规则、频繁序列、覆盖缺口和图边。
 
 ## 摘要
 
-- 轨迹来源：`D:\codex\skillminer\data\processed_traces.jsonl`
+- 轨迹来源：`data/processed_traces.jsonl`
 - 轨迹数量：`25`
 - 特征数量：`406`
 - 聚类数量：`4`
@@ -22,7 +22,7 @@
 ## 文件说明
 
 - `clusters.md` / `clusters.csv`：任务簇、代表任务、关键词、工具、覆盖缺口和失败率。
-- `association_rules.md` / `association_rules.csv`：从轨迹挖掘出的 trace-to-skill 规则，包含支持度、置信度和提升度。
+- `association_rules.md` / `association_rules.csv`：从轨迹挖掘出的“轨迹到技能”规则，包含支持度、置信度和提升度。
 - `frequent_sequences.md` / `frequent_sequences.csv`：反复出现的工具调用子序列。
 - `skill_coverage_gaps.md` / `skill_coverage_gaps.csv`：适合生成或演化候选技能的簇。
 - `graph_edges.csv`：trace-skill-tool 共现图边，可用于图可视化。

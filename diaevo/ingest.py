@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 from collections import Counter, defaultdict
@@ -6,11 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from .models import PluginRecord, SkillRecord, TraceRecord
-from .paths import DATA_DIR, PROJECT_ROOT, REPORTS_DIR, ensure_project_dirs
+from .paths import DATA_DIR, DIAEVO_DIR, REPORTS_DIR, ensure_project_dirs
 from .storage import read_json, read_jsonl, write_json, write_jsonl
 
 
-DEFAULT_TOOL_EVENTS_PATH = PROJECT_ROOT / ".skillminer" / "tool_events.jsonl"
+DEFAULT_TOOL_EVENTS_PATH = DIAEVO_DIR / "tool_events.jsonl"
 
 
 def load_traces(path: str | Path) -> list[TraceRecord]:

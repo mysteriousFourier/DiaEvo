@@ -1,7 +1,7 @@
-from skillminer.association_rules import mine_association_rules
-from skillminer.clustering import cluster_traces
-from skillminer.ingest import ingest_traces, load_traces
-from skillminer.sequence_mining import mine_frequent_sequences
+﻿from diaevo.association_rules import mine_association_rules
+from diaevo.clustering import cluster_traces
+from diaevo.ingest import ingest_traces, load_traces
+from diaevo.sequence_mining import mine_frequent_sequences
 
 
 def test_mining_pipeline_finds_clusters_rules_and_sequences():

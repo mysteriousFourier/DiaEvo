@@ -1558,7 +1558,7 @@ wheels = [
 ]
 
 [[package]]
-name = "skillminer"
+name = "diaevo"
 version = "0.1.0"
 source = { editable = "." }
 

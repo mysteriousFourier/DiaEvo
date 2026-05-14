@@ -1,8 +1,8 @@
-from pathlib import Path
+﻿from pathlib import Path
 
-from skillminer.evolution import evolve_skill, pareto_frontier, render_candidate_skill
-from skillminer.ingest import ingest_traces
-from skillminer.miner import mine
+from diaevo.evolution import evolve_skill, pareto_frontier, render_candidate_skill
+from diaevo.ingest import ingest_traces
+from diaevo.miner import mine
 
 
 def test_evolve_skill_writes_verified_candidate(tmp_path):
@@ -48,7 +48,7 @@ def test_render_candidate_includes_required_sections():
 
 
 def test_pareto_frontier_keeps_non_dominated_candidates():
-    from skillminer.evolution import CandidateEval
+    from diaevo.evolution import CandidateEval
 
     def item(name: str, verifier: float, evidence: float, safety: float) -> CandidateEval:
         return CandidateEval(

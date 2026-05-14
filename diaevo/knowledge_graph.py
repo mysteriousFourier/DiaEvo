@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 import hashlib
@@ -1225,7 +1225,7 @@ def _graph_vector_index_payload(
             }
         )
     return {
-        "schema": "skillminer.kg_graph_vector_index.v1",
+        "schema": "diaevo.kg_graph_vector_index.v1",
         "backend": "local_tfidf",
         "document_count": len(documents),
         "vocabulary_size": len(store.vocabulary) if store else 0,
@@ -1367,7 +1367,7 @@ def _graph_visualization_html(
     ]
     payload_json = json.dumps(
         {
-            "schema": "skillminer.kg_editor.v1",
+            "schema": "diaevo.kg_editor.v1",
             "date": stamp,
             "entities": nodes,
             "triples": links,
@@ -1532,7 +1532,7 @@ def _graph_visualization_html(
   </main>
   <script>
     const initial = {payload_json};
-    const draftKey = 'skillminer-kg-editor-' + initial.date;
+    const draftKey = 'DiaEvo-kg-editor-' + initial.date;
     let nodes = structuredClone(initial.entities);
     let links = structuredClone(initial.triples);
     let claims = structuredClone(initial.claims || []);
@@ -1734,7 +1734,7 @@ def _graph_visualization_html(
     }}
     function currentEdit() {{
       return {{
-        schema: 'skillminer.kg_editor.v1',
+        schema: 'diaevo.kg_editor.v1',
         exported_at: new Date().toISOString(),
         entities: nodes.map(node => ({{ id: node.id, kind: node.kind, label: node.label, properties: node.properties || {{}}, created_at: node.created_at || '' }})),
         triples: links.map(edge => ({{ id: edgeId(edge), subject: edge.source, predicate: edge.relation, object: edge.target, confidence: edge.confidence, status: edge.status || 'accepted', source_type: edge.source_type || 'manual_edit', evidence: edge.evidence || [], properties: edge.properties || {{}}, created_at: edge.created_at || '', applied_at: edge.applied_at || '' }})),
@@ -1764,10 +1764,10 @@ def _graph_visualization_html(
       const url = URL.createObjectURL(blob);
       const link = document.createElement('a');
       link.href = url;
-      link.download = 'skillminer_kg_edit_' + initial.date + '.json';
+      link.download = 'DiaEvo_kg_edit_' + initial.date + '.json';
       link.click();
       URL.revokeObjectURL(url);
-      setStatus('已导出编辑 JSON。写回项目：.\\\\skillminer.ps1 kg --apply-edit <json路径> --approve');
+      setStatus('已导出编辑 JSON。写回项目：.\\\\diaevo.ps1 kg --apply-edit <json路径> --approve');
     }}
     function escapeHtml(value) {{
       return String(value || '').replace(/[&<>"']/g, char => ({{'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}}[char]));
@@ -1874,7 +1874,7 @@ def export_kg_snapshot(
         [
             f"# 知识图谱快照 {stamp}",
             "",
-            "本文件夹是已审核 SkillMiner 知识图谱的可读导出，只包含 active KG 中 accepted 的事实和证据。",
+            "本文件夹是已审核 DiaEvo 知识图谱的可读导出，只包含 active KG 中 accepted 的事实和证据。",
             "",
             "## 摘要",
             "",
@@ -1942,8 +1942,8 @@ def apply_kg_edit(
     data = read_json(target, default={})
     if not isinstance(data, dict):
         raise ValueError(f"KG edit file must be a JSON object: {target}")
-    if data.get("schema") != "skillminer.kg_editor.v1":
-        raise ValueError("KG edit file schema must be skillminer.kg_editor.v1")
+    if data.get("schema") != "diaevo.kg_editor.v1":
+        raise ValueError("KG edit file schema must be diaevo.kg_editor.v1")
     entities = [item for item in _safe_list(data.get("entities")) if isinstance(item, dict)]
     triples = [item for item in _safe_list(data.get("triples")) if isinstance(item, dict)]
     claims = [item for item in _safe_list(data.get("claims")) if isinstance(item, dict)]

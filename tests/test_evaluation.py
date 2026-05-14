@@ -1,5 +1,5 @@
-from skillminer.evaluation import baseline_report, deterministic_trace_split, precision_at_k, reciprocal_rank
-from skillminer.ingest import load_traces
+﻿from diaevo.evaluation import baseline_report, deterministic_trace_split, precision_at_k, reciprocal_rank
+from diaevo.ingest import load_traces
 
 
 def test_ranking_metrics():

@@ -4,11 +4,11 @@ import shlex
 import getpass
 from typing import Callable
 
-from skillminer.cli import main as cli_main
-from skillminer.deepseek_chat import chat_completion, config_from_env, extract_assistant_text
-from skillminer.env import write_env_value
-from skillminer.tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
-from skillminer.tool_chat import (
+from diaevo.cli import main as cli_main
+from diaevo.deepseek_chat import chat_completion, config_from_env, extract_assistant_text
+from diaevo.env import write_env_value
+from diaevo.tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
+from diaevo.tool_chat import (
     assistant_message_for_history,
     chat_tool_schemas,
     extract_assistant_message,
@@ -17,11 +17,14 @@ from skillminer.tool_chat import (
 )
 
 from .cli_style import maybe_show_trust_dialog
+from .output_policy import print_assistant, print_status
 from .prompt_bar import is_command_input, read_prompt
+from .progress import status
 from .terminal_home import render_plain
 from .tool_render import render_tool_result
 
 DEFAULT_RECOMMEND_TASK = "给当前项目生成测试修复 skill"
+HOME_PROMPT_GAP = "\n\n"
 
 HELP_TEXT = """
 命令：
@@ -57,9 +60,11 @@ class ChatConfigState:
 
 
 def _run(argv: list[str]) -> None:
-    code = cli_main(argv)
+    label = argv[0] if argv else "command"
+    with status(f"正在运行 {label}"):
+        code = cli_main(argv)
     if code:
-        print(f"命令退出，状态码：{code}")
+        print_status(f"命令退出，状态码：{code}")
 
 
 def _set_env_command(
@@ -114,6 +119,7 @@ def _dispatch_command(command: str, chat_state: ChatConfigState) -> bool:
         return True
     if name in {"home", "dashboard"}:
         print(render_plain())
+        print(HOME_PROMPT_GAP, end="")
         return True
     if name == "tools":
         for spec in tool_schemas():
@@ -137,12 +143,14 @@ def _dispatch_command(command: str, chat_state: ChatConfigState) -> bool:
         except Exception as exc:
             print(f"tool args error: {exc}")
             return True
-        result = execute_tool(tool_name, tool_args, approve=approve)
+        with status(f"正在执行 {tool_name}"):
+            result = execute_tool(tool_name, tool_args, approve=approve)
         print(render_tool_result(result))
         return True
     if name == "model":
         _set_env_command("DEEPSEEK_MODEL", " ".join(rest), chat_state, prompt="DEEPSEEK_MODEL")
         print(render_plain())
+        print(HOME_PROMPT_GAP, end="")
         return True
     if name == "baseurl":
         _set_env_command("DEEPSEEK_BASE_URL", " ".join(rest), chat_state, prompt="DEEPSEEK_BASE_URL")
@@ -170,7 +178,8 @@ def _execute_model_tool_call(call, *, turn_id: str) -> dict[str, object]:
         print(render_tool_result(result))
         return result
 
-    result = execute_tool(call.name, call.args, turn_id=turn_id)
+    with status(f"正在执行 {call.name}"):
+        result = execute_tool(call.name, call.args, turn_id=turn_id)
     print(render_tool_result(result))
     if result.get("status") != "requires_approval":
         return result
@@ -185,7 +194,8 @@ def _execute_model_tool_call(call, *, turn_id: str) -> dict[str, object]:
         print(render_tool_result(denied))
         return denied
 
-    approved = execute_tool(call.name, call.args, approve=True, turn_id=turn_id)
+    with status(f"正在执行 {call.name}"):
+        approved = execute_tool(call.name, call.args, approve=True, turn_id=turn_id)
     print(render_tool_result(approved))
     return approved
 
@@ -196,7 +206,8 @@ def _chat_turn_with_tools(messages: list[dict[str, object]], chat_state: ChatCon
 
     tools = chat_tool_schemas()
     for round_index in range(MAX_TOOL_ROUNDS):
-        response = chat_completion(messages, chat_state.value, tools=tools)
+        with status("正在请求模型"):
+            response = chat_completion(messages, chat_state.value, tools=tools)
         message = extract_assistant_message(response)
         calls = requested_tool_calls(message)
         if not calls:
@@ -220,22 +231,24 @@ def main() -> int:
         return 1
 
     print(render_plain())
+    print(HOME_PROMPT_GAP, end="")
     messages = [
         {
             "role": "system",
             "content": (
-                "你是 SkillMiner 的终端助手。SkillMiner 用任务轨迹挖掘 Agent SKILL.md 工作流，"
+                "你是 DiaEvo 的终端助手。DiaEvo 用任务轨迹挖掘 Agent SKILL.md 工作流，"
                 "用于归纳可复用操作模式、推荐已有技能、生成候选技能草稿并执行本地验证。"
                 "请优先使用中文回答；如果用户明确使用其他语言，再切换到用户语言。"
                 "回答要简洁、可执行，不要编造不存在的命令。"
+                "不要在任何对话、代码、注释、列表或工具说明中使用 emoji。"
                 "当前交互式斜杠命令包括：/ingest、/mine、/kg、/recommend <task>、"
                 "/generate <cluster-id>、/verify <cluster-id/path>、/demo、/tools、/tool、/model <name>、"
                 "/baseurl <url>、/key <api-key>、/home、/help、/exit。"
                 "你可以通过工具调用请求 list_files、read_file、write_file、edit_file、delete_file、apply_patch、run_shell、web_search 或 web_fetch。"
                 "不要自行选择知识图谱约束回答；严格 KG 回答是用户手动模式，只有用户运行 answer-kg --strict 或明确要求 KG 严格回答时才使用。"
                 "需要审批的工具会先显示预览，只有用户同意后才会执行。"
-                "脚本式 PowerShell 启动器是 .\\skillminer.ps1，例如 .\\skillminer.ps1 demo "
-                "或 .\\skillminer.ps1 chat-test --interactive。"
+                "脚本式入口是 diaevo，例如 diaevo demo "
+                "或 diaevo chat-test --interactive。"
             ),
         }
     ]
@@ -262,4 +275,4 @@ def main() -> int:
             print(f"chat error: {exc}")
             del messages[history_len:]
             continue
-        print(answer)
+        print_assistant(answer)

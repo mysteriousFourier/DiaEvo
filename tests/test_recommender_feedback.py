@@ -1,7 +1,7 @@
-import json
+﻿import json
 
-from skillminer import recommender
-from skillminer.recommender import recommend
+from diaevo import recommender
+from diaevo.recommender import recommend
 
 
 def test_recommendation_reports_human_feedback_signal(tmp_path, monkeypatch):

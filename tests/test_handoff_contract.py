@@ -1,22 +1,21 @@
 from pathlib import Path
 
 
-def test_handoff_records_chinese_first_language_rule() -> None:
-    text = Path("docs/HANDOFF.md").read_text(encoding="utf-8")
+def test_public_docs_record_chinese_first_language_rule() -> None:
+    text = Path("README.md").read_text(encoding="utf-8") + "\n" + Path("docs/DESIGN.md").read_text(encoding="utf-8")
 
-    assert "Must-Read Language Rule" in text
-    assert "user-facing content must be Chinese by default" in text
-    assert "Treat any new English user-facing text as a bug" in text
+    assert "默认中文优先" in text
+    assert "用户可见内容" in text
+    assert "禁止使用 emoji" in text
 
 
-def test_handoff_records_phase5_ready_after_phase4_dry_run_gate() -> None:
-    handoff = Path("docs/HANDOFF.md").read_text(encoding="utf-8")
-    advanced = Path("docs/HANDOFF_ADVANCED_SKILL_EVOLUTION.md").read_text(encoding="utf-8")
+def test_public_docs_record_current_phase_and_sandbox_boundary() -> None:
+    readme = Path("README.md").read_text(encoding="utf-8")
+    design = Path("docs/DESIGN.md").read_text(encoding="utf-8")
     loop = Path("docs/AUTONOMOUS_EVOLUTION_LOOP.md").read_text(encoding="utf-8")
 
-    combined = "\n".join([handoff, advanced, loop])
-    assert "Phase 4 dry-run/reporting gate 已完成，Phase 5 可以开始" in combined
+    combined = "\n".join([readme, design, loop])
+    assert "Phase 6 人工反馈学习已完成，Phase 7 安全代码演化研究已开始" in combined
     assert "outputs/reports/gepa_phase4_experiments.json" in combined
-    assert "dry_run=true" in combined
     assert "safety_false_negative_rate == 0.0" in combined
     assert ".tmp/validation-runs/<id>" in combined

@@ -1,6 +1,6 @@
-# 知识图谱快照 260513
+﻿# 知识图谱快照 260513
 
-本文件夹是已审核 SkillMiner 知识图谱的可读导出，只包含 active KG 中 accepted 的事实和证据。
+本文件夹是已审核 DiaEvo 知识图谱的可读导出，只包含 active KG 中 accepted 的事实和证据。
 
 ## 摘要
 

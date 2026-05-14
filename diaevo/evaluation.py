@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import tempfile
 from collections import Counter
@@ -85,27 +85,27 @@ REFERENCE_CORPUS_NOTES = [
     {
         "source": "BAGEL",
         "pattern": "guided exploration can bootstrap useful agent behavior from trajectory evidence",
-        "skillminer_mapping": "treat tool_events and mined traces as early exploration evidence before generating candidates",
+        "DiaEvo_mapping": "treat tool_events and mined traces as early exploration evidence before generating candidates",
     },
     {
         "source": "SkillWeaver",
         "pattern": "self-improving agents discover and reuse skills from repeated task workflows",
-        "skillminer_mapping": "cluster tasks, mine tool paths, generate candidate skills, and measure later reuse",
+        "DiaEvo_mapping": "cluster tasks, mine tool paths, generate candidate skills, and measure later reuse",
     },
     {
         "source": "CASCADE",
         "pattern": "skill creation is cumulative and should use outcome feedback across iterations",
-        "skillminer_mapping": "record verifier and recommendation metrics before promoting any generated candidate",
+        "DiaEvo_mapping": "record verifier and recommendation metrics before promoting any generated candidate",
     },
     {
         "source": "Trial and Error / ETO",
         "pattern": "failures are useful contrastive evidence for optimizing future trajectories",
-        "skillminer_mapping": "include failure hotspots, retry pressure, and safety regression cases in the baseline",
+        "DiaEvo_mapping": "include failure hotspots, retry pressure, and safety regression cases in the baseline",
     },
     {
         "source": "GC-DPG, GraphRAG, KG-guided RAG, hallucination review",
         "pattern": "graph constraints and verification reduce unsupported or unsafe generations",
-        "skillminer_mapping": "keep generated candidates behind static verification and human promotion review",
+        "DiaEvo_mapping": "keep generated candidates behind static verification and human promotion review",
     },
 ]
 
@@ -914,7 +914,7 @@ def compare_baseline_vs_evolved_candidates(mine_report: dict[str, Any], evolutio
         baseline_text = baseline_by_cluster.get(cluster_id, "")
         baseline_verify: dict[str, Any] = {}
         if baseline_text:
-            with tempfile.TemporaryDirectory(prefix="skillminer-baseline-cmp-") as tmp_dir:
+            with tempfile.TemporaryDirectory(prefix="DiaEvo-baseline-cmp-") as tmp_dir:
                 candidate_dir = Path(tmp_dir) / cluster_id
                 candidate_dir.mkdir(parents=True, exist_ok=True)
                 (candidate_dir / "SKILL.md").write_text(baseline_text, encoding="utf-8")
@@ -971,7 +971,7 @@ def evaluate_candidates(mine_report: dict[str, Any], duplicate_threshold: float 
     generated_passes = 0
     generated_count = 0
     if generated_texts:
-        with tempfile.TemporaryDirectory(prefix="skillminer-eval-") as tmp_dir:
+        with tempfile.TemporaryDirectory(prefix="DiaEvo-eval-") as tmp_dir:
             root = Path(tmp_dir)
             for item in generated_texts:
                 name = item.name
@@ -1079,7 +1079,7 @@ def _safety_case_text(case: dict[str, Any]) -> str:
 def evaluate_safety_regressions() -> dict[str, Any]:
     false_negatives: list[dict[str, Any]] = []
     case_results: list[dict[str, Any]] = []
-    with tempfile.TemporaryDirectory(prefix="skillminer-safety-eval-") as tmp_dir:
+    with tempfile.TemporaryDirectory(prefix="DiaEvo-safety-eval-") as tmp_dir:
         root = Path(tmp_dir)
         for case in SAFETY_REGRESSION_CASES:
             case_dir = root / str(case["name"])

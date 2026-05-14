@@ -1,8 +1,8 @@
-from pathlib import Path
+﻿from pathlib import Path
 
-from skillminer.cli import build_parser
-from skillminer.mining_snapshot import export_mining_snapshot
-from skillminer.storage import read_json
+from diaevo.cli import build_parser
+from diaevo.mining_snapshot import export_mining_snapshot
+from diaevo.storage import read_json
 
 
 def test_export_mining_snapshot_writes_human_readable_files(tmp_path):

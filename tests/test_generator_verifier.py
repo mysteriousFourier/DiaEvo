@@ -1,9 +1,9 @@
-from pathlib import Path
+﻿from pathlib import Path
 
-from skillminer.generator import generate_skill
-from skillminer.ingest import ingest_traces
-from skillminer.miner import mine
-from skillminer.verifier import verify_skill
+from diaevo.generator import generate_skill
+from diaevo.ingest import ingest_traces
+from diaevo.miner import mine
+from diaevo.verifier import verify_skill
 
 
 def test_generate_and_verify_candidate_skill():

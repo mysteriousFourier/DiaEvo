@@ -1,10 +1,10 @@
-from pathlib import Path
+﻿from pathlib import Path
 
 import pytest
 
-from skillminer.cli import build_parser
-import skillminer.gepa_adapter as gepa_adapter
-from skillminer.gepa_adapter import (
+from diaevo.cli import build_parser
+import diaevo.gepa_adapter as gepa_adapter
+from diaevo.gepa_adapter import (
     GEPAUnavailableError,
     _cheap_gate_result,
     _filter_memory,
@@ -12,11 +12,11 @@ from skillminer.gepa_adapter import (
     evaluate_gepa,
     evaluate_gepa_phase4,
 )
-from skillminer.evolution import CandidateEval
-from skillminer.ingest import ingest_traces
-from skillminer.miner import mine
-from skillminer.paths import REPORTS_DIR
-from skillminer.storage import read_json
+from diaevo.evolution import CandidateEval
+from diaevo.ingest import ingest_traces
+from diaevo.miner import mine
+from diaevo.paths import REPORTS_DIR
+from diaevo.storage import read_json
 
 
 def _cluster_id(tmp_path):

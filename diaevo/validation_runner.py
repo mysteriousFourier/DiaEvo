@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import difflib
 import hashlib
@@ -11,7 +11,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-from .paths import PROJECT_ROOT, REPORTS_DIR, ensure_project_dirs
+from .paths import WORKSPACE_ROOT, REPORTS_DIR, ensure_project_dirs
 from .storage import read_json, write_json
 from .tool_layer import resolve_workspace_path
 from .verifier import DANGEROUS_PATTERNS, verify_skill
@@ -39,7 +39,7 @@ INSTALL_PATTERNS = [
 MAX_OUTPUT_CHARS = 20_000
 MAX_DIFF_FILE_BYTES = 200_000
 MAX_DIFF_CHARS = 200_000
-VALIDATION_RUNS_DIR = PROJECT_ROOT / ".tmp" / "validation-runs"
+VALIDATION_RUNS_DIR = WORKSPACE_ROOT / ".tmp" / "validation-runs"
 
 EXCLUDED_COPY_NAMES = {
     ".git",
@@ -109,7 +109,7 @@ def _copy_ignore(directory: str, names: list[str]) -> set[str]:
     ignored: set[str] = set()
     for name in names:
         candidate = current / name
-        parts = _relative_parts(candidate, PROJECT_ROOT.resolve())
+        parts = _relative_parts(candidate, WORKSPACE_ROOT.resolve())
         if _should_exclude_name(name) or _is_excluded_path(parts):
             ignored.add(name)
     return ignored
@@ -126,13 +126,13 @@ def _create_sandbox(skill_dir: Path) -> dict[str, Path | str]:
     artifacts = run_dir / "artifacts"
     artifacts.mkdir(parents=True, exist_ok=False)
     shutil.copytree(
-        PROJECT_ROOT,
+        WORKSPACE_ROOT,
         workspace,
         ignore=_copy_ignore,
         symlinks=True,
         ignore_dangling_symlinks=True,
     )
-    sandbox_skill_dir = workspace / skill_dir.relative_to(PROJECT_ROOT.resolve())
+    sandbox_skill_dir = workspace / skill_dir.relative_to(WORKSPACE_ROOT.resolve())
     if not sandbox_skill_dir.exists() and skill_dir.exists():
         sandbox_skill_dir.parent.mkdir(parents=True, exist_ok=True)
         shutil.copytree(skill_dir, sandbox_skill_dir, ignore=_copy_skill_ignore)
@@ -277,9 +277,9 @@ def _subprocess_command(command: str) -> tuple[str | list[str], bool]:
         return command, True
     script = (
         f"& {{ {command} }}; "
-        "$skillminerSuccess = $?; "
+        "$DiaEvoSuccess = $?; "
         "if ($null -ne $LASTEXITCODE) { exit $LASTEXITCODE }; "
-        "if ($skillminerSuccess) { exit 0 } else { exit 1 }"
+        "if ($DiaEvoSuccess) { exit 0 } else { exit 1 }"
     )
     return ["powershell", "-NoProfile", "-Command", script], False
 
@@ -289,10 +289,10 @@ def _skill_dir(value: str | Path) -> Path:
     if target.is_file():
         target = target.parent
     if not target.is_absolute():
-        target = PROJECT_ROOT / target
+        target = WORKSPACE_ROOT / target
     resolved = target.resolve(strict=False)
     try:
-        resolved.relative_to(PROJECT_ROOT.resolve())
+        resolved.relative_to(WORKSPACE_ROOT.resolve())
     except ValueError as exc:
         raise ValueError(f"skill path is outside workspace: {value}") from exc
     return resolved

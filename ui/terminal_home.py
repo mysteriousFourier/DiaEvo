@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import sys
 
@@ -11,8 +11,8 @@ if hasattr(sys.stderr, "reconfigure"):
 
 
 def _load_reports() -> tuple[dict, dict, dict]:
-    from skillminer.paths import REPORTS_DIR
-    from skillminer.storage import read_json
+    from diaevo.paths import REPORTS_DIR
+    from diaevo.storage import read_json
 
     ingest = read_json(REPORTS_DIR / "ingest_summary.json", default={}) or {}
     mining = read_json(REPORTS_DIR / "mining_report.json", default={}) or {}
@@ -29,6 +29,9 @@ def render_rich() -> bool:
 
 
 def main() -> int:
+    from diaevo.paths import bootstrap_workspace
+
+    bootstrap_workspace()
     if not render_rich():
         print(render_plain())
     return 0

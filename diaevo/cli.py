@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import argparse
 import json
@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from .evaluation import baseline_report
+from .code_evolution import run_code_evolution
 from .evolution import evolve_skill
 from .gepa_adapter import evaluate_gepa, evaluate_gepa_phase4
 from .generator import generate_skill
@@ -23,7 +24,7 @@ from .knowledge_graph import (
 )
 from .miner import mine
 from .mining_snapshot import export_mining_snapshot
-from .paths import DATA_DIR, ensure_project_dirs
+from .paths import DATA_DIR, bootstrap_workspace
 from .promotion import PROMOTION_LABELS, label_promotion, promote, queue_promotion, rewrite_promotion
 from .recommender import recommend
 from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
@@ -54,12 +55,13 @@ PUBLIC_COMMANDS = (
     "evaluate",
     "evaluate-gepa",
     "evaluate-gepa-phase4",
+    "evaluate-code-evolution",
     "tool",
     "chat-test",
 )
 
 
-class SkillMinerArgumentParser(argparse.ArgumentParser):
+class DiaEvoArgumentParser(argparse.ArgumentParser):
     def error(self, message: str) -> None:
         if "invalid choice" in message and "choose from" in message:
             prefix = message.split("(choose from", 1)[0].rstrip()
@@ -78,8 +80,8 @@ def print_json(value: Any) -> None:
 
 
 def build_parser() -> argparse.ArgumentParser:
-    parser = SkillMinerArgumentParser(
-        prog="skillminer",
+    parser = DiaEvoArgumentParser(
+        prog="diaevo",
         description="从任务轨迹中挖掘、推荐、生成和验证 Agent 技能。",
     )
     subparsers = parser.add_subparsers(dest="command", required=False, metavar="command")
@@ -95,7 +97,7 @@ def build_parser() -> argparse.ArgumentParser:
     ingest_parser.add_argument("--input", required=True, help="Input JSONL trace file.")
     ingest_parser.add_argument("--output", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed JSONL output path.")
     ingest_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
-    ingest_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .skillminer/tool_events.jsonl.")
+    ingest_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .diaevo/tool_events.jsonl.")
 
     mine_parser = subparsers.add_parser("mine", help="Run clustering, association, sequence, and graph mining.")
     mine_parser.add_argument("--traces", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
@@ -112,7 +114,7 @@ def build_parser() -> argparse.ArgumentParser:
     snapshot_parser.add_argument("--clusters", type=int, default=None, help="Optional fixed K for K-Means.")
     snapshot_parser.add_argument("--date", default=None, help="Snapshot date as YYMMDD or ISO date; defaults to today.")
     snapshot_parser.add_argument("--output-dir", default=None, help="Optional explicit snapshot output directory.")
-    snapshot_parser.add_argument("--include-tool-events", action="store_true", help="Merge .skillminer/tool_events.jsonl when ingesting input.")
+    snapshot_parser.add_argument("--include-tool-events", action="store_true", help="Merge .diaevo/tool_events.jsonl when ingesting input.")
 
     recommend_parser = subparsers.add_parser("recommend", help="Recommend top-K skills for a task.")
     recommend_parser.add_argument("--task", required=True, help="Task description.")
@@ -257,7 +259,7 @@ def build_parser() -> argparse.ArgumentParser:
     eval_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
     eval_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
     eval_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
-    eval_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .skillminer/tool_events.jsonl.")
+    eval_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .diaevo/tool_events.jsonl.")
     eval_parser.add_argument("--top-k", type=int, default=5, help="Top-K cutoff for recommendation metrics.")
     eval_parser.add_argument(
         "--duplicate-threshold",
@@ -273,7 +275,7 @@ def build_parser() -> argparse.ArgumentParser:
     gepa_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
     gepa_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
     gepa_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
-    gepa_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .skillminer/tool_events.jsonl.")
+    gepa_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .diaevo/tool_events.jsonl.")
     gepa_parser.add_argument("--top-k", type=int, default=3, help="Top-K cutoff for selected-cluster held-out metrics.")
     gepa_parser.add_argument("--env", default=None, help="Path to .env; defaults to project .env.")
     gepa_parser.add_argument("--model", default=None, help="Override DEEPSEEK_MODEL.")
@@ -309,7 +311,7 @@ def build_parser() -> argparse.ArgumentParser:
     phase4_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
     phase4_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
     phase4_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
-    phase4_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .skillminer/tool_events.jsonl.")
+    phase4_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .diaevo/tool_events.jsonl.")
     phase4_parser.add_argument("--top-k", type=int, default=3, help="Top-K cutoff for selected-cluster held-out metrics.")
     phase4_parser.add_argument("--env", default=None, help="Path to .env; defaults to project .env.")
     phase4_parser.add_argument("--model", default=None, help="Override DEEPSEEK_MODEL.")
@@ -321,6 +323,29 @@ def build_parser() -> argparse.ArgumentParser:
     phase4_parser.add_argument("--output-dir", default=None, help="Optional root directory for GEPA candidates.")
     phase4_parser.add_argument("--no-resume", action="store_true", help="Ignore any existing Phase 4 report and rerun all rows.")
 
+    code_evolution_parser = subparsers.add_parser(
+        "evaluate-code-evolution",
+        help="在沙盒副本中评估候选代码 patch 或只输出 Phase 7 patch strategy。",
+    )
+    code_evolution_parser.add_argument("--task", required=True, help="要研究的代码演化任务描述。")
+    code_evolution_parser.add_argument("--patch-file", default=None, help="可选：unified diff patch 文件路径。")
+    code_evolution_parser.add_argument(
+        "--test-command",
+        action="append",
+        default=[],
+        help="验证命令，可重复；默认使用 `python -m pytest -q`。",
+    )
+    code_evolution_parser.add_argument(
+        "--allowed-path",
+        action="append",
+        default=[],
+        help="限制 patch 可修改的工作区路径前缀，可重复。",
+    )
+    code_evolution_parser.add_argument("--approve", action="store_true", help="确认后在 disposable sandbox 中应用 patch 并运行验证。")
+    code_evolution_parser.add_argument("--timeout-sec", type=int, default=60, help="每条验证命令的超时秒数。")
+    code_evolution_parser.add_argument("--network", action="store_true", help="允许验证命令使用网络；默认禁止。")
+    code_evolution_parser.add_argument("--output-dir", default=None, help="可选：报告输出目录。")
+
     tool_parser = subparsers.add_parser("tool", help="Execute one local tool with JSON arguments.")
     tool_parser.add_argument("name", help="Tool name such as list_files or read_file.")
     tool_parser.add_argument("--args", default="{}", help="JSON object passed to the tool.")
@@ -328,7 +353,7 @@ def build_parser() -> argparse.ArgumentParser:
     tool_parser.add_argument("--approve", action="store_true", help="Execute tools that require approval.")
 
     chat_parser = subparsers.add_parser("chat-test", help="Run a simple DeepSeek chat completion test using .env.")
-    chat_parser.add_argument("--prompt", default="用一句话说明 SkillMiner MVP 可以做什么。", help="User prompt.")
+    chat_parser.add_argument("--prompt", default="用一句话说明 DiaEvo MVP 可以做什么。", help="User prompt.")
     chat_parser.add_argument("--system", default="你是用于测试 Agent 技能挖掘 MVP 的简洁中文助手。", help="System prompt.")
     chat_parser.add_argument("--env", default=None, help="Path to .env; defaults to project .env.")
     chat_parser.add_argument("--model", default=None, help="Override DEEPSEEK_MODEL.")
@@ -342,7 +367,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 
 def run_demo(task: str, cluster_id: str = "") -> dict[str, Any]:
-    ensure_project_dirs()
+    bootstrap_workspace()
     ingest_result = ingest_traces(DATA_DIR / "sample_traces.jsonl", DATA_DIR / "processed_traces.jsonl")
     mine_result = mine(DATA_DIR / "processed_traces.jsonl")
     selected_cluster = cluster_id
@@ -368,6 +393,7 @@ def run_demo(task: str, cluster_id: str = "") -> dict[str, Any]:
 
 
 def main(argv: list[str] | None = None) -> int:
+    bootstrap_workspace()
     parser = build_parser()
     args = parser.parse_args(argv)
     try:
@@ -530,6 +556,17 @@ def main(argv: list[str] | None = None) -> int:
                 dry_run=args.dry_run,
                 output_dir=args.output_dir,
                 resume=not args.no_resume,
+            )
+        elif args.command == "evaluate-code-evolution":
+            result = run_code_evolution(
+                task=args.task,
+                patch_file=args.patch_file,
+                test_commands=args.test_command,
+                allowed_paths=args.allowed_path,
+                approve=args.approve,
+                timeout_sec=args.timeout_sec,
+                network=args.network,
+                output_dir=args.output_dir,
             )
         elif args.command == "tool":
             tool_args = parse_tool_args(args.args)

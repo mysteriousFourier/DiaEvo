@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import csv
 from datetime import datetime
@@ -210,7 +210,7 @@ def _readme_text(*, stamp: str, report: dict[str, Any], rows: dict[str, list[dic
     lines = [
         f"# 挖掘快照 {stamp}",
         "",
-        "本文件夹是 SkillMiner 从任务轨迹中导出的可读挖掘证据包，用于直观看到聚类、关联规则、频繁序列、覆盖缺口和图边。",
+        "本文件夹是 DiaEvo 从任务轨迹中导出的可读挖掘证据包，用于直观看到聚类、关联规则、频繁序列、覆盖缺口和图边。",
         "",
         "## 摘要",
         "",

@@ -1,1 +1,1 @@
-"""Terminal UI helpers for SkillMiner."""
+﻿"""Terminal UI helpers for DiaEvo."""

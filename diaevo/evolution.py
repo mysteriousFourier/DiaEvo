@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 import hashlib
 import tempfile
@@ -537,10 +537,10 @@ def _seed_candidate(cluster: dict[str, Any], memory_matches: list[dict[str, Any]
         ),
         "verification_suggestions": "\n".join(
             [
-                "- Run `skillminer verify --skill <candidate-dir>` before queueing promotion.",
-                "- Run `skillminer validate --skill <candidate-dir> --approve` only after reviewing `validation.json`.",
+                "- Run `DiaEvo verify --skill <candidate-dir>` before queueing promotion.",
+                "- Run `DiaEvo validate --skill <candidate-dir> --approve` only after reviewing `validation.json`.",
                 "- Compare the candidate against existing registry skills and merge or specialize if it is near-duplicate.",
-                "- After use, run `skillminer feedback` so tool events become future mining evidence.",
+                "- After use, run `DiaEvo feedback` so tool events become future mining evidence.",
             ]
         ),
         "safety_constraints": "\n".join(
@@ -582,7 +582,7 @@ def _candidate_variants(seed: dict[str, str], cluster: dict[str, Any], budget: i
                 "Inspect the smallest file set indicated by the trace evidence.",
                 "Run or emulate the recurring tool path: " + " -> ".join(f"`{tool}`" for tool in tools[:6]) + ".",
                 "Apply the narrowest workspace-scoped change.",
-                "Record validation output and feed it back into SkillMiner.",
+                "Record validation output and feed it back into DiaEvo.",
             ]
         )
     variants.append(("specialized", specialized))
@@ -722,7 +722,7 @@ def _score_candidate(
     duplicate = nearest_duplicate(markdown, known_texts)
     duplicate_similarity = float(duplicate["similarity"])
     duplicate_name = str(duplicate["nearest"])
-    with tempfile.TemporaryDirectory(prefix="skillminer-evolution-") as tmp:
+    with tempfile.TemporaryDirectory(prefix="DiaEvo-evolution-") as tmp:
         candidate_dir = Path(tmp) / candidate_id
         candidate_dir.mkdir(parents=True, exist_ok=True)
         (candidate_dir / "SKILL.md").write_text(markdown, encoding="utf-8")

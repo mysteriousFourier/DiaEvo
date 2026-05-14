@@ -1,6 +1,6 @@
 import json
 
-from skillminer.tool_chat import (
+from diaevo.tool_chat import (
     assistant_message_for_history,
     chat_tool_schemas,
     requested_tool_calls,
@@ -8,6 +8,7 @@ from skillminer.tool_chat import (
     tool_result_message,
     tool_result_message_for_call,
 )
+from diaevo.deepseek_chat import NO_EMOJI_SYSTEM_RULE, chat_once
 
 
 def test_chat_tool_schemas_are_openai_compatible() -> None:
@@ -98,3 +99,18 @@ def test_summarize_tool_result_has_total_limit() -> None:
 
     assert len(summary) > 100
     assert "<truncated" in summary
+
+
+def test_chat_once_injects_no_emoji_system_rule(monkeypatch) -> None:
+    captured = {}
+
+    def fake_chat_completion(messages, config):
+        captured["messages"] = messages
+        return {"choices": [{"message": {"content": "ok ✅"}}]}
+
+    monkeypatch.setattr("diaevo.deepseek_chat.chat_completion", fake_chat_completion)
+
+    answer, _ = chat_once("hello", "system", object())  # type: ignore[arg-type]
+
+    assert NO_EMOJI_SYSTEM_RULE in captured["messages"][0]["content"]
+    assert answer == "ok "

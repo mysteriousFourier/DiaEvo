@@ -4,13 +4,14 @@ import json
 from typing import Any
 
 from .cli_style import BLUE, DIM, GLYPHS, PURPLE, RESET, _fit, _pad, _term_width
+from .output_policy import sanitize_no_emoji
 
 
 def _preview_lines(value: Any, *, limit: int = 18) -> list[str]:
     if isinstance(value, str):
-        lines = value.splitlines() or [""]
+        lines = sanitize_no_emoji(value).splitlines() or [""]
     else:
-        lines = json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True).splitlines()
+        lines = sanitize_no_emoji(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True)).splitlines()
     if len(lines) > limit:
         return lines[:limit] + [f"... {len(lines) - limit} more lines"]
     return lines
@@ -19,19 +20,19 @@ def _preview_lines(value: Any, *, limit: int = 18) -> list[str]:
 def render_tool_result(result: dict[str, Any]) -> str:
     width = min(max(72, _term_width() - 4), 144)
     body_width = width - 4
-    status = str(result.get("status", "ok"))
-    tool = str(result.get("tool", "tool"))
+    status = sanitize_no_emoji(result.get("status", "ok"))
+    tool = sanitize_no_emoji(result.get("tool", "tool"))
     title = f"{PURPLE}{tool}{RESET} {DIM}{status}{RESET}"
     lines = [f"{BLUE}{GLYPHS['tl']}{GLYPHS['h']} {title}{BLUE}{GLYPHS['h'] * max(0, body_width - len(tool) - len(status) - 2)}{GLYPHS['tr']}{RESET}"]
 
     if status == "requires_approval":
-        message = str(result.get("message") or "approval required")
+        message = sanitize_no_emoji(result.get("message") or "approval required")
         lines.append(f"{BLUE}{GLYPHS['v']}{RESET} {_pad(message, body_width)} {BLUE}{GLYPHS['v']}{RESET}")
         preview = result.get("preview", {})
         for line in _preview_lines(preview):
             lines.append(f"{BLUE}{GLYPHS['v']}{RESET} {_pad(_fit(line, body_width), body_width)} {BLUE}{GLYPHS['v']}{RESET}")
     elif status == "error":
-        error = str(result.get("error") or "unknown error")
+        error = sanitize_no_emoji(result.get("error") or "unknown error")
         lines.append(f"{BLUE}{GLYPHS['v']}{RESET} {_pad(_fit(error, body_width), body_width)} {BLUE}{GLYPHS['v']}{RESET}")
     else:
         shown: Any

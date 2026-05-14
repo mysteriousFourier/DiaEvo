@@ -1,128 +1,130 @@
-# SkillMiner Design
+# DiaEvo 设计说明
 
-## Product Shape
+## 产品形态
 
-SkillMiner is an integrated local CLI workbench for Agent skill operations. Its primary surface is:
+DiaEvo 是一个本地 CLI 工作台，主入口是：
 
 ```powershell
-.\skillminer.ps1
+diaevo
 ```
 
-The command opens an interactive terminal shell when no subcommand is supplied and acts as a scriptable JSON CLI when subcommands are supplied. The same project also exposes `skillminer` and `skillminer-home` console scripts through `pyproject.toml`.
+不带子命令时，它打开交互式终端 shell；带子命令时，它作为脚本化 JSON CLI 使用。`diaevo-home` 用于单独打开终端首页。
 
-SkillMiner combines five roles in one local tool:
+DiaEvo 同时承担五个角色：
 
-1. Interactive DeepSeek-powered terminal assistant.
-2. Approval-gated local tool runner.
-3. Trace and tool-event recorder.
-4. Skill mining, recommendation, generation, verification, validation, and promotion CLI.
-5. Skill self-evolution benchmark and optimizer host.
+1. DeepSeek 驱动的交互式终端助手。
+2. 带审批门的本地工具执行器。
+3. 轨迹和工具事件记录器。
+4. 技能挖掘、推荐、生成、验证、校验和晋升 CLI。
+5. 技能自演化评估和优化宿主。
 
-The design goal is a CLI that improves its skill system from actual use while keeping explicit user approval around risky operations.
+设计目标是让 CLI 能从真实使用中改进自己的技能系统，同时把高风险操作放在清晰的用户审批边界之后。
 
-## Language Policy
+## 语言和终端输出策略
 
-The product is Chinese-first. User-facing content, reports, interactive prompts, visible generated pages, and prompts that steer the Chinese user experience must be written in Chinese by default.
+DiaEvo 默认中文优先。用户可见内容、报告、交互提示、可见页面和引导中文交互的 prompt 都应使用中文。
 
-English is allowed only for compatibility surfaces: code identifiers, CLI command names, JSON field names, external API names, citations, test fixtures, and required `SKILL.md` section headings. If a user-facing output mixes English and Chinese, the English part should have a concrete compatibility reason.
+英文只保留在兼容性表面：代码标识符、CLI 命令名、JSON 字段名、外部 API 名、测试 fixture、论文题名、引用信息，以及 `SKILL.md` 必需章节标题。新增用户可见英文说明时，应能说明具体兼容原因。
 
-## End-To-End Data Flow
+模型输出和工具说明禁止使用 emoji。终端输出策略由 `ui/output_policy.py` 管理：TTY 环境默认用 Rich 渲染 Markdown，非 TTY 或 `DIAEVO_OUTPUT=plain` 时转成纯文本。`ui/progress.py` 提供轻量状态动效，用于模型请求、工具调用和命令执行。
+
+## 端到端数据流
 
 ```text
-user chat / slash command / scriptable CLI
-  -> local tools and skill commands
-  -> .skillminer/tool_events.jsonl + data/*.jsonl traces
+用户聊天 / 斜杠命令 / 脚本命令
+  -> 本地工具和技能命令
+  -> .diaevo/tool_events.jsonl + data/*.jsonl
   -> ingest / feedback
   -> mine
   -> reviewed KG / editable KG workbench
-  -> recommend or generate
+  -> recommend 或 generate
   -> evolve
   -> verify
   -> validate
   -> queue-promotion
-  -> promote
+  -> rewrite-promotion / promote
   -> evaluate
-  -> future runs use updated traces, registry, and evolution memory
+  -> 后续运行使用更新后的轨迹、注册表和演化记忆
 ```
 
-This flow is deliberately conservative. The current system can evolve skill text and registry metadata, but it does not auto-install external skills or mutate production code.
+这条链路刻意保守：当前系统可以演化技能文本、报告和注册表元数据，但不会自动安装外部技能，也不会把优化器生成的代码改动写回真实工作区。
 
-## Architecture
+## 模块职责
 
-| Layer | Files | Responsibility |
+| 层 | 文件 | 职责 |
 | --- | --- | --- |
-| CLI dispatch | `skillminer/cli.py`, `skillminer.ps1`, `skillminer-home.ps1` | Scriptable command surface, default interactive shell entry, UTF-8 and project-local Python setup. |
-| Interactive shell | `ui/interactive_shell.py`, `ui/prompt_bar.py`, `ui/cli_style.py`, `ui/tool_render.py`, `ui/terminal_home.py` | Dashboard, workspace trust, slash menu, prompt input, DeepSeek chat loop, model/base URL/API key commands, tool preview rendering. |
-| Chat bridge | `skillminer/deepseek_chat.py`, `skillminer/tool_chat.py`, `skillminer/env.py` | OpenAI-compatible DeepSeek calls, tool schema conversion, tool result messages, local `.env` loading and updates. |
-| Tool layer | `skillminer/tool_layer.py` | Workspace-bounded file tools, shell/network tools, approval gates, previews, event logging. |
-| Trace model | `skillminer/models.py`, `skillminer/ingest.py`, `skillminer/storage.py` | JSONL parsing, trace normalization, tool event conversion, registry/plugin loading, summary reports. |
-| Mining | `skillminer/features.py`, `skillminer/clustering.py`, `skillminer/association_rules.py`, `skillminer/sequence_mining.py`, `skillminer/skill_graph.py`, `skillminer/miner.py` | TF-IDF, seeded K-Means, association rules, frequent tool sequences, task-skill-tool graph, coverage-gap and generation-entrypoint reports. |
-| Knowledge graph | `skillminer/knowledge_graph.py`, `data/knowledge_graph/` | Reviewable incremental entities, triples, claims, confidence, and evidence paths from traces, tool events, web_search/web_fetch, optional conversation logs, and mining reports. |
-| Recommendation | `skillminer/recommender.py`, `data/recommender_weights.json` | Rank registry and plugin-backed skills with similarity, rules, PageRank, usage, success, coverage, risk, and cost; optional Pareto reranking. |
-| Candidate generation | `skillminer/generator.py` | Render trace-grounded `SKILL.md` drafts from mining clusters. |
-| Verification | `skillminer/verifier.py` | Check frontmatter, required sections, safety patterns, credential patterns, suspicious paths, dependency hints, and validation metadata. |
-| Evolution | `skillminer/evolution.py`, `skillminer/quality.py`, `data/evolution_memory.json` | Local metric/Pareto section optimization, duplicate checks, memory retrieval/update, ASI-style feedback storage. |
-| Validation | `skillminer/validation_runner.py` | Approval-gated `validation.json` command replay with stdout/stderr/exit status captured. |
-| Promotion | `skillminer/promotion.py` | Human-reviewed promotion queue and local registry update gate. |
-| Evaluation | `skillminer/evaluation.py` | Baseline and evolved metrics, held-out split, recommendation metrics, candidate duplicate metrics, safety holdout. |
+| CLI 分发 | `diaevo/cli.py`、`diaevo.ps1`、`diaevo-home.ps1` | 脚本化命令、默认交互入口、UTF-8 和项目本地 Python 设置。 |
+| 交互终端 | `ui/interactive_shell.py`、`ui/prompt_bar.py`、`ui/cli_style.py`、`ui/tool_render.py`、`ui/output_policy.py`、`ui/progress.py` | 仪表盘、可信工作区确认、斜杠菜单、输入框、模型对话、工具预览、Markdown/纯文本渲染、状态动效。 |
+| 聊天桥接 | `diaevo/deepseek_chat.py`、`diaevo/tool_chat.py`、`diaevo/env.py` | OpenAI 兼容 DeepSeek 调用、工具 schema 转换、工具结果消息、本地 `.env` 读取和更新。 |
+| 工具层 | `diaevo/tool_layer.py` | 工作区内文件工具、shell/网络工具、审批预览、事件日志。 |
+| 轨迹模型 | `diaevo/models.py`、`diaevo/ingest.py`、`diaevo/storage.py` | JSONL 解析、轨迹规范化、工具事件转换、注册表和插件元数据加载。 |
+| 挖掘 | `diaevo/features.py`、`diaevo/clustering.py`、`diaevo/association_rules.py`、`diaevo/sequence_mining.py`、`diaevo/skill_graph.py`、`diaevo/miner.py` | TF-IDF、K-Means、关联规则、频繁序列、task-skill-tool 图、覆盖缺口和生成入口。 |
+| 知识图谱 | `diaevo/knowledge_graph.py`、`data/knowledge_graph/` | 从轨迹、工具事件、web 证据、会话日志和挖掘报告生成待审核实体、三元组、声明和证据路径。 |
+| 推荐 | `diaevo/recommender.py`、`data/recommender_weights.json` | 综合相似度、规则、PageRank、使用情况、成功率、覆盖缺口、风险和成本，支持 Pareto rerank。 |
+| 候选生成 | `diaevo/generator.py` | 从挖掘簇渲染有证据支撑的 `SKILL.md` 草稿。 |
+| 静态验证 | `diaevo/verifier.py` | 检查 frontmatter、必需章节、安全模式、凭据模式、可疑路径、依赖提示和 validation 元数据。 |
+| 演化 | `diaevo/evolution.py`、`diaevo/quality.py`、`data/evolution_memory.json` | 本地指标/Pareto 优化、重复检查、记忆检索和 ASI 记录。 |
+| 校验 | `diaevo/validation_runner.py` | 审批后的 `validation.json` 命令在一次性沙盒副本中运行，捕获 stdout/stderr/exit code/duration/touched files/diff。 |
+| 代码演化研究 | `diaevo/code_evolution.py` | Phase 7 patch strategy 和沙盒内候选 patch 评估。 |
+| 晋升 | `diaevo/promotion.py` | 人工晋升队列、审核标签、`rewrite-promotion` 草稿和本地注册表写入门。 |
+| 评估 | `diaevo/evaluation.py`、`diaevo/gepa_adapter.py` | baseline/evolved/held-out/safety 指标、GEPA 可选对比和实验矩阵。 |
 
-## Command Model
+## 命令模型
 
-Commands are intentionally symmetric across script and interactive use.
-
-Scriptable commands:
+脚本化命令包括：
 
 ```text
-ingest, mine, recommend, generate, verify, evolve, validate,
-queue-promotion, promote, kg, answer-kg, demo, home,
-tools, feedback, evaluate, tool, chat-test
+ingest, mine, export-mining-snapshot, recommend, generate, verify, evolve,
+validate, queue-promotion, label-promotion, rewrite-promotion, promote,
+kg, answer-kg, demo, home, tools, feedback, evaluate, evaluate-gepa,
+evaluate-gepa-phase4, evaluate-code-evolution, tool, chat-test
 ```
 
-Interactive slash commands:
+交互式斜杠命令包括：
 
 ```text
 /ingest, /mine, /kg, /recommend, /generate, /verify, /demo, /feedback,
 /tools, /tool, /model, /baseurl, /key, /home, /help, /exit
 ```
 
-The interactive shell sends non-slash text to DeepSeek. The model can request local tools. Tool calls use the same `tool_layer.py` handlers as CLI tool commands, so traces and approval behavior stay consistent.
+非斜杠文本会发送给 DeepSeek。模型可请求本地工具，但工具调用仍使用 `tool_layer.py` 的同一套审批、边界和事件日志逻辑。
 
-## Safety Model
+## 安全模型
 
-Safety is implemented at multiple layers:
+安全边界分布在多层：
 
-- Workspace trust prompt before interactive use.
-- Workspace path boundary checks for file tools.
-- Approval previews for writes, edits, deletes, patches, shell commands, and network tools.
-- Sanitized tool event logging that redacts key/token/secret/password-like fields.
-- Candidate verifier for dangerous commands, credential-like text, parent paths, missing sections, and dependency hints.
-- Validation runner blocks dangerous, install, and network commands unless policy explicitly allows them.
-- Promotion requires manual approval and writes only to `data/skill_registry.json`.
-- KG facts and claims require review before becoming active; pending web_search/web_fetch candidates are not trusted as facts.
-- 严格图谱约束回答是显式的 `answer-kg --strict` 或手动 `kg_answer` 工具开关。面向模型的聊天工具列表隐藏 `kg_answer`，所以 Agent 不能静默选择图谱约束回答。
-- Safety false-negative rate is measured in evaluation and should remain `0.0`.
+- 交互式入口先确认工作区可信。
+- 文件工具必须留在 workspace 内。
+- 写入、编辑、删除、补丁、shell 和网络工具必须先预览并审批。
+- 工具事件日志会清洗 key/token/secret/password 等敏感字段。
+- verifier 检查危险命令、凭据样文本、父级路径、缺失章节和依赖安装提示。
+- validation runner 默认阻止危险、安装和网络命令；审批后也只在沙盒副本中运行。
+- promotion 必须人工审批，只写 `data/skill_registry.json`。
+- KG 候选事实必须审核通过后才进入 active KG。
+- `answer-kg --strict` 和手动 `kg_answer(strict=true)` 才启用严格图谱约束回答，自动聊天工具列表不暴露 `kg_answer`。
+- 评估必须持续监控 `safety_false_negative_rate == 0.0`。
 
-Safety constraints are not a weighted preference in the self-evolution loop. Dangerous candidates are hard failures.
+安全约束不是加权偏好。危险候选是硬失败。
 
-## Current Algorithm Choices
+## 当前算法选择
 
-The MVP stays dependency-free by default:
+当前实现优先低依赖和可复现：
 
-- Standard-library TF-IDF in `features.py`.
-- In-repo seeded K-Means in `clustering.py`.
-- Apriori-style association rule enumeration in `association_rules.py`.
-- PrefixSpan-style subsequence support in `sequence_mining.py`.
-- Lightweight Personalized PageRank in `skill_graph.py`.
-- Reviewable KG construction and graph-vector retrieval in `knowledge_graph.py` using deterministic extraction from structured trace/tool/web/conversation/mining records plus a local TF-IDF sparse index over accepted KG documents.
-- Local metric/Pareto evolution in `evolution.py`.
+- `features.py` 使用标准库 TF-IDF。
+- `clustering.py` 使用仓库内 seeded K-Means。
+- `association_rules.py` 枚举 Apriori 风格关联规则。
+- `sequence_mining.py` 挖掘 PrefixSpan 风格子序列。
+- `skill_graph.py` 实现轻量 Personalized PageRank。
+- `knowledge_graph.py` 使用确定性抽取和本地 TF-IDF 稀疏索引实现 GraphRAG-like 图结构向量检索。
+- `evolution.py` 使用本地指标/Pareto 演化。
 
-Optional heavier dependencies are listed under the `full` extra in `pyproject.toml`, but current commands should run without them.
+`pyproject.toml` 的 `full` extra 保留了更重的可选依赖，但核心命令不依赖它们。Rich 是默认依赖，用于终端 Markdown 渲染。
 
-## Skill Self-Evolution Design
+## 技能自演化设计
 
-The current skill evolution target is structured `SKILL.md` text, not production code.
+当前演化目标是结构化 `SKILL.md` 文本，不是生产代码。
 
-Candidate sections:
+候选章节：
 
 ```text
 When To Use
@@ -133,7 +135,7 @@ Verification Suggestions
 Safety Constraints
 ```
 
-The local optimizer generates variants and scores them using:
+本地优化器使用以下信号评分：
 
 - verifier pass/fail
 - warning cleanliness
@@ -143,87 +145,68 @@ The local optimizer generates variants and scores them using:
 - safety
 - bounded length
 
-Evolution memory stores:
+演化记忆保存成功模板、verifier 错误、validation 结果、重复模式和 promotion 审核模式。这是后续接入 GEPA 的基线和安全脚手架。
 
-- successful templates
-- verifier error patterns
-- validation feedback patterns
-- duplicate patterns
-- promotion review patterns
+## 知识图谱设计
 
-This local implementation is the baseline and scaffold for the later GEPA adapter.
+KG 层与推荐器中的 PageRank 图不同。PageRank 图是推荐特征；KG 是事实、声明、置信度、来源和严格回答的证据层。
 
-## Knowledge Graph Design
+KG v1 是 review-first：
 
-The KG layer is distinct from the recommender's PageRank graph. PageRank remains a ranking feature over task-skill-tool proximity; the KG is the reviewed evidence layer used for facts, claims, confidence, provenance, and optional strict answers.
+- `build-kg-delta` 从结构化来源生成候选。
+- 候选写入 `data/knowledge_graph/review_queue.jsonl`，状态为 `pending`。
+- `review-kg-delta` 标注 `accepted`、`rejected`、`needs_source`、`low_confidence`、`conflict` 或 `stale`。
+- `apply-kg-delta` 只把 accepted 候选写入 `data/knowledge_graph/current/`。
+- `kg` 打开可编辑 HTML 工作台。
+- `kg --apply-edit <json> --approve` 才把编辑写回 active KG。
 
-KG construction v1 is deliberately deterministic and review-first:
+当前检索是“向量召回 + 图扩展 + 证据约束回答”：accepted 实体、三元组和声明会转为 KG 文档，使用本地 TF-IDF 稀疏向量召回种子，再沿 subject-object 关系扩展证据子图。它还不是 dense embedding 或外部 vector DB 后端。
 
-- `build-kg-delta` extracts candidate entities, triples, claims, and evidence paths from traces, tool events, approved web_search/web_fetch results, optional conversation JSONL, and mining reports.
-- Candidates are written to `data/knowledge_graph/review_queue.jsonl` as `pending`.
-- `review-kg-delta` labels candidates as `accepted`, `rejected`, `needs_source`, `low_confidence`, `conflict`, or `stale`.
-- `apply-kg-delta` writes only accepted candidates into `data/knowledge_graph/current/`.
-- `kg` opens the editable KG workbench, where users edit nodes and relations while viewing the graph.
-- The KG workbench can export edit JSON; `kg --apply-edit <json> --approve` writes it back to active KG.
-- Lower-level `build-kg-delta`, `review-kg-delta`, `apply-kg-delta`, and `export-kg-snapshot` remain script/test surfaces, not the main user-facing flow.
+## GEPA 集成边界
 
-Confidence is source-aware. Local traces and validated reports score highest, `web_fetch` evidence scores above `web_search` snippets, and text mentions from conversation logs remain lower-confidence candidates until review. GC-DPG is not the KG construction method; it informs the strict answer constraint: when `answer-kg --strict` or manual `kg_answer(strict=true)` is enabled, responses must use accepted graph-vector evidence subgraphs or return `KG insufficient`.
+GEPA 是可选优化器，应接在当前 evolution/evaluation 接口之后。
 
-当前 KG 检索类型：这是 GraphRAG-like 图结构向量检索。系统把 accepted 实体、三元组和声明转成 KG 文档，使用本地 TF-IDF 稀疏向量索引召回种子，再沿 subject-object 图关系扩展证据子图。当前还不是 dense embedding/vector DB 后端，但已经是“向量召回 + 图扩展 + 证据约束回答”的图向量检索路径。
+DiaEvo 负责：
 
-User-facing mining and KG exports are Chinese-first because the target user and model interaction are Chinese. `SKILL.md` section headings remain English to preserve the verifier and Agent Skills contract, while generated body content is Chinese.
+- 轨迹和工具事件规范化
+- 挖掘和生成入口
+- `SKILL.md` 渲染契约
+- verifier、validation、duplicate 和 safety gate
+- 推荐、评估报告和晋升队列
+- 记忆持久化
 
-## GEPA Integration Boundary
+GEPA 负责：
 
-GEPA should be integrated as an optional optimizer behind the current evolution/evaluation interface.
+- 结构化候选的反思式 mutation
+- 候选池管理
+- Pareto frontier 选择
+- section-aware merge 提议
+- 优化预算控制
 
-SkillMiner owns:
+首个 GEPA 目标是 `SKILL.md` 章节优化。更晚的目标可以包括生成策略、validation 元数据建议、图到技能策略，以及在沙盒稳定后研究 patch guidance 或代码演化。
 
-- traces and tool-event normalization
-- cluster and graph mining
-- generation entrypoint selection
-- verification and validation gates
-- duplicate checks
-- recommendation and evaluation reports
-- promotion queue and human approval
+## 阶段路线图
 
-GEPA should own:
+当前可信检查点：**Phase 6 人工反馈学习已完成，Phase 7 安全代码演化研究已开始**。
 
-- reflective mutation of structured candidates
-- candidate pool management
-- Pareto frontier selection
-- section-aware merge
-- optimization budget handling
-
-The first GEPA target is `SKILL.md` section optimization. Later targets can include generator policy, validation metadata suggestions, graph-to-skill policy, and, only after sandbox replay exists, patch guidance or code evolution research.
-
-## Phase Roadmap
-
-Current source-of-truth checkpoint: **Phase 6 human feedback learning is complete; Phase 7 safe code-evolution research is next**. Older Phase 4/Phase 5-start checkpoint text below is historical.
-
-Phase 6 added the explicit `rewrite-promotion` draft command, which produces merge/specialize/reject_duplicate review artifacts without promotion.
-
-Historical Phase 4/5 checkpoint is obsolete; use the source-of-truth checkpoint above.
-
-| Phase | Engineering target | Main risk to control |
+| 阶段 | 工程目标 | 状态和主要风险 |
 | --- | --- | --- |
-| 0. Integrated CLI | Unified interactive/scriptable tool, tool schemas, event logging, DeepSeek bridge. | Tool execution safety and trace hygiene. |
-| 1. Conservative skill loop | Generate/evolve/verify/validate/queue/promote/evaluate skill candidates. | Candidate safety and manual promotion boundary. |
-| 2. Quality hardening | Held-out metrics, stable overlay gate, actionable duplicate checks, validation feedback memory, promotion reports. | Optimizing verifier compliance instead of usefulness. |
-| 3. GEPA adapter | Optional GEPA section optimizer using SkillMiner evaluator and ASI. | Cost and hallucinated unsupported instructions. |
-| 4. Low-cost APO/GEPA | CTM/EPM memory、CAPO racing、metric inner loop、sparse LLM judge、dry-run matrix reporting。 | dry-run/reporting gate 已完成；真实 non-dry-run cost sweep 是可选后续。 |
-| 5. Disposable sandbox | Clone workspace for validation replay and diff capture. | 已完成；approved validation 在 `.tmp/validation-runs/<id>/workspace` 中运行并捕获 diff/touched files，核心边界是永不自动回写 sandbox 变更。 |
-| 6. Human feedback learning | Add promotion labels, validation artifacts, and rewrite drafts into memory and scoring. | 已完成；主要风险是 premature auto-promotion。 |
-| 7. Code evolution research | Sandbox-only GEPA/gskill-style patch guidance or code mutations. | Applying unreviewed code changes. |
+| 0. 集成 CLI | 统一交互式/脚本化入口、工具 schema、事件日志、DeepSeek bridge。 | 已完成；风险是工具执行安全和轨迹卫生。 |
+| 1. 保守技能循环 | generate/evolve/verify/validate/queue/promote/evaluate。 | 已完成；风险是候选安全和人工晋升边界。 |
+| 2. 质量加固 | held-out 指标、稳定 overlay gate、重复建议、validation/promotion 记忆。 | 已完成；风险是只优化 verifier 合规而非真实有用性。 |
+| 3. GEPA adapter | 可选 GEPA 章节优化器，复用 DiaEvo evaluator 和 ASI。 | 已有 scaffold 和 smoke；风险是成本和幻觉。 |
+| 4. 低成本 APO/GEPA | CTM/EPM memory、CAPO racing、metric inner loop、sparse judge、dry-run matrix。 | dry-run/reporting gate 已完成；真实 non-dry-run cost sweep 是可选后续。 |
+| 5. 一次性沙盒 | 在副本中校验并捕获 diff/touched files。 | 已完成；核心边界是不自动写回真实工作区。 |
+| 6. 人工反馈学习 | promotion labels、validation artifacts、rewrite drafts 进入记忆和评分。 | 已完成；风险是过早自动晋升。 |
+| 7. 代码演化研究 | `evaluate-code-evolution` 的 strategy-only 和 sandbox-only patch 评估。 | 已开始；风险是未经审查应用代码变更。 |
 
-## Success Criteria For The Current Stage
+## 当前阶段成功标准
 
-Before widening scope:
-
-- `python -m pytest -q` passes.
-- `skillminer evaluate --variant evolved` writes stable reports.
-- Safety false-negative rate remains `0.0`.
-- Evolved candidate verifier pass rate does not regress.
-- Duplicate recommendations are actionable.
-- Held-out usefulness improves on the sample corpus without disturbing existing skill ranking.
-- Human promotion remains required.
+- `python -m pytest -q` 通过。
+- `diaevo evaluate --variant evolved` 写出稳定报告。
+- `safety_false_negative_rate == 0.0`。
+- evolved candidate verifier pass rate 不回退。
+- 重复建议可被人工审查和处理。
+- held-out usefulness 在样例语料上不回退。
+- validation 和 code evolution 只在沙盒里执行候选变更。
+- promotion 保持人工审批。

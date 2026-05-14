@@ -1,12 +1,12 @@
-import json
+﻿import json
 import os
 from pathlib import Path
 import shutil
 import sys
 
-from skillminer import evolution
-from skillminer.storage import read_json
-from skillminer.validation_runner import run_validation
+from diaevo import evolution
+from diaevo.storage import read_json
+from diaevo.validation_runner import run_validation
 
 
 def _python_command(args: str) -> str:

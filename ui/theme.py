@@ -1,7 +1,7 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 
-TITLE = "SkillMiner"
+TITLE = "DiaEvo"
 SUBTITLE = "Self-evolving Agent Skill Mining"
 
 COLORS = {

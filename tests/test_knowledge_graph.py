@@ -1,8 +1,8 @@
-import json
+﻿import json
 import pytest
 
-from skillminer.cli import build_parser
-from skillminer.knowledge_graph import (
+from diaevo.cli import build_parser
+from diaevo.knowledge_graph import (
     answer_kg,
     apply_kg_delta,
     build_kg_delta,
@@ -12,9 +12,9 @@ from skillminer.knowledge_graph import (
     review_kg_delta,
     visualize_kg,
 )
-from skillminer.storage import read_json, read_jsonl
-from skillminer.tool_layer import execute_tool, tool_schemas
-from skillminer.tool_chat import chat_tool_schemas
+from diaevo.storage import read_json, read_jsonl
+from diaevo.tool_layer import execute_tool, tool_schemas
+from diaevo.tool_chat import chat_tool_schemas
 
 
 def _write_jsonl(path, records):
@@ -30,7 +30,7 @@ def _sample_trace_path(tmp_path):
             {
                 "id": "T-KG-001",
                 "task": "mine pytest tool usage from traces",
-                "project": {"language": "python", "frameworks": ["pytest"], "files": ["skillminer/cli.py"]},
+                "project": {"language": "python", "frameworks": ["pytest"], "files": ["diaevo/cli.py"]},
                 "tools": ["rg", "pytest"],
                 "commands": ["pytest tests/test_knowledge_graph.py -q"],
                 "outcome": "success",
@@ -251,7 +251,7 @@ def test_export_kg_snapshot_writes_human_readable_files(tmp_path):
     summary = read_json(output_dir / "summary.json")
     assert summary["retrieval_mode"] == "graph_vector_tfidf"
     index = read_json(output_dir / "graph_vector_index.json")
-    assert index["schema"] == "skillminer.kg_graph_vector_index.v1"
+    assert index["schema"] == "diaevo.kg_graph_vector_index.v1"
     assert index["documents"][0]["sparse_vector"]
     assert "图结构向量检索" in (output_dir / "graph_vector_retrieval.md").read_text(encoding="utf-8")
 
@@ -289,7 +289,7 @@ def test_kg_workbench_can_preview_and_apply_exported_edit(tmp_path):
     edit_path.write_text(
         json.dumps(
             {
-                "schema": "skillminer.kg_editor.v1",
+                "schema": "diaevo.kg_editor.v1",
                 "entities": [
                     {"id": "trace:manual", "kind": "trace", "label": "手工轨迹", "properties": {}},
                     {"id": "tool:manual", "kind": "tool", "label": "手工工具", "properties": {}},

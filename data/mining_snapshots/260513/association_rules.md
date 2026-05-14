@@ -1,7 +1,7 @@
 # 关联规则
 
-| antecedent | consequent | support | confidence | lift |
-| --- | --- | --- | --- | --- |
+| 前件 | 后件 | 支持度 | 置信度 | 提升度 |
+| --- | --- | ---: | ---: | ---: |
 | framework:argparse | skill:cli-polish | 2 | 1.0000 | 11.5000 |
 | tag:cli | skill:cli-polish | 2 | 1.0000 | 11.5000 |
 | ext:py + framework:argparse | skill:cli-polish | 2 | 1.0000 | 11.5000 |
