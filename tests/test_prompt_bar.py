@@ -39,6 +39,28 @@ def test_prompt_line_has_no_horizontal_rules() -> None:
     assert rendered.startswith(cli_style.GLYPHS["prompt"])
 
 
+def test_prompt_line_wraps_long_input_without_truncating(monkeypatch) -> None:
+    monkeypatch.setattr(prompt_bar, "_term_width", lambda: 80)
+    value = "x" * 160
+
+    rendered = prompt_bar.render_prompt_line(value)
+
+    assert "..." not in rendered
+    assert rendered.count("x") == len(value)
+    assert len(rendered.splitlines()) > 1
+
+
+def test_prompt_cursor_uses_wrapped_input_line_count(monkeypatch) -> None:
+    monkeypatch.setattr(prompt_bar, "_term_width", lambda: 80)
+    value = "x" * 160
+    prompt_line_count = len(prompt_bar.render_prompt_line(value).splitlines())
+    rendered_lines = prompt_line_count + 2
+
+    cursor = prompt_bar._cursor_to_input(rendered_lines, value)
+
+    assert cursor.startswith("\033[2A")
+
+
 def test_home_card_has_no_outer_border() -> None:
     rendered = cli_style.render_logo_card()
 

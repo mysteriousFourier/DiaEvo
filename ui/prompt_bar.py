@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from .cli_style import PURPLE, DIM, GLYPHS, RESET, _display_width, _fit, _term_width
+from .cli_style import PURPLE, DIM, GLYPHS, RESET, _char_width, _display_width, _fit, _term_width
 
 try:
     import msvcrt
@@ -96,15 +96,51 @@ def _highlight_command_line(line: str) -> str:
     return f"{PURPLE}{name}{RESET}{line[len(name):]}"
 
 
-def render_prompt_line(value: str = "") -> str:
+def _prompt_inner_width() -> int:
     width = min(max(72, _term_width() - 4), 144)
-    inner_width = width - 2
+    return width - 2
+
+
+def _wrap_plain_line(text: str, width: int) -> list[str]:
+    if width <= 0:
+        return [text]
+
+    lines: list[str] = []
+    current: list[str] = []
+    used = 0
+    for char in text:
+        char_width = _char_width(char)
+        if current and used + char_width > width:
+            lines.append("".join(current))
+            current = [char]
+            used = char_width
+            continue
+        current.append(char)
+        used += char_width
+    lines.append("".join(current))
+    return lines
+
+
+def _wrapped_prompt_lines(value: str = "") -> list[tuple[str, str, bool]]:
+    inner_width = _prompt_inner_width()
     value_lines = value.split("\n") or [""]
-    rendered = []
+    rendered: list[tuple[str, str, bool]] = []
     for index, line in enumerate(value_lines):
-        prefix = f"{GLYPHS['prompt']} " if index == 0 else "  "
-        visible_line = _highlight_command_line(line) if index == 0 else line
-        rendered.append(_fit(f"{prefix}{visible_line}", inner_width))
+        first_prefix = f"{GLYPHS['prompt']} " if index == 0 else "  "
+        content_width = max(1, inner_width - _display_width(first_prefix))
+        wrapped = _wrap_plain_line(line, content_width)
+        for wrapped_index, segment in enumerate(wrapped):
+            is_first_input_line = index == 0 and wrapped_index == 0
+            prefix = first_prefix if wrapped_index == 0 else "  "
+            rendered.append((prefix, segment, is_first_input_line))
+    return rendered
+
+
+def render_prompt_line(value: str = "") -> str:
+    rendered = []
+    for prefix, line, is_first_input_line in _wrapped_prompt_lines(value):
+        visible_line = _highlight_command_line(line) if is_first_input_line else line
+        rendered.append(f"{prefix}{visible_line}")
     return "\n".join(rendered)
 
 
@@ -150,17 +186,16 @@ def render_prompt_state(value: str = "", selected_index: int = 0) -> str:
 
 
 def _cursor_to_input(rendered_lines: int, value: str) -> str:
-    value_lines = value.split("\n") or [""]
-    last_line = value_lines[-1]
-    lines_below_input = max(0, rendered_lines - len(value_lines))
-    prefix = f"{GLYPHS['prompt']} " if len(value_lines) == 1 else "  "
+    input_lines = _wrapped_prompt_lines(value)
+    prefix, last_line, _ = input_lines[-1]
+    lines_below_input = max(0, rendered_lines - len(input_lines))
     right_moves = _display_width(f"{prefix}{last_line}")
     return f"\033[{lines_below_input}A\r\033[{right_moves}C"
 
 
 def _cursor_to_bottom(rendered_lines: int, value: str) -> str:
-    value_lines = value.split("\n") or [""]
-    lines_below_input = max(0, rendered_lines - len(value_lines))
+    input_line_count = len(_wrapped_prompt_lines(value))
+    lines_below_input = max(0, rendered_lines - input_line_count)
     return f"\033[{lines_below_input}B\r"
 
 
