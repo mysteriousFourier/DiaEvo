@@ -17,6 +17,7 @@ docs/FINAL_PROJECT_REPORT.md
 docs/HANDOFF*.md
 data/processed_traces.jsonl
 data/evolution_memory.json
+data/knowledge_graph/current/graph_visualization.html
 outputs/reports/*.json
 outputs/reports/heldout/
 outputs/reports/gepa/

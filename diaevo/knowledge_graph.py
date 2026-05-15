@@ -4,11 +4,17 @@ import csv
 import hashlib
 import html
 import json
+import os
 import re
+import socket
+import subprocess
+import sys
+import time
+import webbrowser
 from collections import Counter
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .features import FeatureStore
 from .ingest import DEFAULT_TOOL_EVENTS_PATH, load_traces
@@ -21,6 +27,8 @@ KG_ROOT = DATA_DIR / "knowledge_graph"
 KG_CURRENT_DIR = KG_ROOT / "current"
 KG_DELTA_DIR = KG_ROOT / "deltas"
 KG_REVIEW_QUEUE_PATH = KG_ROOT / "review_queue.jsonl"
+KG_WORKBENCH_HOST = "127.0.0.1"
+KG_WORKBENCH_PORT = 8765
 
 KG_REVIEW_STATUSES = {
     "pending",
@@ -37,6 +45,8 @@ VALIDATED_CONFIDENCE = 0.9
 WEB_FETCH_CONFIDENCE = 0.75
 WEB_SEARCH_CONFIDENCE = 0.55
 TEXT_MENTION_CONFIDENCE = 0.6
+
+_KG_SERVER_PROCESS: subprocess.Popen[Any] | None = None
 
 
 def _now() -> str:
@@ -94,6 +104,74 @@ def _write_csv(path: Path, fieldnames: list[str], rows: list[dict[str, Any]]) ->
         writer.writeheader()
         for row in rows:
             writer.writerow({field: row.get(field, "") for field in fieldnames})
+
+
+def _find_available_port(host: str, preferred: int) -> int:
+    for port in [preferred, *range(preferred + 1, preferred + 50)]:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            if sock.connect_ex((host, port)) != 0:
+                return port
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+        sock.bind((host, 0))
+        return int(sock.getsockname()[1])
+
+
+def _wait_for_http_server(host: str, port: int, timeout_sec: float = 2.0) -> bool:
+    deadline = time.monotonic() + timeout_sec
+    while time.monotonic() < deadline:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            sock.settimeout(0.2)
+            if sock.connect_ex((host, port)) == 0:
+                return True
+        time.sleep(0.05)
+    return False
+
+
+def _serve_directory_url(
+    root: Path,
+    relative_path: str,
+    *,
+    host: str = KG_WORKBENCH_HOST,
+    port: int | None = None,
+) -> dict[str, Any]:
+    global _KG_SERVER_PROCESS
+    selected_port = _find_available_port(host, port or KG_WORKBENCH_PORT)
+    root.mkdir(parents=True, exist_ok=True)
+    cmd = [
+        sys.executable,
+        "-m",
+        "http.server",
+        str(selected_port),
+        "--bind",
+        host,
+        "--directory",
+        str(root),
+    ]
+    kwargs: dict[str, Any] = {
+        "stdout": subprocess.DEVNULL,
+        "stderr": subprocess.DEVNULL,
+        "stdin": subprocess.DEVNULL,
+    }
+    if os.name == "nt":
+        kwargs["creationflags"] = subprocess.CREATE_NEW_PROCESS_GROUP | subprocess.DETACHED_PROCESS
+    else:
+        kwargs["start_new_session"] = True
+    _KG_SERVER_PROCESS = subprocess.Popen(cmd, **kwargs)
+    ready = _wait_for_http_server(host, selected_port)
+    quoted_path = "/".join(part for part in relative_path.replace("\\", "/").split("/") if part)
+    return {
+        "url": f"http://{host}:{selected_port}/{quoted_path}",
+        "host": host,
+        "port": selected_port,
+        "server_pid": _KG_SERVER_PROCESS.pid,
+        "server_ready": ready,
+        "served_dir": str(root),
+    }
+
+
+def _open_browser(url: str) -> bool:
+    return bool(webbrowser.open(url, new=2))
 
 
 class KGBuilder:
@@ -1338,7 +1416,11 @@ def _graph_visualization_html(
     labels: dict[str, str],
     claims: list[dict[str, Any]] | None = None,
     evidence: list[dict[str, Any]] | None = None,
+    title: str | None = None,
+    export_id: str | None = None,
 ) -> str:
+    page_title = title or f"可编辑知识图谱 {stamp}"
+    payload_id = export_id or stamp
     nodes = [
         {
             "id": str(item.get("id", "")),
@@ -1368,7 +1450,7 @@ def _graph_visualization_html(
     payload_json = json.dumps(
         {
             "schema": "diaevo.kg_editor.v1",
-            "date": stamp,
+            "date": payload_id,
             "entities": nodes,
             "triples": links,
             "claims": claims or [],
@@ -1376,13 +1458,12 @@ def _graph_visualization_html(
         },
         ensure_ascii=False,
     )
-    title = f"可编辑知识图谱 {stamp}"
     return f"""<!DOCTYPE html>
 <html lang="zh-CN">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>{html.escape(title)}</title>
+  <title>{html.escape(page_title)}</title>
   <style>
     :root {{
       --bg: #f7f5f0;
@@ -1472,7 +1553,7 @@ def _graph_visualization_html(
 </head>
 <body>
   <header>
-    <h1>{html.escape(title)}</h1>
+    <h1>{html.escape(page_title)}</h1>
     <div class="meta">已审核实体 {len(nodes)} 个，已审核关系 {len(links)} 条。点击节点或关系即可编辑，拖拽节点可调整布局。</div>
   </header>
   <main>
@@ -1919,6 +2000,62 @@ def export_kg_snapshot(
     return summary
 
 
+def _write_current_graph_workbench(
+    *,
+    date: str | None = None,
+    current_dir: str | Path | None = None,
+) -> dict[str, Any]:
+    stamp = _date_stamp(date)
+    current_target = Path(current_dir) if current_dir else KG_CURRENT_DIR
+    current_target.mkdir(parents=True, exist_ok=True)
+    entities, triples, claims, evidence = _load_current_records(current_target)
+    labels = _entity_labels(entities)
+    visualization_path = current_target / "graph_visualization.html"
+    visualization_path.write_text(
+        _graph_visualization_html(
+            stamp=stamp,
+            entities=entities,
+            triples=triples,
+            labels=labels,
+            title="总体可编辑知识图谱",
+            export_id="current",
+        ),
+        encoding="utf-8",
+    )
+    return {
+        "status": "ok",
+        "date": stamp,
+        "current_dir": str(current_target),
+        "visualization_path": str(visualization_path),
+        "entity_count": len(entities),
+        "triple_count": len(triples),
+        "claim_count": len(claims),
+        "evidence_path_count": len(evidence),
+        "message": "已生成 active KG 的总体可编辑知识图谱 HTML；未生成日期快照。",
+    }
+
+
+def _open_current_graph_workbench(
+    *,
+    date: str | None = None,
+    current_dir: str | Path | None = None,
+    port: int | None = None,
+    open_browser: bool = True,
+    browser_opener: Callable[[str], bool] = _open_browser,
+    server_starter: Callable[..., dict[str, Any]] = _serve_directory_url,
+) -> dict[str, Any]:
+    summary = _write_current_graph_workbench(date=date, current_dir=current_dir)
+    current_target = Path(summary["current_dir"])
+    server = server_starter(current_target, "graph_visualization.html", port=port)
+    opened = browser_opener(str(server["url"])) if open_browser else False
+    return {
+        **summary,
+        **server,
+        "opened": opened,
+        "message": "已在本地端口打开 active KG 的总体可编辑知识图谱工作台；未生成日期快照。",
+    }
+
+
 def visualize_kg(
     *,
     date: str | None = None,
@@ -2023,7 +2160,20 @@ def kg_workbench(
     current_dir: str | Path | None = None,
     edit_path: str | Path | None = None,
     approve: bool = False,
+    port: int | None = None,
+    open_browser: bool = True,
+    browser_opener: Callable[[str], bool] = _open_browser,
+    server_starter: Callable[..., dict[str, Any]] = _serve_directory_url,
 ) -> dict[str, Any]:
     if edit_path:
         return apply_kg_edit(edit_path, current_dir=current_dir, approve=approve)
-    return visualize_kg(date=date, output_dir=output_dir, current_dir=current_dir)
+    if output_dir:
+        return visualize_kg(date=date, output_dir=output_dir, current_dir=current_dir)
+    return _open_current_graph_workbench(
+        date=date,
+        current_dir=current_dir,
+        port=port,
+        open_browser=open_browser,
+        browser_opener=browser_opener,
+        server_starter=server_starter,
+    )

@@ -225,9 +225,11 @@ def build_parser() -> argparse.ArgumentParser:
     kg_apply_parser.add_argument("--current-dir", default=None, help="Optional active KG directory.")
 
     kg_parser = subparsers.add_parser("kg", help="打开可编辑知识图谱工作台，或应用工作台导出的编辑 JSON。")
-    kg_parser.add_argument("--date", default=None, help="工作台导出日期，格式 YYMMDD 或 ISO 日期；默认今天。")
-    kg_parser.add_argument("--output-dir", default=None, help="可选：指定工作台导出目录。")
+    kg_parser.add_argument("--date", default=None, help="工作台显示日期，格式 YYMMDD 或 ISO 日期；默认今天。")
+    kg_parser.add_argument("--output-dir", default=None, help="兼容选项：指定后才生成独立 HTML 导出目录。")
     kg_parser.add_argument("--current-dir", default=None, help="可选：指定 active KG 目录。")
+    kg_parser.add_argument("--port", type=int, default=None, help="可选：绑定本地工作台端口；默认 8765，冲突时自动顺延。")
+    kg_parser.add_argument("--no-open", action="store_true", help="只输出本地 URL，不自动打开浏览器。")
     kg_parser.add_argument("--apply-edit", default=None, help="应用知识图谱编辑器导出的 JSON 文件。")
     kg_parser.add_argument("--approve", action="store_true", help="确认把导出的 KG 编辑 JSON 写回 active KG。")
 
@@ -492,6 +494,8 @@ def main(argv: list[str] | None = None) -> int:
                 current_dir=args.current_dir,
                 edit_path=args.apply_edit,
                 approve=args.approve,
+                port=args.port,
+                open_browser=not args.no_open,
             )
         elif args.command == "export-kg-snapshot":
             result = export_kg_snapshot(date=args.date, output_dir=args.output_dir, current_dir=args.current_dir)

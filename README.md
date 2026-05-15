@@ -93,7 +93,9 @@ diaevo queue-promotion --skill outputs/candidate_skills/C03/evolved
 diaevo label-promotion --queue-id <id> --label merge-needed --note "merge with nearest skill"
 diaevo rewrite-promotion --queue-id <id> --action auto
 diaevo promote --queue-id <id> --approve
-diaevo kg --date 260513
+diaevo kg
+diaevo kg --no-open --port 8910
+diaevo export-kg-snapshot --date 260513
 diaevo kg --apply-edit path\to\DiaEvo_kg_edit_260513.json --approve
 diaevo answer-kg --query "which tools support pytest traces?" --strict
 diaevo feedback
@@ -114,18 +116,23 @@ diaevo-home
 
 | 能力 | 说明 |
 | --- | --- |
-| 交互式 CLI | 仪表盘、可信工作区确认、斜杠菜单、多行输入、DeepSeek 聊天、运行时模型和 API 配置。 |
-| 本地工具层 | `list_files`、`read_file`、`write_file`、`edit_file`、`delete_file`、`apply_patch`、`run_shell`、`web_search`、`web_fetch`，带工作区边界和审批门。 |
-| 轨迹捕获 | 本地工具调用会写入 `.diaevo/tool_events.jsonl`，`ingest` 和 `feedback` 可将其并入可挖掘轨迹。 |
-| 挖掘快照 | 使用 TF-IDF、K-Means、关联规则、频繁序列、task-skill-tool 图和覆盖缺口生成可读证据包。 |
-| 知识图谱 | 从轨迹、工具事件、web 证据、会话日志和挖掘报告生成待审核实体、三元组、声明和证据路径。 |
+| 交互式工作台 | 默认 `diaevo` 打开终端首页，包含可信工作区确认、仪表盘、斜杠菜单、多行输入、`/home`、`/tools` 和 `/tool`。 |
+| 模型聊天 | 通过 `.env` 和运行时 `/model`、`/baseurl`、`/key` 配置 DeepSeek 或 OpenAI 兼容接口；普通文本进入带工具调用的聊天循环。 |
+| 本地工具层 | `list_files`、`read_file`、`write_file`、`edit_file`、`delete_file`、`apply_patch`、`run_shell`、`web_search`、`web_fetch`，带工作区边界、只读/写入分级和审批门。 |
+| 轨迹捕获与反馈 | 本地工具调用会写入 `.diaevo/tool_events.jsonl`；`ingest` 规范化样例/真实轨迹，`feedback` 将工具事件折叠回可挖掘轨迹。 |
+| 挖掘快照 | 使用 TF-IDF、K-Means、关联规则、频繁序列、task-skill-tool 图和覆盖缺口生成 `data/mining_snapshots/YYMMDD/` 可读证据包。 |
+| 推荐解释 | `recommend` 综合文本相似度、规则、PageRank、使用记录、成功率、覆盖缺口、风险和成本，并输出每个 skill 的 score explanation。 |
+| 候选生成 | `generate` 从挖掘簇生成证据支撑的 `SKILL.md` 草稿，保留触发信号、操作步骤、验证建议和风险边界。 |
+| 技能演化 | `evolve` 用本地指标、Pareto 选择和演化记忆优化候选章节；GEPA/LiteLLM 是可选优化后端，不影响默认 CLI。 |
+| 安全验证 | `verify` 检查 frontmatter、必需章节、危险命令、凭据样文本、可疑路径和依赖安装提示。 |
+| 沙盒校验 | `validate` 在用户 `--approve` 后，把候选复制到 `.tmp/validation-runs/<id>/workspace` 一次性沙盒中执行 `validation.json` 命令，并记录 stdout/stderr/exit code/duration/touched files/diff。 |
+| 晋升治理 | `queue-promotion`、`label-promotion`、`rewrite-promotion` 和 `promote --approve` 组成显式人工审核链，只更新本地注册表，不自动安装外部技能。 |
+| 知识图谱治理 | `build-kg-delta`、`review-kg-delta`、`apply-kg-delta` 是隐藏底层命令；accepted 实体、三元组、声明和证据路径写入 `data/knowledge_graph/current/`。 |
+| 可编辑总体 KG | `kg` / `/kg` 绑定本地端口并自动打开 active KG 的总体可视化 URL，默认不生成日期快照；只有显式 `export-kg-snapshot` 或 `kg --output-dir ...` 才导出快照。 |
+| 严格 KG 回答 | `answer-kg --strict` 和手动 `kg_answer(strict=true)` 才启用图谱约束回答；普通聊天不会自动调用严格 KG 工具。 |
 | 图结构向量检索 | accepted KG 节点、三元组和声明会转换成本地 TF-IDF 稀疏向量；严格回答先召回向量种子，再扩展图证据子图。 |
-| 推荐 | 综合文本相似度、规则、PageRank、使用记录、成功率、覆盖缺口、风险和成本；支持 Pareto rerank。 |
-| 生成与演化 | 从挖掘簇生成证据支撑的 `SKILL.md`，再用本地指标/Pareto 优化结构化章节。 |
-| 验证与校验 | verifier 检查 frontmatter、必需章节、安全模式、凭据模式和路径；validation 在审批后的沙盒副本中执行。 |
-| 晋升与反馈 | 人工队列、审核标签、`rewrite-promotion` 草稿、显式 `promote --approve`，反馈写入演化记忆。 |
-| 评估 | 输出 baseline/evolved、held-out、重复率、安全 holdout、人工反馈记忆和 GEPA 对比报告。 |
-| Phase 7 代码演化研究 | `evaluate-code-evolution` 默认只生成 patch strategy；提供 patch 时只在沙盒中应用和验证。 |
+| 评估报告 | `evaluate`、`evaluate-gepa`、`evaluate-gepa-phase4` 输出 baseline/evolved、held-out、重复率、安全 holdout、人工反馈记忆和 GEPA 对比报告。 |
+| Phase 7 代码演化研究 | `evaluate-code-evolution` 默认只生成 patch strategy；提供 patch 时只在沙盒中应用和验证，不直接改真实工作区。 |
 
 ## 数据文件
 
@@ -138,8 +145,8 @@ diaevo-home
 | `data/recommender_weights.json` | 推荐排序权重。 |
 | `data/evolution_memory.json` | 成功模板、错误模式、验证反馈、重复反馈和晋升反馈。 |
 | `data/mining_snapshots/YYMMDD/` | 可读挖掘快照。 |
-| `data/knowledge_graph/current/` | 已审核 active KG。 |
-| `data/knowledge_graph/YYMMDD/` | 知识图谱快照和可编辑 HTML 工作台。 |
+| `data/knowledge_graph/current/` | 已审核 active KG 和总体可编辑 HTML 工作台；`kg` 会通过本地 `127.0.0.1` URL 打开它。 |
+| `data/knowledge_graph/YYMMDD/` | 显式导出的知识图谱快照。 |
 | `.diaevo/tool_events.jsonl` | 本地工具事件日志，默认不提交。 |
 | `outputs/reports/*.json` | ingest、mining、recommendation、validation、promotion、evolution、evaluation 报告。 |
 | `outputs/candidate_skills/<cluster>/` | 生成和演化后的候选技能。 |
@@ -174,3 +181,9 @@ evolved_verifier_pass_rate == 1.0
 - `docs/AUTONOMOUS_EVOLUTION_LOOP.md`：自演化循环和阶段策略。
 - `docs/GEPA_SKILL_EVOLUTION_GUIDE.md`：GEPA 集成边界和 evaluator 合约。
 - `docs/talk_whit_GEPA.md`：低成本 APO/GEPA 研究备忘。
+- `docs/FINAL_PROJECT_REPORT.md`：项目报告、实验结果和完整参考文献。
+- `docs/REFERENCES.md`：独立参考文献清单，便于提交材料复用。
+
+## 参考文献
+
+完整参考文献见 `docs/REFERENCES.md`。

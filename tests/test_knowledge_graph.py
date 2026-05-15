@@ -284,6 +284,112 @@ def test_visualize_kg_returns_openable_html_path(tmp_path):
     assert "导出编辑 JSON" in html
 
 
+def test_kg_workbench_opens_current_graph_without_snapshot(tmp_path):
+    queue = tmp_path / "review_queue.jsonl"
+    current = tmp_path / "current"
+    build_kg_delta(
+        traces_path=_sample_trace_path(tmp_path),
+        tool_events_path=_sample_tool_events_path(tmp_path),
+        include_mining=False,
+        queue_path=queue,
+        current_dir=current,
+        delta_dir=tmp_path / "deltas",
+    )
+    first_id = read_jsonl(queue)[0]["review_id"]
+    review_kg_delta(first_id, status="accepted", queue_path=queue)
+    apply_kg_delta(queue_path=queue, current_dir=current)
+    opened_urls: list[str] = []
+
+    def fake_server(root, relative_path, *, port=None):
+        assert root == current
+        assert relative_path == "graph_visualization.html"
+        assert port == 8910
+        return {
+            "url": "http://127.0.0.1:8910/graph_visualization.html",
+            "host": "127.0.0.1",
+            "port": 8910,
+            "server_pid": 12345,
+            "server_ready": True,
+            "served_dir": str(root),
+        }
+
+    result = kg_workbench(
+        date="260513",
+        current_dir=current,
+        port=8910,
+        browser_opener=lambda url: opened_urls.append(url) is None or True,
+        server_starter=fake_server,
+    )
+
+    assert result["status"] == "ok"
+    assert result["visualization_path"] == str(current / "graph_visualization.html")
+    assert result["url"] == "http://127.0.0.1:8910/graph_visualization.html"
+    assert result["port"] == 8910
+    assert result["server_pid"] == 12345
+    assert result["opened"] is True
+    assert opened_urls == ["http://127.0.0.1:8910/graph_visualization.html"]
+    assert result["current_dir"] == str(current)
+    assert "未生成日期快照" in result["message"]
+    assert (current / "graph_visualization.html").exists()
+    assert not (tmp_path / "260513").exists()
+    assert not (current / "summary.json").exists()
+    html = (current / "graph_visualization.html").read_text(encoding="utf-8")
+    assert "<title>总体可编辑知识图谱</title>" in html
+    assert "<h1>总体可编辑知识图谱</h1>" in html
+    assert '"date": "current"' in html
+    assert "可编辑知识图谱 260513" not in html
+    assert "保存节点" in html
+    assert "保存关系" in html
+    assert "导出编辑 JSON" in html
+
+
+def test_kg_workbench_can_return_url_without_opening_browser(tmp_path):
+    current = tmp_path / "current"
+    current.mkdir()
+    opened_urls: list[str] = []
+
+    result = kg_workbench(
+        current_dir=current,
+        open_browser=False,
+        browser_opener=lambda url: opened_urls.append(url) is None or True,
+        server_starter=lambda root, relative_path, *, port=None: {
+            "url": "http://127.0.0.1:8765/graph_visualization.html",
+            "host": "127.0.0.1",
+            "port": 8765,
+            "server_pid": 456,
+            "server_ready": True,
+            "served_dir": str(root),
+        },
+    )
+
+    assert result["url"] == "http://127.0.0.1:8765/graph_visualization.html"
+    assert result["opened"] is False
+    assert opened_urls == []
+
+
+def test_kg_workbench_output_dir_keeps_explicit_html_export(tmp_path):
+    queue = tmp_path / "review_queue.jsonl"
+    current = tmp_path / "current"
+    build_kg_delta(
+        traces_path=_sample_trace_path(tmp_path),
+        tool_events_path=_sample_tool_events_path(tmp_path),
+        include_mining=False,
+        queue_path=queue,
+        current_dir=current,
+        delta_dir=tmp_path / "deltas",
+    )
+    first_id = read_jsonl(queue)[0]["review_id"]
+    review_kg_delta(first_id, status="accepted", queue_path=queue)
+    apply_kg_delta(queue_path=queue, current_dir=current)
+
+    output_dir = tmp_path / "kg_visual"
+    result = kg_workbench(date="260513", output_dir=output_dir, current_dir=current)
+
+    assert result["status"] == "ok"
+    assert result["visualization_path"] == str(output_dir / "graph_visualization.html")
+    assert (output_dir / "summary.json").exists()
+
+
 def test_kg_workbench_can_preview_and_apply_exported_edit(tmp_path):
     edit_path = tmp_path / "edit.json"
     edit_path.write_text(
@@ -346,6 +452,12 @@ def test_cli_accepts_kg_commands_and_tool_schema_exposes_switch():
     args = build_parser().parse_args(["kg", "--date", "260513"])
     assert args.command == "kg"
     assert args.date == "260513"
+    assert args.no_open is False
+
+    args = build_parser().parse_args(["kg", "--port", "8910", "--no-open"])
+    assert args.command == "kg"
+    assert args.port == 8910
+    assert args.no_open is True
 
     args = build_parser().parse_args(["kg", "--apply-edit", "edit.json", "--approve"])
     assert args.apply_edit == "edit.json"
