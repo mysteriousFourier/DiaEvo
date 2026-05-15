@@ -28,6 +28,38 @@ def test_code_evolution_strategy_only_writes_report(tmp_path):
     assert saved["phase"] == "phase7_safe_code_evolution_research"
 
 
+def test_code_evolution_collects_baseline_evidence_in_sandbox(tmp_path):
+    result = run_code_evolution(
+        task="收集失败测试输出作为 patch guidance 输入",
+        test_commands=[_python_command("-c \"import sys; print('baseline fail'); sys.exit(3)\"")],
+        output_dir=tmp_path,
+        collect_baseline=True,
+    )
+
+    assert result["status"] == "baseline_failed"
+    assert result["baseline_collected"] is True
+    assert result["real_workspace_mutated"] is False
+    assert result["results"][0]["returncode"] == 3
+    assert "baseline fail" in result["results"][0]["stdout"]
+    assert result["patch_guidance_inputs"]["failing_commands"]
+    assert Path(result["sandbox_workspace"]).exists()
+    assert Path(result["sandbox_report_path"]).exists()
+    saved = read_json(tmp_path / "code_evolution_report.json")
+    assert saved["status"] == "baseline_failed"
+
+
+def test_code_evolution_baseline_blocks_unsafe_command(tmp_path):
+    result = run_code_evolution(
+        task="baseline 也要遵守安全边界",
+        test_commands=["curl https://example.com"],
+        output_dir=tmp_path,
+        collect_baseline=True,
+    )
+
+    assert result["status"] == "blocked"
+    assert any(item["code"] == "blocked_validation_command" for item in result["findings"])
+
+
 def test_code_evolution_requires_approval_for_patch(tmp_path):
     root = Path("outputs") / "candidate_skills" / "test_code_evolution" / tmp_path.name / "requires_approval"
     shutil.rmtree(root, ignore_errors=True)
@@ -150,6 +182,7 @@ def test_cli_accepts_code_evolution_arguments():
             "--test-command",
             "python -m pytest -q",
             "--approve",
+            "--collect-baseline",
         ]
     )
 
@@ -157,3 +190,4 @@ def test_cli_accepts_code_evolution_arguments():
     assert args.patch_file == "candidate.patch"
     assert args.allowed_path == ["diaevo"]
     assert args.approve is True
+    assert args.collect_baseline is True

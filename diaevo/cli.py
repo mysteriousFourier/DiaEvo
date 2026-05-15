@@ -130,6 +130,7 @@ def build_parser() -> argparse.ArgumentParser:
     generate_parser = subparsers.add_parser("generate", help="Generate a candidate SKILL.md from a mined cluster.")
     generate_parser.add_argument("--cluster-id", required=True, help="Cluster id such as C03.")
     generate_parser.add_argument("--output-dir", default=None, help="Optional target directory.")
+    generate_parser.add_argument("--with-code", action="store_true", help="Generate restricted helper code and validation.json for a code-backed skill.")
 
     verify_parser = subparsers.add_parser("verify", help="Verify a candidate skill directory or SKILL.md.")
     verify_parser.add_argument("--skill", required=True, help="Candidate skill directory or SKILL.md path.")
@@ -347,6 +348,11 @@ def build_parser() -> argparse.ArgumentParser:
     code_evolution_parser.add_argument("--timeout-sec", type=int, default=60, help="每条验证命令的超时秒数。")
     code_evolution_parser.add_argument("--network", action="store_true", help="允许验证命令使用网络；默认禁止。")
     code_evolution_parser.add_argument("--output-dir", default=None, help="可选：报告输出目录。")
+    code_evolution_parser.add_argument(
+        "--collect-baseline",
+        action="store_true",
+        help="未提供 patch 时，在 disposable sandbox 中运行验证命令并收集 baseline 证据。",
+    )
 
     tool_parser = subparsers.add_parser("tool", help="Execute one local tool with JSON arguments.")
     tool_parser.add_argument("name", help="Tool name such as list_files or read_file.")
@@ -437,7 +443,7 @@ def main(argv: list[str] | None = None) -> int:
                 rerank=args.rerank,
             )
         elif args.command == "generate":
-            result = generate_skill(args.cluster_id, args.output_dir)
+            result = generate_skill(args.cluster_id, args.output_dir, with_code=args.with_code)
         elif args.command == "verify":
             result = verify_skill(Path(args.skill))
         elif args.command == "evolve":
@@ -571,6 +577,7 @@ def main(argv: list[str] | None = None) -> int:
                 timeout_sec=args.timeout_sec,
                 network=args.network,
                 output_dir=args.output_dir,
+                collect_baseline=args.collect_baseline,
             )
         elif args.command == "tool":
             tool_args = parse_tool_args(args.args)

@@ -47,3 +47,15 @@
 [23] LIANG Guanbao, BEI Yuanchen, ZHOU Sheng, et al. Generalizable Self-Evolving Memory for Automatic Prompt Optimization[J/OL]. arXiv:2603.21520v1, 2026-03-23[2026-05-14]. DOI:10.48550/arXiv.2603.21520. https://arxiv.org/abs/2603.21520.
 
 [24] ZHAO ChenZhuo, LIU Ziqian, WANG Xinda, LU Junting, RUAN Chaoyi. PMPO: Probabilistic Metric Prompt Optimization for Small and Large Language Models[C/OL]//Findings of the Association for Computational Linguistics: EMNLP 2025. Suzhou: ACL, 2025-11:14728-14761[2026-05-14]. DOI:10.18653/v1/2025.findings-emnlp.795. https://aclanthology.org/2025.findings-emnlp.795/.
+
+[25] HUANG Qian, et al. A Self-Improving Coding Agent[J/OL]. arXiv:2504.15228, 2025[2026-05-15]. https://arxiv.org/abs/2504.15228.
+
+[26] KUMAR Aviral, et al. Iterative Self-Repair for Code Generation[J/OL]. arXiv:2604.10508, 2026[2026-05-15]. https://arxiv.org/abs/2604.10508.
+
+[27] SecureVibeBench contributors. SecureVibeBench: Evaluating Security of AI Coding Agents[J/OL]. arXiv:2509.22097, 2025[2026-05-15]. https://arxiv.org/abs/2509.22097.
+
+[28] SmellBench contributors. SmellBench: Evaluating LLM Agents on Architectural Smell Refactoring[J/OL]. arXiv:2605.07001, 2026[2026-05-15]. https://arxiv.org/abs/2605.07001.
+
+[29] trycua. CUA: Computer-Use Agent sandbox and SDK[CP/OL]. GitHub, 2026[2026-05-15]. https://github.com/trycua/cua.
+
+[30] Sandrun. Sandrun sandbox benchmark and execution environment comparison[EB/OL]. 2026[2026-05-15]. https://sandrun.dev/.

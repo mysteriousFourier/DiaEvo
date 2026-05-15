@@ -1,5 +1,6 @@
 ﻿from __future__ import annotations
 
+import json
 import re
 from pathlib import Path
 from typing import Any
@@ -175,11 +176,113 @@ def build_skill_markdown(cluster: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-def generate_skill(cluster_id: str, output_dir: str | Path | None = None) -> dict[str, Any]:
+def _code_backed_section() -> str:
+    return "\n".join(
+        [
+            "## Executable Artifacts",
+            "",
+            "本候选技能包含受限 helper code，用于把固定流程固化为可验证的本地步骤。",
+            "",
+            "- `scripts/skill_flow.py`：只读流程助手；默认只输出聚类信号和建议步骤，不修改 workspace。",
+            "- `code_artifacts.json`：记录 helper 的允许能力、入口和安全边界。",
+            "- `validation.json`：在 disposable sandbox 中运行 helper 的 `--describe` smoke。",
+            "",
+            "helper code 仍是候选制品，必须通过 verifier、validation 和人工 promotion 后才能进入真实使用。",
+            "",
+        ]
+    )
+
+
+def _helper_script(cluster: dict[str, Any]) -> str:
+    payload = {
+        "cluster_id": str(cluster.get("id", "C00")),
+        "representative_task": str(cluster.get("representative_task", "")),
+        "top_terms": _as_strings(cluster.get("top_terms"))[:8],
+        "top_tools": _as_strings(cluster.get("top_tools"))[:8],
+        "file_extensions": _as_strings(cluster.get("file_extensions"))[:8],
+        "top_errors": _as_strings(cluster.get("top_errors"))[:8],
+        "top_failure_types": _as_strings(cluster.get("top_failure_types"))[:8],
+        "workflow_steps": _workflow_steps(
+            _as_strings(cluster.get("top_tools")),
+            _as_strings(cluster.get("top_errors")),
+            _as_strings(cluster.get("top_failure_types")),
+        ),
+    }
+    payload_json = json.dumps(payload, ensure_ascii=False, indent=2)
+    return f'''from __future__ import annotations
+
+import argparse
+import json
+
+
+FLOW = {payload_json}
+
+
+def describe() -> dict[str, object]:
+    return {{
+        "status": "ok",
+        "mode": "read_only_skill_flow",
+        "flow": FLOW,
+        "safety_boundary": "describe-only; no workspace writes; no shell execution; no network",
+    }}
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description="Describe a DiaEvo generated skill flow.")
+    parser.add_argument("--describe", action="store_true", help="Print the read-only flow description.")
+    args = parser.parse_args()
+    if not args.describe:
+        parser.error("Only --describe is supported for generated helper code.")
+    print(json.dumps(describe(), ensure_ascii=False, indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+'''
+
+
+def _write_code_artifacts(target_root: Path, cluster: dict[str, Any]) -> dict[str, Any]:
+    scripts_dir = target_root / "scripts"
+    scripts_dir.mkdir(parents=True, exist_ok=True)
+    helper_path = scripts_dir / "skill_flow.py"
+    helper_path.write_text(_helper_script(cluster), encoding="utf-8")
+    skill_relative_helper = f"{target_root.as_posix().strip('/')}/scripts/skill_flow.py"
+    validation = {
+        "schema": "diaevo.validation.v1",
+        "status": "candidate",
+        "workspace_only": True,
+        "network": False,
+        "timeout_sec": 60,
+        "commands": [f"python {skill_relative_helper} --describe"],
+    }
+    write_json(target_root / "validation.json", validation)
+    artifacts = {
+        "schema": "diaevo.code_backed_skill.v1",
+        "status": "candidate",
+        "entrypoint": "scripts/skill_flow.py",
+        "mode": "read_only_skill_flow",
+        "allowed_capabilities": ["describe_flow"],
+        "forbidden_capabilities": ["workspace_write", "shell_execution", "network", "dependency_install"],
+        "validation_commands": validation["commands"],
+        "source_cluster": str(cluster.get("id", "")),
+    }
+    write_json(target_root / "code_artifacts.json", artifacts)
+    return {
+        "code_artifacts_path": str(target_root / "code_artifacts.json"),
+        "helper_path": str(helper_path),
+        "validation_path": str(target_root / "validation.json"),
+        "validation_commands": validation["commands"],
+    }
+
+
+def generate_skill(cluster_id: str, output_dir: str | Path | None = None, *, with_code: bool = False) -> dict[str, Any]:
     ensure_project_dirs()
     report = read_json(REPORTS_DIR / "mining_report.json", default={}) or {}
     cluster = _find_cluster(cluster_id, report)
     markdown = build_skill_markdown(cluster)
+    if with_code:
+        markdown = markdown.rstrip() + "\n\n" + _code_backed_section()
     first_name = slugify(
         f"{cluster_id}-{('-'.join(cluster.get('top_terms', [])[:3]) if cluster.get('top_terms') else 'candidate')}"
     )
@@ -187,12 +290,15 @@ def generate_skill(cluster_id: str, output_dir: str | Path | None = None) -> dic
     target_root.mkdir(parents=True, exist_ok=True)
     skill_path = target_root / "SKILL.md"
     skill_path.write_text(markdown, encoding="utf-8")
+    code_metadata = _write_code_artifacts(target_root, cluster) if with_code else {}
     metadata = {
         "cluster_id": cluster_id.upper(),
         "skill_dir": str(target_root),
         "skill_path": str(skill_path),
         "name_hint": first_name,
         "status": "candidate",
+        "code_backed": bool(with_code),
+        **code_metadata,
     }
     write_json(target_root / "metadata.json", metadata)
     return metadata

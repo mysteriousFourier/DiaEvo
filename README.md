@@ -86,6 +86,7 @@ diaevo mine
 diaevo export-mining-snapshot --date 260513
 diaevo recommend --task "fix failing pytest import path" --language python --framework pytest
 diaevo generate --cluster-id C03
+diaevo generate --cluster-id C03 --with-code
 diaevo evolve --cluster-id C03 --budget 50
 diaevo verify --skill outputs/candidate_skills/C03/evolved
 diaevo validate --skill outputs/candidate_skills/C03/evolved --approve
@@ -103,6 +104,7 @@ diaevo evaluate --variant evolved --top-k 3
 diaevo evaluate-gepa --cluster-id C03 --budget 50 --top-k 3
 diaevo evaluate-gepa-phase4 --cluster-id C03 --budgets 5,10 --top-k 3 --dry-run
 diaevo evaluate-code-evolution --task "fix failing pytest path"
+diaevo evaluate-code-evolution --task "fix failing pytest path" --test-command "python -m pytest -q" --collect-baseline
 diaevo evaluate-code-evolution --task "fix failing pytest path" --patch-file .tmp\candidate.patch --allowed-path diaevo --test-command "python -m pytest -q" --approve
 diaevo tools
 diaevo tool read_file --arg path=README.md --arg limit=20
@@ -122,7 +124,7 @@ diaevo-home
 | 轨迹捕获与反馈 | 本地工具调用会写入 `.diaevo/tool_events.jsonl`；`ingest` 规范化样例/真实轨迹，`feedback` 将工具事件折叠回可挖掘轨迹。 |
 | 挖掘快照 | 使用 TF-IDF、K-Means、关联规则、频繁序列、task-skill-tool 图和覆盖缺口生成 `data/mining_snapshots/YYMMDD/` 可读证据包。 |
 | 推荐解释 | `recommend` 综合文本相似度、规则、PageRank、使用记录、成功率、覆盖缺口、风险和成本，并输出每个 skill 的 score explanation。 |
-| 候选生成 | `generate` 从挖掘簇生成证据支撑的 `SKILL.md` 草稿，保留触发信号、操作步骤、验证建议和风险边界。 |
+| 候选生成 | `generate` 从挖掘簇生成证据支撑的 `SKILL.md` 草稿，保留触发信号、操作步骤、验证建议和风险边界；`--with-code` 可生成受限 helper code、`code_artifacts.json` 和 `validation.json`。 |
 | 技能演化 | `evolve` 用本地指标、Pareto 选择和演化记忆优化候选章节；GEPA/LiteLLM 是可选优化后端，不影响默认 CLI。 |
 | 安全验证 | `verify` 检查 frontmatter、必需章节、危险命令、凭据样文本、可疑路径和依赖安装提示。 |
 | 沙盒校验 | `validate` 在用户 `--approve` 后，把候选复制到 `.tmp/validation-runs/<id>/workspace` 一次性沙盒中执行 `validation.json` 命令，并记录 stdout/stderr/exit code/duration/touched files/diff。 |
@@ -132,7 +134,7 @@ diaevo-home
 | 严格 KG 回答 | `answer-kg --strict` 和手动 `kg_answer(strict=true)` 才启用图谱约束回答；普通聊天不会自动调用严格 KG 工具。 |
 | 图结构向量检索 | accepted KG 节点、三元组和声明会转换成本地 TF-IDF 稀疏向量；严格回答先召回向量种子，再扩展图证据子图。 |
 | 评估报告 | `evaluate`、`evaluate-gepa`、`evaluate-gepa-phase4` 输出 baseline/evolved、held-out、重复率、安全 holdout、人工反馈记忆和 GEPA 对比报告。 |
-| Phase 7 代码演化研究 | `evaluate-code-evolution` 默认只生成 patch strategy；提供 patch 时只在沙盒中应用和验证，不直接改真实工作区。 |
+| Phase 7 代码演化研究 | `evaluate-code-evolution` 默认只生成 patch strategy；`--collect-baseline` 在沙盒中收集失败/通过测试证据；提供 patch 时只在沙盒中应用和验证，不直接改真实工作区。 |
 
 ## 数据文件
 
@@ -178,7 +180,7 @@ evolved_verifier_pass_rate == 1.0
 ## 文档地图
 
 - `docs/DESIGN.md`：架构、模块职责和阶段路线图。
-- `docs/AUTONOMOUS_EVOLUTION_LOOP.md`：自演化循环和阶段策略。
+- `docs/AUTONOMOUS_EVOLUTION_LOOP.md`：自演化循环、阶段策略和代码进化门控计划。
 - `docs/GEPA_SKILL_EVOLUTION_GUIDE.md`：GEPA 集成边界和 evaluator 合约。
 - `docs/talk_whit_GEPA.md`：低成本 APO/GEPA 研究备忘。
 - `docs/FINAL_PROJECT_REPORT.md`：项目报告、实验结果和完整参考文献。

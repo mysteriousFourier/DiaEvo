@@ -38,6 +38,8 @@ REQUIRED_SECTIONS = (
     "## Verification Suggestions",
 )
 
+ALLOWED_CODE_ARTIFACT_ENTRYPOINTS = {"scripts/skill_flow.py"}
+
 
 def parse_frontmatter(text: str) -> tuple[dict[str, str], str]:
     if not text.startswith("---\n"):
@@ -104,6 +106,7 @@ def verify_skill(skill_dir: str | Path, write_report: bool = True) -> dict[str, 
                     "message": f"executable validation status is `{status}`",
                 }
             )
+    _extend_code_artifact_findings(skill_file.parent, findings)
     return _finalize(skill_file, findings, executable_validation, write_report=write_report)
 
 
@@ -115,6 +118,37 @@ def _load_executable_validation(skill_file: Path) -> dict[str, Any]:
     if value:
         value.setdefault("path", str(validation_path))
     return value
+
+
+def _extend_code_artifact_findings(skill_dir: Path, findings: list[dict[str, str]]) -> None:
+    artifact_path = skill_dir / "code_artifacts.json"
+    if not artifact_path.exists():
+        return
+    artifacts = read_json(artifact_path, default={})
+    if not isinstance(artifacts, dict):
+        findings.append({"severity": "error", "code": "invalid_code_artifacts", "message": "code_artifacts.json must be an object"})
+        return
+    if artifacts.get("schema") != "diaevo.code_backed_skill.v1":
+        findings.append({"severity": "error", "code": "invalid_code_artifacts_schema", "message": "code_artifacts.json schema is invalid"})
+    entrypoint = str(artifacts.get("entrypoint") or "").replace("\\", "/").strip("/")
+    if entrypoint not in ALLOWED_CODE_ARTIFACT_ENTRYPOINTS:
+        findings.append({"severity": "error", "code": "unsupported_code_entrypoint", "message": f"unsupported helper entrypoint: {entrypoint}"})
+        return
+    helper_path = skill_dir / entrypoint
+    if not helper_path.exists():
+        findings.append({"severity": "error", "code": "missing_code_entrypoint", "message": f"helper code not found: {entrypoint}"})
+        return
+    helper_text = helper_path.read_text(encoding="utf-8", errors="replace")
+    for pattern in DANGEROUS_PATTERNS:
+        if re.search(pattern, helper_text, flags=re.IGNORECASE | re.DOTALL):
+            findings.append({"severity": "error", "code": "dangerous_helper_code", "message": f"helper matched dangerous pattern: {pattern}"})
+    for pattern in CREDENTIAL_PATTERNS:
+        if re.search(pattern, helper_text, flags=re.IGNORECASE):
+            findings.append({"severity": "error", "code": "credential_helper_code", "message": f"helper may contain credential material: {pattern}"})
+    forbidden_imports = [r"\bsubprocess\b", r"\bos\.system\b", r"\bsocket\b", r"\burllib\b", r"\brequests\b"]
+    for pattern in forbidden_imports:
+        if re.search(pattern, helper_text, flags=re.IGNORECASE):
+            findings.append({"severity": "error", "code": "forbidden_helper_capability", "message": f"helper uses forbidden capability: {pattern}"})
 
 
 def _finalize(

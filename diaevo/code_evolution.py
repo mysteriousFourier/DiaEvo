@@ -289,6 +289,75 @@ def _git_apply_step(workspace: Path, patch_text: str, timeout: int) -> dict[str,
     }
 
 
+def _sandbox_baseline_evidence(
+    *,
+    result: dict[str, Any],
+    commands: list[str],
+    timeout: int,
+    report_path: Path,
+) -> dict[str, Any]:
+    sandbox = _create_sandbox(WORKSPACE_ROOT.resolve())
+    sandbox_dir = Path(sandbox["run_dir"])
+    sandbox_workspace = Path(sandbox["workspace"])
+    sandbox_artifacts = Path(sandbox["artifacts"])
+    before_snapshot = _workspace_snapshot(sandbox_workspace)
+    command_results = _run_shell_commands(commands, sandbox_workspace, timeout)
+    after_snapshot = _workspace_snapshot(sandbox_workspace)
+    touched_files, diff_text = _diff_touched_files(before_snapshot, after_snapshot)
+    diff_path = sandbox_artifacts / "baseline_diff.patch"
+    touched_files_path = sandbox_artifacts / "baseline_touched_files.json"
+    diff_path.write_text(diff_text, encoding="utf-8")
+    write_json(touched_files_path, touched_files)
+    status = "baseline_passed"
+    if any(item.get("status") != "passed" for item in command_results):
+        status = "baseline_failed"
+    sandbox_report_path = sandbox_artifacts / "code_evolution_baseline_report.json"
+    result.update(
+        {
+            "status": status,
+            "baseline_collected": True,
+            "sandbox_run_id": sandbox["run_id"],
+            "sandbox_dir": str(sandbox_dir),
+            "sandbox_workspace": str(sandbox_workspace),
+            "artifacts_dir": str(sandbox_artifacts),
+            "results": command_results,
+            "touched_files": touched_files,
+            "diff_path": str(diff_path),
+            "touched_files_path": str(touched_files_path),
+            "sandbox_report_path": str(sandbox_report_path),
+            "patch_guidance_inputs": {
+                "task": result["task"],
+                "commands": commands,
+                "failing_commands": [item for item in command_results if item.get("status") != "passed"],
+                "touched_files": touched_files,
+                "diff_path": str(diff_path),
+            },
+            "message": "已在 disposable sandbox 中收集 baseline 验证证据；真实工作区未修改。",
+            "updated_at": _now(),
+        }
+    )
+    write_json(sandbox_report_path, result)
+    write_json(report_path, result)
+    record_validation_feedback(
+        {
+            "status": status,
+            "skill_dir": "phase7-code-evolution-baseline",
+            "commands": commands,
+            "results": command_results,
+            "sandbox_run_id": sandbox["run_id"],
+            "sandbox_dir": str(sandbox_dir),
+            "sandbox_workspace": str(sandbox_workspace),
+            "artifacts_dir": str(sandbox_artifacts),
+            "sandbox_report_path": str(sandbox_report_path),
+            "diff_path": str(diff_path),
+            "touched_files_path": str(touched_files_path),
+            "touched_files": touched_files,
+        }
+    )
+    result["report_path"] = str(report_path)
+    return result
+
+
 def run_code_evolution(
     *,
     task: str,
@@ -299,6 +368,7 @@ def run_code_evolution(
     timeout_sec: int = 60,
     network: bool = False,
     output_dir: str | Path | None = None,
+    collect_baseline: bool = False,
 ) -> dict[str, Any]:
     ensure_project_dirs()
     task_text = str(task or "").strip()
@@ -327,6 +397,7 @@ def run_code_evolution(
         "commands": commands,
         "timeout_sec": timeout,
         "network": bool(network),
+        "collect_baseline": bool(collect_baseline),
         "approval_required": bool(patch_text),
         "approved": False,
         "real_workspace_mutated": False,
@@ -334,6 +405,16 @@ def run_code_evolution(
     }
 
     if not patch_text:
+        findings = _command_findings(commands, network=bool(network))
+        if findings:
+            result["findings"] = findings
+            result["status"] = "blocked"
+            result["message"] = "baseline 验证命令未通过 Phase 7 安全检查。"
+            write_json(report_path, result)
+            result["report_path"] = str(report_path)
+            return result
+        if collect_baseline:
+            return _sandbox_baseline_evidence(result=result, commands=commands, timeout=timeout, report_path=report_path)
         result.update(
             {
                 "status": "strategy_only",
