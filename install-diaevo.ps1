@@ -64,13 +64,13 @@ $SessionParts = @($env:Path -split ';' | Where-Object {
 })
 $env:Path = (@($SessionParts) + $ShimRoot) -join ';'
 
-Write-Output "DiaEvo 安装目录: $InstallRoot"
-Write-Output "命令入口目录: $ShimRoot"
-Write-Output "已生成: $DiaEvoShim"
-Write-Output "已生成: $HomeShim"
-Write-Output "已把命令入口目录写入当前用户 PATH，并从用户 PATH 中移除旧的项目根目录入口。"
+Write-Output "DiaEvo install root: $InstallRoot"
+Write-Output "Command shim directory: $ShimRoot"
+Write-Output "Generated: $DiaEvoShim"
+Write-Output "Generated: $HomeShim"
+Write-Output "Updated current user PATH with the shim directory and removed old project-root entries."
 if (-not (Test-Path -LiteralPath $Python)) {
-    Write-Output "提示: 当前还没有找到 $Python。创建环境后命令入口会自动使用它。"
+    Write-Output ("Note: Python venv was not found at {0}. The command shims will use it after you create it." -f $Python)
 }
-Write-Output "当前终端可直接运行: diaevo tools"
-Write-Output "新开的 PowerShell/CMD 也可以在任意 workspace 运行: diaevo"
+Write-Output "This terminal can run: diaevo tools"
+Write-Output "New PowerShell/CMD windows can run: diaevo"
