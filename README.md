@@ -51,13 +51,7 @@ cd D:\path\to\your\workspace
 diaevo
 ```
 
-安装脚本会把 `<DiaEvo安装目录>` 加入当前用户 PATH。打开新的 PowerShell 后，在任意目录运行 `diaevo` 都会把当前目录作为 DiaEvo workspace，并打开交互式终端 shell。
-
-注意：不要在其它目录使用 `.\diaevo`。PowerShell 中 `.\` 只表示“当前目录下的可执行文件”；全局入口是 `diaevo`。如果当前终端还没有刷新 PATH，可以临时使用：
-
-```powershell
-& "<DiaEvo安装目录>\diaevo.ps1"
-```
+安装脚本只保留根目录一个入口文件，并在 `%LOCALAPPDATA%\DiaEvo\bin` 生成 `diaevo.cmd` 和 `diaevo-home.cmd` 命令 shim。它会把这个 shim 目录写入当前用户 PATH，并从用户 PATH 中移除旧的项目根目录入口。当前终端和新开的 PowerShell/CMD 都可以直接使用 `diaevo`；在任意目录运行 `diaevo` 都会把当前目录作为 DiaEvo workspace，并打开交互式终端 shell。
 
 交互式命令示例：
 
@@ -115,7 +109,7 @@ diaevo chat-test --interactive
 diaevo-home
 ```
 
-`diaevo` / `diaevo-home` 会通过安装目录下的 shim 调用 `diaevo.ps1` / `diaevo-home.ps1`，设置 `PYTHONPATH`、`DIAEVO_WORKSPACE`、UTF-8 终端 I/O，并使用安装目录本地 `.venv` Python。
+`diaevo` / `diaevo-home` 会通过 `%LOCALAPPDATA%\DiaEvo\bin` 下的命令 shim 设置 `PYTHONPATH`、`DIAEVO_WORKSPACE` 和 UTF-8 Python I/O，并使用安装目录本地 `.venv` Python。
 
 ## 主要能力
 
