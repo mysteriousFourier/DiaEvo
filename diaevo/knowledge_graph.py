@@ -4,6 +4,7 @@ import csv
 import hashlib
 import html
 import json
+import math
 import os
 import re
 import socket
@@ -16,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from .features import FeatureStore
+from .features import FeatureStore, cosine
 from .ingest import DEFAULT_TOOL_EVENTS_PATH, load_traces
 from .miner import mine
 from .paths import DATA_DIR, ensure_project_dirs
@@ -29,6 +30,12 @@ KG_DELTA_DIR = KG_ROOT / "deltas"
 KG_REVIEW_QUEUE_PATH = KG_ROOT / "review_queue.jsonl"
 KG_WORKBENCH_HOST = "127.0.0.1"
 KG_WORKBENCH_PORT = 8765
+DEFAULT_KG_VECTOR_BACKEND = "tfidf"
+DEFAULT_KG_EMBEDDING_MODEL = "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2"
+DEFAULT_HF_ENDPOINT = "https://hf-mirror.com"
+KG_VECTOR_BACKEND_ENV = "DIAEVO_KG_VECTOR_BACKEND"
+KG_EMBEDDING_MODEL_ENV = "DIAEVO_KG_EMBEDDING_MODEL"
+KG_HF_ENDPOINT_ENV = "DIAEVO_HF_ENDPOINT"
 
 KG_REVIEW_STATUSES = {
     "pending",
@@ -47,6 +54,7 @@ WEB_SEARCH_CONFIDENCE = 0.55
 TEXT_MENTION_CONFIDENCE = 0.6
 
 _KG_SERVER_PROCESS: subprocess.Popen[Any] | None = None
+_SENTENCE_TRANSFORMER_FACTORY: Callable[[str], Any] | None = None
 
 
 def _now() -> str:
@@ -1037,6 +1045,142 @@ def _kg_graph_neighbors(seed_ids: set[str], triples: list[dict[str, Any]], claim
     return expanded
 
 
+def configure_embedding_model_factory(factory: Callable[[str], Any] | None) -> None:
+    global _SENTENCE_TRANSFORMER_FACTORY
+    _SENTENCE_TRANSFORMER_FACTORY = factory
+
+
+def _normalize_vector_backend(value: str | None) -> str:
+    backend = (value or os.environ.get(KG_VECTOR_BACKEND_ENV) or DEFAULT_KG_VECTOR_BACKEND).strip().lower()
+    aliases = {
+        "dense": "dense",
+        "embedding": "dense",
+        "embeddings": "dense",
+        "sentence_transformers": "dense",
+        "sentence-transformers": "dense",
+        "tfidf": "tfidf",
+        "local_tfidf": "tfidf",
+        "auto": "auto",
+    }
+    if backend not in aliases:
+        raise ValueError(f"Unsupported KG vector backend: {value}")
+    return aliases[backend]
+
+
+def _kg_embedding_model_name(value: str | None = None) -> str:
+    return (value or os.environ.get(KG_EMBEDDING_MODEL_ENV) or DEFAULT_KG_EMBEDDING_MODEL).strip()
+
+
+def _ensure_hf_endpoint(hf_endpoint: str | None = None) -> str:
+    endpoint = (hf_endpoint or os.environ.get(KG_HF_ENDPOINT_ENV) or os.environ.get("HF_ENDPOINT") or DEFAULT_HF_ENDPOINT).strip()
+    if endpoint and "HF_ENDPOINT" not in os.environ:
+        os.environ["HF_ENDPOINT"] = endpoint
+    return endpoint
+
+
+def _load_sentence_transformer(model_name: str, hf_endpoint: str | None = None) -> Any:
+    _ensure_hf_endpoint(hf_endpoint)
+    if _SENTENCE_TRANSFORMER_FACTORY is not None:
+        return _SENTENCE_TRANSFORMER_FACTORY(model_name)
+    try:
+        from sentence_transformers import SentenceTransformer
+    except ImportError as exc:
+        raise RuntimeError(
+            "sentence-transformers is required for dense KG graph-vector retrieval. "
+            "Install the optional full extra or run `pip install sentence-transformers`."
+        ) from exc
+    return SentenceTransformer(model_name)
+
+
+def _as_float_vectors(raw_vectors: Any) -> list[list[float]]:
+    if hasattr(raw_vectors, "tolist"):
+        raw_vectors = raw_vectors.tolist()
+    return [[float(value) for value in vector] for vector in raw_vectors]
+
+
+def _normalize_dense(vector: list[float]) -> list[float]:
+    norm = math.sqrt(sum(value * value for value in vector))
+    if not norm:
+        return vector
+    return [value / norm for value in vector]
+
+
+def _dense_encode(model: Any, texts: list[str]) -> list[list[float]]:
+    try:
+        encoded = model.encode(texts, normalize_embeddings=True, convert_to_numpy=False)
+    except TypeError:
+        encoded = model.encode(texts)
+    return [_normalize_dense(vector) for vector in _as_float_vectors(encoded)]
+
+
+def _dense_nearest(
+    query: str,
+    documents: list[dict[str, Any]],
+    *,
+    model_name: str,
+    hf_endpoint: str | None,
+    limit: int,
+) -> tuple[list[tuple[int, float]], dict[str, Any]]:
+    model = _load_sentence_transformer(model_name, hf_endpoint)
+    texts = [item["text"] for item in documents]
+    vectors = _dense_encode(model, texts)
+    query_vectors = _dense_encode(model, [query])
+    query_vector = query_vectors[0] if query_vectors else []
+    ranked = sorted(
+        ((index, cosine(query_vector, vector)) for index, vector in enumerate(vectors)),
+        key=lambda item: item[1],
+        reverse=True,
+    )[:limit]
+    dimension = len(vectors[0]) if vectors else 0
+    return ranked, {
+        "backend": "dense_embedding",
+        "model": model_name,
+        "hf_endpoint": _ensure_hf_endpoint(hf_endpoint),
+        "embedding_dimension": dimension,
+    }
+
+
+def _tfidf_nearest(query: str, documents: list[dict[str, Any]], *, limit: int) -> tuple[list[tuple[int, float]], dict[str, Any]]:
+    store = FeatureStore.from_documents([item["text"] for item in documents], max_features=1000)
+    return store.nearest(query, limit=limit), {
+        "backend": "local_tfidf",
+        "vocabulary_size": len(store.vocabulary),
+    }
+
+
+def _kg_vector_nearest(
+    query: str,
+    documents: list[dict[str, Any]],
+    *,
+    backend: str,
+    embedding_model: str | None,
+    hf_endpoint: str | None,
+    limit: int,
+) -> tuple[list[tuple[int, float]], dict[str, Any]]:
+    requested = _normalize_vector_backend(backend)
+    model_name = _kg_embedding_model_name(embedding_model)
+    if requested in {"auto", "dense"}:
+        try:
+            return _dense_nearest(query, documents, model_name=model_name, hf_endpoint=hf_endpoint, limit=limit)
+        except Exception as exc:
+            if requested == "dense":
+                raise
+            nearest, metadata = _tfidf_nearest(query, documents, limit=limit)
+            metadata["fallback_reason"] = str(exc)
+            metadata["requested_backend"] = "auto"
+            metadata["requested_model"] = model_name
+            return nearest, metadata
+    nearest, metadata = _tfidf_nearest(query, documents, limit=limit)
+    metadata["requested_backend"] = "tfidf"
+    return nearest, metadata
+
+
+def _retrieval_mode(vector_index: dict[str, Any]) -> str:
+    if vector_index.get("backend") == "dense_embedding":
+        return "graph_vector_dense"
+    return "graph_vector_tfidf"
+
+
 def graph_vector_search(
     query: str,
     *,
@@ -1046,6 +1190,9 @@ def graph_vector_search(
     queue_path: str | Path | None = None,
     top_k: int = 5,
     expand_hops: int = 1,
+    vector_backend: str | None = None,
+    embedding_model: str | None = None,
+    hf_endpoint: str | None = None,
 ) -> dict[str, Any]:
     current_target = Path(current_dir) if current_dir else KG_CURRENT_DIR
     entities, triples, claims, evidence = _load_current_records(current_target)
@@ -1061,18 +1208,32 @@ def graph_vector_search(
     labels = _entity_labels(entities)
     documents = _kg_vector_documents(entities, triples, claims, labels, strict=strict)
     if not documents:
+        requested_backend = _normalize_vector_backend(vector_backend)
+        model_name = _kg_embedding_model_name(embedding_model)
         return {
             "status": "empty",
-            "retrieval_mode": "graph_vector_tfidf",
+            "retrieval_mode": "graph_vector_dense" if requested_backend == "dense" else "graph_vector_tfidf",
             "query": query,
             "strict": strict,
             "include_pending": include_pending,
             "seed_hits": [],
             "subgraph": {"entities": [], "triples": [], "claims": [], "evidence_paths": []},
-            "vector_index": {"document_count": 0, "vocabulary_size": 0, "backend": "local_tfidf"},
+            "vector_index": {
+                "document_count": 0,
+                "vocabulary_size": 0,
+                "backend": "dense_embedding" if requested_backend == "dense" else "local_tfidf",
+                "model": model_name if requested_backend == "dense" else "",
+            },
         }
-    store = FeatureStore.from_documents([item["text"] for item in documents], max_features=1000)
-    nearest = store.nearest(query, limit=max(1, min(len(documents), top_k * 3)))
+    nearest, vector_index = _kg_vector_nearest(
+        query,
+        documents,
+        backend=vector_backend or "",
+        embedding_model=embedding_model,
+        hf_endpoint=hf_endpoint,
+        limit=max(1, min(len(documents), top_k * 3)),
+    )
+    retrieval_mode = _retrieval_mode(vector_index)
     seed_hits: list[dict[str, Any]] = []
     for index, score in nearest:
         if score <= 0:
@@ -1091,16 +1252,15 @@ def graph_vector_search(
     if not seed_hits:
         return {
             "status": "no_match",
-            "retrieval_mode": "graph_vector_tfidf",
+            "retrieval_mode": retrieval_mode,
             "query": query,
             "strict": strict,
             "include_pending": include_pending,
             "seed_hits": [],
             "subgraph": {"entities": [], "triples": [], "claims": [], "evidence_paths": []},
             "vector_index": {
+                **vector_index,
                 "document_count": len(documents),
-                "vocabulary_size": len(store.vocabulary),
-                "backend": "local_tfidf",
             },
         }
     included_ids = {hit["id"] for hit in seed_hits}
@@ -1136,16 +1296,15 @@ def graph_vector_search(
     }
     return {
         "status": "ok",
-        "retrieval_mode": "graph_vector_tfidf",
+        "retrieval_mode": retrieval_mode,
         "query": query,
         "strict": strict,
         "include_pending": include_pending,
         "seed_hits": seed_hits,
         "subgraph": subgraph,
         "vector_index": {
+            **vector_index,
             "document_count": len(documents),
-            "vocabulary_size": len(store.vocabulary),
-            "backend": "local_tfidf",
             "graph_expansion_hops": expand_hops,
         },
     }
@@ -1159,6 +1318,9 @@ def answer_kg(
     current_dir: str | Path | None = None,
     queue_path: str | Path | None = None,
     max_paths: int = 5,
+    vector_backend: str | None = None,
+    embedding_model: str | None = None,
+    hf_endpoint: str | None = None,
 ) -> dict[str, Any]:
     search = graph_vector_search(
         query,
@@ -1168,7 +1330,11 @@ def answer_kg(
         queue_path=queue_path,
         top_k=max_paths,
         expand_hops=1,
+        vector_backend=vector_backend,
+        embedding_model=embedding_model,
+        hf_endpoint=hf_endpoint,
     )
+    retrieval_mode = str(search.get("retrieval_mode") or "graph_vector_tfidf")
     subgraph = search.get("subgraph") if isinstance(search.get("subgraph"), dict) else {}
     triples = _safe_list(subgraph.get("triples"))
     claims = _safe_list(subgraph.get("claims"))
@@ -1181,7 +1347,7 @@ def answer_kg(
             "status": "insufficient",
             "strict": strict,
             "include_pending": include_pending,
-            "retrieval_mode": "graph_vector_tfidf",
+            "retrieval_mode": retrieval_mode,
             "answer": "KG insufficient: graph-vector retrieval found no accepted evidence subgraph for the query.",
             "missing": ["vector-recalled accepted triple or claim", "graph-expanded reviewed evidence path"],
             "evidence_paths": [],
@@ -1213,7 +1379,7 @@ def answer_kg(
         "status": "ok",
         "strict": strict,
         "include_pending": include_pending,
-        "retrieval_mode": "graph_vector_tfidf",
+        "retrieval_mode": retrieval_mode,
         "answer": "KG graph-vector evidence: " + " | ".join(fact_lines),
         "facts": facts,
         "evidence_paths": evidence_paths[: max(1, max_paths)],
@@ -1279,6 +1445,10 @@ def _graph_vector_index_payload(
     triples: list[dict[str, Any]],
     claims: list[dict[str, Any]],
     labels: dict[str, str],
+    *,
+    vector_backend: str | None = None,
+    embedding_model: str | None = None,
+    hf_endpoint: str | None = None,
 ) -> dict[str, Any]:
     documents = _kg_vector_documents(entities, triples, claims, labels, strict=True)
     store = FeatureStore.from_documents([item["text"] for item in documents], max_features=1000) if documents else None
@@ -1305,10 +1475,17 @@ def _graph_vector_index_payload(
     return {
         "schema": "diaevo.kg_graph_vector_index.v1",
         "backend": "local_tfidf",
+        "dense_backend": {
+            "backend": "dense_embedding",
+            "model": _kg_embedding_model_name(embedding_model),
+            "hf_endpoint": _ensure_hf_endpoint(hf_endpoint),
+            "runtime_backend": _normalize_vector_backend(vector_backend),
+            "note": "Use graph_vector_search(..., vector_backend='dense') or answer-kg --vector-backend dense for real embedding retrieval.",
+        },
         "document_count": len(documents),
         "vocabulary_size": len(store.vocabulary) if store else 0,
         "documents": rows,
-        "note": "本索引用 TF-IDF 向量化已审核 KG 节点、关系和声明；回答时先向量召回种子，再沿图关系扩展证据子图。",
+        "note": "本快照保存可复现 TF-IDF 稀疏索引元数据；运行时可切换 dense embedding 检索，先向量召回种子，再沿图关系扩展证据子图。",
     }
 
 
@@ -1316,9 +1493,12 @@ def _graph_vector_markdown(payload: dict[str, Any]) -> str:
     lines = [
         "# 图结构向量检索索引",
         "",
-        "本文件说明当前 KG 的 GraphRAG-like 检索层：先把已审核节点、关系和声明转成可检索文本，使用本地 TF-IDF 向量召回候选，再沿图结构扩展证据子图。",
+        "本文件说明当前 KG 的 GraphRAG-like 检索层：先把已审核节点、关系和声明转成可检索文本，运行时可用 dense embedding 或本地 TF-IDF 召回候选，再沿图结构扩展证据子图。",
         "",
-        f"- 向量后端：`{payload.get('backend', '')}`",
+        f"- 快照后端：`{payload.get('backend', '')}`",
+        f"- Dense 后端：`{dict(payload.get('dense_backend') or {}).get('backend', '')}`",
+        f"- Dense 模型：`{dict(payload.get('dense_backend') or {}).get('model', '')}`",
+        f"- HF 镜像：`{dict(payload.get('dense_backend') or {}).get('hf_endpoint', '')}`",
         f"- 可检索文档数：`{payload.get('document_count', 0)}`",
         f"- 词表大小：`{payload.get('vocabulary_size', 0)}`",
         "",
@@ -1367,6 +1547,9 @@ def _graph_vector_retrieval_report(
     labels: dict[str, str],
     *,
     current_dir: str | Path | None,
+    vector_backend: str | None = None,
+    embedding_model: str | None = None,
+    hf_endpoint: str | None = None,
 ) -> str:
     lines = [
         "# 图结构向量检索演示",
@@ -1375,7 +1558,16 @@ def _graph_vector_retrieval_report(
         "",
     ]
     for query in _sample_graph_vector_queries(entities, triples, claims, labels):
-        result = graph_vector_search(query, strict=True, current_dir=current_dir, top_k=3, expand_hops=1)
+        result = graph_vector_search(
+            query,
+            strict=True,
+            current_dir=current_dir,
+            top_k=3,
+            expand_hops=1,
+            vector_backend=vector_backend,
+            embedding_model=embedding_model,
+            hf_endpoint=hf_endpoint,
+        )
         subgraph = result.get("subgraph") if isinstance(result.get("subgraph"), dict) else {}
         lines.extend(
             [

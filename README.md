@@ -29,7 +29,7 @@ traces + tool_events + web_search/web_fetch + 可选 conversation log
   -> 待审核 KG 候选
   -> 已审核 active KG
   -> 可编辑 KG workbench
-  -> 可选 answer-kg --strict / 手动 kg_answer
+  -> 可选 /kg_answer on 或 answer-kg --strict
 ```
 
 当前硬边界：
@@ -38,7 +38,7 @@ traces + tool_events + web_search/web_fetch + 可选 conversation log
 - `validate` 在审批后才执行命令，并且在 `.tmp/validation-runs/<id>/workspace` 的一次性沙盒副本中运行。
 - `promote` 只更新 `data/skill_registry.json`，不会安装外部技能。
 - 知识图谱候选在审核通过前不是 active facts。
-- 严格图谱约束回答只能由用户显式启用。
+- 严格图谱约束回答只能由用户显式启用；交互式终端用 `/kg_answer on` 进入、`/kg_answer off` 退出。
 - Phase 7 代码 patch 只允许在沙盒副本中评估，真实工作区不会被自动改写。
 - GEPA 是可选优化后端，不是默认依赖。
 
@@ -131,8 +131,8 @@ diaevo-home
 | 晋升治理 | `queue-promotion`、`label-promotion`、`rewrite-promotion` 和 `promote --approve` 组成显式人工审核链，只更新本地注册表，不自动安装外部技能。 |
 | 知识图谱治理 | `build-kg-delta`、`review-kg-delta`、`apply-kg-delta` 是隐藏底层命令；accepted 实体、三元组、声明和证据路径写入 `data/knowledge_graph/current/`。 |
 | 可编辑总体 KG | `kg` / `/kg` 绑定本地端口并自动打开 active KG 的总体可视化 URL，默认不生成日期快照；只有显式 `export-kg-snapshot` 或 `kg --output-dir ...` 才导出快照。 |
-| 严格 KG 回答 | `answer-kg --strict` 和手动 `kg_answer(strict=true)` 才启用图谱约束回答；普通聊天不会自动调用严格 KG 工具。 |
-| 图结构向量检索 | accepted KG 节点、三元组和声明会转换成本地 TF-IDF 稀疏向量；严格回答先召回向量种子，再扩展图证据子图。 |
+| 严格 KG 回答 | 交互式终端可用 `/kg_answer on` 进入图谱约束回答模式，`/kg_answer off` 退出；CLI 可用 `answer-kg --strict`，工具层可手动调用 `kg_answer(strict=true)`。 |
+| 图结构向量检索 | accepted KG 节点、三元组和声明会转换成可检索文档；默认使用可复现 TF-IDF，`answer-kg --vector-backend dense` 使用 `sentence-transformers` dense embedding 召回种子，再扩展图证据子图。默认 HF 镜像是 `https://hf-mirror.com`。 |
 | 评估报告 | `evaluate`、`evaluate-gepa`、`evaluate-gepa-phase4` 输出 baseline/evolved、held-out、重复率、安全 holdout、人工反馈记忆和 GEPA 对比报告。 |
 | Phase 7 代码演化研究 | `evaluate-code-evolution` 默认只生成 patch strategy；`--collect-baseline` 在沙盒中收集失败/通过测试证据；提供 patch 时只在沙盒中应用和验证，不直接改真实工作区。 |
 

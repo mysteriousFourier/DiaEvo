@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import shlex
 import getpass
+from dataclasses import dataclass
 from typing import Callable
 
 from diaevo.cli import main as cli_main
@@ -31,6 +32,7 @@ HELP_TEXT = """
   /ingest                  导入 data/sample_traces.jsonl
   /mine                    运行挖掘流程
   /kg                      打开可编辑知识图谱工作台
+  /kg_answer on|off        开关严格 KG 图向量检索回答模式
   /recommend <任务>        按任务推荐技能
   /generate <cluster-id>   生成候选 SKILL.md
   /verify <cluster-id/path> 验证候选技能
@@ -57,6 +59,14 @@ class ChatConfigState:
 
     def reset(self) -> None:
         self.value = None
+
+
+@dataclass
+class KGAnswerMode:
+    enabled: bool = False
+    vector_backend: str = "dense"
+    strict: bool = True
+    max_paths: int = 5
 
 
 def _run(argv: list[str]) -> None:
@@ -90,7 +100,7 @@ def _set_env_command(
     print(f"{key} = {shown}")
 
 
-def _dispatch_command(command: str, chat_state: ChatConfigState) -> bool:
+def _dispatch_command(command: str, chat_state: ChatConfigState, kg_mode: KGAnswerMode | None = None) -> bool:
     try:
         parts = shlex.split(command, posix=False)
     except ValueError as exc:
@@ -146,6 +156,25 @@ def _dispatch_command(command: str, chat_state: ChatConfigState) -> bool:
         with status(f"正在执行 {tool_name}"):
             result = execute_tool(tool_name, tool_args, approve=approve)
         print(render_tool_result(result))
+        return True
+    if name in {"kg_answer", "kg-answer", "kganswer"}:
+        if kg_mode is None:
+            print("KG answer mode is not available in this context.")
+            return True
+        action = rest[0].lower() if rest else "status"
+        if action in {"on", "enable", "enabled", "1", "true"}:
+            kg_mode.enabled = True
+            print(f"KG answer mode: on (strict=true, vector_backend={kg_mode.vector_backend})")
+            return True
+        if action in {"off", "disable", "disabled", "0", "false"}:
+            kg_mode.enabled = False
+            print("KG answer mode: off")
+            return True
+        if action in {"status", ""}:
+            state = "on" if kg_mode.enabled else "off"
+            print(f"KG answer mode: {state} (strict=true, vector_backend={kg_mode.vector_backend})")
+            return True
+        print("usage: /kg_answer on|off|status")
         return True
     if name == "model":
         _set_env_command("DEEPSEEK_MODEL", " ".join(rest), chat_state, prompt="DEEPSEEK_MODEL")
@@ -226,6 +255,18 @@ def _chat_turn_with_tools(messages: list[dict[str, object]], chat_state: ChatCon
     return answer
 
 
+def _kg_answer_turn(prompt: str, kg_mode: KGAnswerMode) -> str:
+    args = {
+        "query": prompt,
+        "strict": kg_mode.strict,
+        "max_paths": kg_mode.max_paths,
+        "vector_backend": kg_mode.vector_backend,
+    }
+    with status("正在执行 kg_answer"):
+        result = execute_tool("kg_answer", args)
+    print(render_tool_result(result))
+    return str(result.get("answer") or "")
+
 def main() -> int:
     if not maybe_show_trust_dialog():
         return 1
@@ -242,7 +283,7 @@ def main() -> int:
                 "回答要简洁、可执行，不要编造不存在的命令。"
                 "不要在任何对话、代码、注释、列表或工具说明中使用 emoji。"
                 "当前交互式斜杠命令包括：/ingest、/mine、/kg、/recommend <task>、"
-                "/generate <cluster-id>、/verify <cluster-id/path>、/demo、/tools、/tool、/model <name>、"
+                "/kg_answer on|off、/generate <cluster-id>、/verify <cluster-id/path>、/demo、/tools、/tool、/model <name>、"
                 "/baseurl <url>、/key <api-key>、/home、/help、/exit。"
                 "你可以通过工具调用请求 list_files、read_file、write_file、edit_file、delete_file、apply_patch、run_shell、web_search 或 web_fetch。"
                 "不要自行选择知识图谱约束回答；严格 KG 回答是用户手动模式，只有用户运行 answer-kg --strict 或明确要求 KG 严格回答时才使用。"
@@ -253,6 +294,7 @@ def main() -> int:
         }
     ]
     chat_state = ChatConfigState()
+    kg_mode = KGAnswerMode()
 
     while True:
         try:
@@ -263,8 +305,12 @@ def main() -> int:
         if not command:
             continue
         if is_command_input(command):
-            if not _dispatch_command(command, chat_state):
+            if not _dispatch_command(command, chat_state, kg_mode):
                 return 0
+            continue
+
+        if kg_mode.enabled:
+            _kg_answer_turn(command, kg_mode)
             continue
 
         history_len = len(messages)

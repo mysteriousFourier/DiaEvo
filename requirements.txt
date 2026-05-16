@@ -11,6 +11,6 @@ pytest>=8.0
 # scikit-learn
 # networkx
 # mlxtend
-# sentence-transformers
+sentence-transformers  # required for answer-kg --vector-backend dense
 # textual
 # pyyaml

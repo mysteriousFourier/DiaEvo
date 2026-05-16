@@ -8,6 +8,8 @@ import os
 import re
 import shutil
 import subprocess
+import threading
+import time
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -140,6 +142,8 @@ def _safe_for_log(value: Any) -> Any:
         result: dict[str, Any] = {}
         for key, item in value.items():
             key_text = str(key)
+            if key_text.startswith("__"):
+                continue
             lowered = key_text.lower()
             if any(token in lowered for token in ("key", "token", "secret", "password")):
                 result[key_text] = "***"
@@ -399,14 +403,54 @@ def _run_shell(args: dict[str, Any], approved: bool) -> dict[str, Any]:
     else:
         cmd = command
         shell = True
-    completed = subprocess.run(cmd, text=True, capture_output=True, cwd=WORKSPACE_ROOT, timeout=timeout, shell=shell)
+    cancel_event = args.get("__cancel_event__")
+    if not isinstance(cancel_event, threading.Event):
+        cancel_event = None
+    started = time.monotonic()
+    process = subprocess.Popen(
+        cmd,
+        text=True,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+        cwd=WORKSPACE_ROOT,
+        shell=shell,
+    )
+    while process.poll() is None:
+        if cancel_event and cancel_event.is_set():
+            process.terminate()
+            try:
+                stdout, stderr = process.communicate(timeout=2)
+            except subprocess.TimeoutExpired:
+                process.kill()
+                stdout, stderr = process.communicate()
+            return {
+                "status": "interrupted",
+                "tool": "run_shell",
+                "command": command,
+                "returncode": process.returncode,
+                "stdout": _truncate(stdout, 20_000),
+                "stderr": _truncate(stderr, 20_000),
+            }
+        if time.monotonic() - started >= timeout:
+            process.kill()
+            stdout, stderr = process.communicate()
+            return {
+                "status": "timeout",
+                "tool": "run_shell",
+                "command": command,
+                "returncode": process.returncode,
+                "stdout": _truncate(stdout, 20_000),
+                "stderr": _truncate(stderr, 20_000),
+            }
+        time.sleep(0.05)
+    stdout, stderr = process.communicate()
     return {
-        "status": "ok" if completed.returncode == 0 else "error",
+        "status": "ok" if process.returncode == 0 else "error",
         "tool": "run_shell",
         "command": command,
-        "returncode": completed.returncode,
-        "stdout": _truncate(completed.stdout, 20_000),
-        "stderr": _truncate(completed.stderr, 20_000),
+        "returncode": process.returncode,
+        "stdout": _truncate(stdout, 20_000),
+        "stderr": _truncate(stderr, 20_000),
     }
 
 
@@ -487,6 +531,9 @@ def _kg_answer(args: dict[str, Any], approved: bool) -> dict[str, Any]:
     max_paths = max(1, min(int(args.get("max_paths") or 5), 20))
     current_dir = args.get("current_dir") or None
     queue_path = args.get("queue_path") or None
+    vector_backend = args.get("vector_backend") or None
+    embedding_model = args.get("embedding_model") or None
+    hf_endpoint = args.get("hf_endpoint") or None
     result = answer_kg(
         query,
         strict=strict,
@@ -494,6 +541,9 @@ def _kg_answer(args: dict[str, Any], approved: bool) -> dict[str, Any]:
         current_dir=current_dir,
         queue_path=queue_path,
         max_paths=max_paths,
+        vector_backend=vector_backend,
+        embedding_model=embedding_model,
+        hf_endpoint=hf_endpoint,
     )
     return {"status": "ok", "tool": "kg_answer", **result}
 
@@ -650,6 +700,9 @@ _register(
                 "max_paths": {"type": "integer", "default": 5},
                 "current_dir": {"type": "string", "default": ""},
                 "queue_path": {"type": "string", "default": ""},
+                "vector_backend": {"type": "string", "enum": ["auto", "dense", "tfidf"], "default": "auto"},
+                "embedding_model": {"type": "string", "default": ""},
+                "hf_endpoint": {"type": "string", "default": "https://hf-mirror.com"},
             },
             ["query"],
         ),
@@ -673,6 +726,7 @@ def execute_tool(
     approve: bool = False,
     turn_id: str | None = None,
     event_log_path: str | Path | None = None,
+    cancel_event: threading.Event | None = None,
 ) -> dict[str, Any]:
     args = dict(args or {})
     spec = TOOLS.get(name)
@@ -682,6 +736,8 @@ def execute_tool(
     started_at = now_iso()
     event_id = uuid.uuid4().hex
     try:
+        if cancel_event is not None:
+            args["__cancel_event__"] = cancel_event
         result = spec.handler(args, approve)
     except Exception as exc:
         result = {"status": "error", "tool": spec.name, "error": str(exc)}

@@ -6,6 +6,7 @@ from diaevo.knowledge_graph import (
     answer_kg,
     apply_kg_delta,
     build_kg_delta,
+    configure_embedding_model_factory,
     export_kg_snapshot,
     graph_vector_search,
     kg_workbench,
@@ -93,6 +94,25 @@ def _sample_tool_events_path(tmp_path):
         ],
     )
     return events
+
+
+class _FakeSentenceTransformer:
+    def __init__(self, model_name):
+        self.model_name = model_name
+
+    def encode(self, texts, normalize_embeddings=True, convert_to_numpy=False):
+        vectors = []
+        for text in texts:
+            lowered = text.lower()
+            vectors.append(
+                [
+                    1.0 if "pytest" in lowered else 0.0,
+                    1.0 if "tool" in lowered or "uses_tool" in lowered else 0.0,
+                    1.0 if "task" in lowered or "describes_task" in lowered else 0.0,
+                    1.0 if "database" in lowered else 0.0,
+                ]
+            )
+        return vectors
 
 
 def test_build_kg_delta_queues_reviewable_candidates_with_web_confidence(tmp_path):
@@ -203,6 +223,46 @@ def test_graph_vector_search_returns_seed_hits_and_graph_expansion(tmp_path):
     assert "USES_TOOL" in predicates or "DESCRIBES_TASK" in predicates
 
 
+def test_dense_graph_vector_search_uses_embedding_backend_and_hf_mirror(tmp_path, monkeypatch):
+    queue = tmp_path / "review_queue.jsonl"
+    current = tmp_path / "current"
+    build_kg_delta(
+        traces_path=_sample_trace_path(tmp_path),
+        tool_events_path=_sample_tool_events_path(tmp_path),
+        include_mining=False,
+        queue_path=queue,
+        current_dir=current,
+        delta_dir=tmp_path / "deltas",
+    )
+    for entry in read_jsonl(queue):
+        item = entry["item"]
+        if item.get("source_type") == "trace" and item.get("predicate") in {"DESCRIBES_TASK", "USES_TOOL"}:
+            review_kg_delta(entry["review_id"], status="accepted", queue_path=queue)
+    apply_kg_delta(queue_path=queue, current_dir=current)
+
+    monkeypatch.delenv("HF_ENDPOINT", raising=False)
+    configure_embedding_model_factory(_FakeSentenceTransformer)
+    try:
+        result = graph_vector_search(
+            "pytest tool usage",
+            current_dir=current,
+            strict=True,
+            top_k=2,
+            vector_backend="dense",
+            embedding_model="fake/kg-embedder",
+        )
+    finally:
+        configure_embedding_model_factory(None)
+
+    assert result["status"] == "ok"
+    assert result["retrieval_mode"] == "graph_vector_dense"
+    assert result["vector_index"]["backend"] == "dense_embedding"
+    assert result["vector_index"]["model"] == "fake/kg-embedder"
+    assert result["vector_index"]["hf_endpoint"] == "https://hf-mirror.com"
+    assert result["vector_index"]["embedding_dimension"] == 4
+    assert result["subgraph"]["triples"]
+
+
 def test_export_kg_snapshot_writes_human_readable_files(tmp_path):
     queue = tmp_path / "review_queue.jsonl"
     current = tmp_path / "current"
@@ -253,6 +313,8 @@ def test_export_kg_snapshot_writes_human_readable_files(tmp_path):
     index = read_json(output_dir / "graph_vector_index.json")
     assert index["schema"] == "diaevo.kg_graph_vector_index.v1"
     assert index["documents"][0]["sparse_vector"]
+    assert index["dense_backend"]["backend"] == "dense_embedding"
+    assert index["dense_backend"]["hf_endpoint"] == "https://hf-mirror.com"
     assert "图结构向量检索" in (output_dir / "graph_vector_retrieval.md").read_text(encoding="utf-8")
 
 

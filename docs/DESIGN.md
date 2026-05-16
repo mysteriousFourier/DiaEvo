@@ -101,7 +101,7 @@ evaluate-gepa-phase4, evaluate-code-evolution, tool, chat-test
 - validation runner 默认阻止危险、安装和网络命令；审批后也只在沙盒副本中运行。
 - promotion 必须人工审批，只写 `data/skill_registry.json`。
 - KG 候选事实必须审核通过后才进入 active KG。
-- `answer-kg --strict` 和手动 `kg_answer(strict=true)` 才启用严格图谱约束回答，自动聊天工具列表不暴露 `kg_answer`。
+- 交互式终端通过 `/kg_answer on` / `/kg_answer off` 开关严格图谱约束回答模式；CLI 用 `answer-kg --strict`，工具层可手动调用 `kg_answer(strict=true)`。自动聊天工具列表仍不暴露 `kg_answer`。
 - 评估必须持续监控 `safety_false_negative_rate == 0.0`。
 
 安全约束不是加权偏好。危险候选是硬失败。
@@ -115,7 +115,7 @@ evaluate-gepa-phase4, evaluate-code-evolution, tool, chat-test
 - `association_rules.py` 枚举 Apriori 风格关联规则。
 - `sequence_mining.py` 挖掘 PrefixSpan 风格子序列。
 - `skill_graph.py` 实现轻量 Personalized PageRank。
-- `knowledge_graph.py` 使用确定性抽取和本地 TF-IDF 稀疏索引实现 GraphRAG-like 图结构向量检索。
+- `knowledge_graph.py` 使用确定性抽取实现 review-first KG；图结构向量检索默认可复现 TF-IDF，也支持显式 dense embedding 后端。
 - `evolution.py` 使用本地指标/Pareto 演化。
 
 `pyproject.toml` 的 `full` extra 保留了更重的可选依赖，但核心命令不依赖它们。Rich 是默认依赖，用于终端 Markdown 渲染。
@@ -160,7 +160,7 @@ KG v1 是 review-first：
 - `kg` 打开可编辑 HTML 工作台。
 - `kg --apply-edit <json> --approve` 才把编辑写回 active KG。
 
-当前检索是“向量召回 + 图扩展 + 证据约束回答”：accepted 实体、三元组和声明会转为 KG 文档，使用本地 TF-IDF 稀疏向量召回种子，再沿 subject-object 关系扩展证据子图。它还不是 dense embedding 或外部 vector DB 后端。
+当前检索是“向量召回 + 图扩展 + 证据约束回答”：accepted 实体、三元组和声明会转为 KG 文档。默认后端仍是可复现的本地 TF-IDF；需要真正的 dense 图结构向量检索时，使用 `answer-kg --vector-backend dense` 或 `DIAEVO_KG_VECTOR_BACKEND=dense`，系统会用 `sentence-transformers` 生成 embedding 召回种子，再沿 subject-object 关系扩展证据子图。默认 embedding 模型是 `sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`，默认下载镜像是 `https://hf-mirror.com`，可通过 `DIAEVO_KG_EMBEDDING_MODEL` 和 `DIAEVO_HF_ENDPOINT` 覆盖。
 
 ## GEPA 集成边界
 

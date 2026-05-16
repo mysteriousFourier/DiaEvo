@@ -18,6 +18,6 @@
 - `graph_edges.csv`：适合图可视化工具读取的边表。
 - `evidence_paths.md`：每条已审核事实背后的路径、URL 和摘要。
 - `confidence_summary.md`：置信度分桶和来源类型统计。
-- `graph_vector_index.json`：图结构向量检索索引，记录可检索 KG 文档、稀疏向量词项和索引元数据。
-- `graph_vector_retrieval.md`：图结构向量检索层说明和索引样例。
-- `graph_vector_demo.md`：示例查询的向量召回种子与图扩展证据子图。
+- `graph_vector_index.json`：图结构向量检索索引，记录可检索 KG 文档、TF-IDF 稀疏向量词项、dense embedding 后端配置和索引元数据。
+- `graph_vector_retrieval.md`：图结构向量检索层说明、dense 后端配置和索引样例。
+- `graph_vector_demo.md`：示例查询的快照后端召回种子与图扩展证据子图；运行时可切换 dense 后端。

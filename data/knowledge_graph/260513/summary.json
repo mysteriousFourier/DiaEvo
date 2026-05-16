@@ -19,7 +19,11 @@
     "triples.csv"
   ],
   "graph_vector_document_count": 7,
+  "graph_vector_dense_backend": "dense_embedding",
+  "graph_vector_dense_model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+  "graph_vector_hf_endpoint": "https://hf-mirror.com",
   "graph_vector_vocabulary_size": 34,
+  "interactive_kg_answer_mode": "/kg_answer on",
   "retrieval_mode": "graph_vector_tfidf",
   "snapshot_dir": "D:\\codex\\skillminer\\data\\knowledge_graph\\260513",
   "status": "ok",

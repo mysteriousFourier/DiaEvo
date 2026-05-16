@@ -1,8 +1,11 @@
 # 图结构向量检索索引
 
-本文件说明当前 KG 的 GraphRAG-like 检索层：先把已审核节点、关系和声明转成可检索文本，使用本地 TF-IDF 向量召回候选，再沿图结构扩展证据子图。
+本文件说明当前 KG 的 GraphRAG-like 检索层：先把已审核节点、关系和声明转成可检索文本，运行时可使用 dense embedding 或本地 TF-IDF 召回候选，再沿图结构扩展证据子图。
 
-- 向量后端：`local_tfidf`
+- 快照后端：`local_tfidf`
+- Dense 后端：`dense_embedding`
+- Dense 模型：`sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2`
+- HF 镜像：`https://hf-mirror.com`
 - 可检索文档数：`7`
 - 词表大小：`34`
 

@@ -1,6 +1,6 @@
 # 图结构向量检索演示
 
-本报告展示 KG 回答不是单纯关键词匹配：系统先用向量检索召回相关 KG 文档，再沿 subject-object 图关系扩展证据子图。严格回答只允许使用 accepted 事实。
+本报告展示 KG 回答不是单纯关键词匹配：系统先用向量检索召回相关 KG 文档，再沿 subject-object 图关系扩展证据子图。严格回答只允许使用 accepted 事实。本快照示例使用 `graph_vector_tfidf`；运行时可通过 `/kg_answer on` 或 `answer-kg --vector-backend dense` 使用 dense embedding 后端。
 
 ## 查询：T001 USES_SKILL test-failure-repair
 

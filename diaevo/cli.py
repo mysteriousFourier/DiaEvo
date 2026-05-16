@@ -257,6 +257,9 @@ def build_parser() -> argparse.ArgumentParser:
     kg_answer_parser.add_argument("--current-dir", default=None, help="可选：指定 active KG 目录。")
     kg_answer_parser.add_argument("--queue", default=None, help="可选：非严格模式使用的审核队列 JSONL 路径。")
     kg_answer_parser.add_argument("--max-paths", type=int, default=5, help="最多返回多少条图谱证据路径。")
+    kg_answer_parser.add_argument("--vector-backend", choices=["auto", "dense", "tfidf"], default=None, help="KG 向量检索后端；dense 使用 sentence-transformers。")
+    kg_answer_parser.add_argument("--embedding-model", default=None, help="dense 后端使用的 sentence-transformers/HF 模型名。")
+    kg_answer_parser.add_argument("--hf-endpoint", default=None, help="HF 下载镜像；默认 https://hf-mirror.com。")
 
     eval_parser = subparsers.add_parser("evaluate", help="Run baseline metrics for the current engineering algorithms.")
     eval_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
@@ -515,6 +518,9 @@ def main(argv: list[str] | None = None) -> int:
                 current_dir=args.current_dir,
                 queue_path=args.queue,
                 max_paths=args.max_paths,
+                vector_backend=args.vector_backend,
+                embedding_model=args.embedding_model,
+                hf_endpoint=args.hf_endpoint,
             )
         elif args.command == "evaluate":
             result = baseline_report(

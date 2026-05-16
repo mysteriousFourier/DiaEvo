@@ -1,5 +1,11 @@
 {
   "backend": "local_tfidf",
+  "dense_backend": {
+    "backend": "dense_embedding",
+    "hf_endpoint": "https://hf-mirror.com",
+    "model": "sentence-transformers/paraphrase-multilingual-MiniLM-L12-v2",
+    "note": "运行时可通过 /kg_answer on 或 answer-kg --vector-backend dense 使用真实 embedding 召回；本快照仍保存可复现 TF-IDF 稀疏索引。"
+  },
   "document_count": 7,
   "documents": [
     {
@@ -367,7 +373,7 @@
       ]
     }
   ],
-  "note": "本索引用 TF-IDF 向量化已审核 KG 节点、关系和声明；回答时先向量召回种子，再沿图关系扩展证据子图。",
+  "note": "本快照保存可复现 TF-IDF 稀疏索引；运行时可切换 dense embedding 检索，回答时先向量召回种子，再沿图关系扩展证据子图。",
   "schema": "skillminer.kg_graph_vector_index.v1",
   "vocabulary_size": 34
 }
