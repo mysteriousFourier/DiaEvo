@@ -1,0 +1,68 @@
+{
+  "error_types": {
+    "业务优先级不清": 1,
+    "参考吸收不足": 1,
+    "大圆角卡片堆叠": 1,
+    "无意义统计数字": 1,
+    "移动端表格溢出": 1,
+    "空泛营销文案": 1,
+    "紫色渐变过度": 1,
+    "营销页气质": 1,
+    "视觉评估反馈": 1
+  },
+  "failure_count": 8,
+  "frameworks": {
+    "front-end": 9,
+    "responsive-design": 9,
+    "static-html": 9
+  },
+  "input_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\traces\\experiment_traces.jsonl",
+  "languages": {
+    "html css javascript 中文": 9
+  },
+  "outcomes": {
+    "failure": 8,
+    "success": 1
+  },
+  "processed_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\traces\\processed_traces.jsonl",
+  "sources": {
+    "experiment_conversation": 9
+  },
+  "success_count": 1,
+  "success_rate": 0.1111,
+  "tool_event_success_rate": 0.0,
+  "tool_event_trace_count": 0,
+  "tool_events_ingested": 0,
+  "tool_events_path": "D:\\codex\\skillminer\\.diaevo\\tool_events.jsonl",
+  "tool_events_seen": 0,
+  "tool_failure_types": {
+    "业务优先级不清": 2,
+    "信息层级缺失": 1,
+    "光斑玻璃拟态": 1,
+    "参考吸收不足": 1,
+    "大圆角卡片堆叠": 1,
+    "工具感不足": 1,
+    "截图硬门槛": 1,
+    "数据可信度不足": 1,
+    "无意义统计数字": 1,
+    "真实产品原则缺失": 1,
+    "移动端表格溢出": 1,
+    "空泛营销文案": 1,
+    "紫色渐变过度": 1,
+    "缺少截图验证": 1,
+    "营销页气质": 1,
+    "行动信息缺失": 1,
+    "视觉评估反馈": 1
+  },
+  "tool_reuse_count": 27,
+  "top_tools": {
+    "chat_completion": 9,
+    "edge_headless_screenshot": 9,
+    "glm_vision_evaluation": 9,
+    "reference_harvest": 9,
+    "rubric_evaluation": 9,
+    "write_html": 9
+  },
+  "trace_count": 9,
+  "used_skills": {}
+}

@@ -1,0 +1,1945 @@
+{
+  "adoption_recommendation": {
+    "reason": "GEPA did not improve held-out usefulness over the local evolved candidate.",
+    "status": "not_adopted"
+  },
+  "budget": 50,
+  "cluster": {
+    "id": "C02",
+    "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+    "top_terms": [
+      "-",
+      "工单",
+      "队列",
+      "sla",
+      "时间",
+      "座席",
+      "指标",
+      "展示"
+    ],
+    "top_tools": [
+      "chat_completion",
+      "write_html",
+      "edge_headless_screenshot",
+      "rubric_evaluation",
+      "glm_vision_evaluation"
+    ],
+    "trace_ids": [
+      "TR-DEAI-001",
+      "TR-DEAI-002",
+      "TR-DEAI-004",
+      "TR-DEAI-006",
+      "TR-DEAI-008"
+    ]
+  },
+  "cluster_id": "C02",
+  "comparison": {
+    "gepa": {
+      "asi": {
+        "candidate": {
+          "missing_or_thin_sections": [],
+          "rendered_length": 5380,
+          "section_lengths": {
+            "failure_fallbacks": 399,
+            "operating_steps": 611,
+            "safety_constraints": 307,
+            "trigger_signals": 308,
+            "verification_suggestions": 357,
+            "when_to_use": 2253
+          }
+        },
+        "edit_direction": "Preserve safety constraints and improve trigger specificity only with mined evidence.",
+        "feedback": {
+          "duplicate": {
+            "nearest": "skill-authoring",
+            "nearest_path": "skills/skill-authoring",
+            "nearest_source": "registry",
+            "reason": "no actionable duplicate risk detected",
+            "recommended_action": "keep",
+            "section_review": {
+              "action": "keep",
+              "evidence": {
+                "candidate_source_cluster": "C02",
+                "candidate_tools": [
+                  "chat_completion",
+                  "edge_headless_screenshot",
+                  "glm_vision_evaluation",
+                  "rubric_evaluation",
+                  "sla",
+                  "write_html"
+                ],
+                "nearest_source_cluster": "",
+                "nearest_tools": [],
+                "trace_ids": [
+                  "TR-DEAI-001",
+                  "TR-DEAI-002",
+                  "TR-DEAI-004",
+                  "TR-DEAI-006",
+                  "TR-DEAI-008"
+                ]
+              },
+              "operating_steps_compatible": true,
+              "preserve": {
+                "mined_evidence": [
+                  "- Source cluster: `C02`",
+                  "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                  "- Cluster size: `5`",
+                  "- Failure rate: `1.00`",
+                  "- Coverage gap: `0.72`",
+                  "- Tool success rate: `1.00`",
+                  "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                  "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                  "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                ],
+                "source_clusters": [
+                  "C02"
+                ],
+                "trace_ids": [
+                  "TR-DEAI-001",
+                  "TR-DEAI-002",
+                  "TR-DEAI-004",
+                  "TR-DEAI-006",
+                  "TR-DEAI-008"
+                ]
+              },
+              "proposed_edits": {},
+              "summary": "No section rewrite is needed before review."
+            },
+            "similarity": 0.0215
+          },
+          "example_alignment": 0.5,
+          "section_completeness": 1.0,
+          "verifier": {
+            "error_count": 0,
+            "findings": [
+              {
+                "code": "dependency_hint",
+                "message": "dependency-related instructions require user confirmation",
+                "severity": "info"
+              }
+            ],
+            "passed": true,
+            "warning_count": 0
+          }
+        },
+        "input": {
+          "cluster_id": "C02",
+          "example_trace_id": "",
+          "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+          "top_failures": [
+            "紫色渐变过度",
+            "大圆角卡片堆叠",
+            "空泛营销文案",
+            "营销页气质",
+            "参考吸收不足",
+            "紫色渐变过度",
+            "光斑玻璃拟态",
+            "大圆角卡片堆叠",
+            "业务优先级不清",
+            "空泛营销文案"
+          ],
+          "top_terms": [
+            "-",
+            "工单",
+            "队列",
+            "sla",
+            "时间",
+            "座席",
+            "指标",
+            "展示"
+          ],
+          "top_tools": [
+            "chat_completion",
+            "write_html",
+            "edge_headless_screenshot",
+            "rubric_evaluation",
+            "glm_vision_evaluation"
+          ],
+          "trace_ids": [
+            "TR-DEAI-001",
+            "TR-DEAI-002",
+            "TR-DEAI-004",
+            "TR-DEAI-006",
+            "TR-DEAI-008"
+          ]
+        },
+        "scores": {
+          "aggregate": 0.9489,
+          "evidence_alignment": 0.9,
+          "example_alignment": 0.5,
+          "human_feedback": 0.5,
+          "length": 0.7486,
+          "non_duplicate": 0.9785,
+          "safety": 0.95,
+          "section_completeness": 1.0,
+          "specificity": 1.0,
+          "verifier": 1.0,
+          "warning_cleanliness": 1.0
+        }
+      },
+      "heldout": {
+        "candidate": "c02-evolved-工单-队列",
+        "diagnostics": [],
+        "label": "gepa",
+        "metrics": {},
+        "overlay_recommendation_eval": {
+          "metrics": {},
+          "per_query": []
+        },
+        "raw_recommendation_eval": {
+          "metrics": {},
+          "per_query": []
+        },
+        "target_heldout_query_count": 0,
+        "target_heldout_trace_count": 3
+      },
+      "optimizer": {
+        "best_idx": 0,
+        "call_counts": {
+          "judge_calls": 0,
+          "judge_skipped_count": 0,
+          "judge_trigger_reasons": {},
+          "metric_calls": 51,
+          "racing_rejected_count": 21,
+          "racing_rejection_reasons": {
+            "length_limit": 21,
+            "static_eval_rejected": 21
+          },
+          "reflection_calls": 0,
+          "total_tokens": null
+        },
+        "captured_stderr": "",
+        "captured_stdout": "图（可用纯CSS或简单SVG，避免大型图表库）。\n   - 下方为座席负载表格（姓名、未解决、未回复未解决、活跃SLA工单），支持点击表头排序。\n   - 底部放置积压状态堆叠条（待处理、处理中、暂停、等待请求者）和请求类别条形图。\n   - 全局禁用复杂动画，响应式设计采用 `max-width: 1400px` 且在小屏上表格横向滚动，关键列固定。\n\n5. **截图与视觉验证**\n   - 使用 `edge_headless_screenshot` 截取生成的页面，视口设置为 1440x900。\n   - 调用 `glm_vision_evaluation` 检查截图中是否存在紫色渐变、玻璃效果、大圆角、无意义文案。若检测到任一项，标记为失败。\n   - 同时使用 `rubric_evaluation`，基于预定义的评分表（如“无紫色渐变:是/否”，“首屏信息密度:低/中/高”）进行评估。\n\n6. **修复循环**\n   - 如果视觉验证失败，根据失败项自动修改 CSS 和文案，然后重新生成 HTML 并再次截图，直到所有“AI模板”特征消除或达到最大重试次数（3次）。\n\n## failure_fallbacks\n- 若连续截图三次仍检测到紫色渐变或玻璃效果，强制覆盖全局样式：`* { background: #fff !important; background-image: none !important; border-radius: 0 !important; box-shadow: none !important; }`，并重新截图验证。\n- 若 `glm_vision_evaluation` 不可用，则退回到人工检查清单：手动扫描 HTML 源码中是否包含 `linear-gradient`、`backdrop-filter`、`border-radius: 12px` 等关键字，手动移除。\n- 若生成的页面在移动端（375px 宽度）布局崩溃，补充 `@media` 查询，将多列布局改为堆叠，并隐藏非必要图表，确保核心指标可见。\n- 若用户反馈“还是太假”，替换模拟数据中的姓名和单号为更真实的格式（如“李主管”、“WL20240115-003”），并增加数据差异（随机生成不同座席的负载）。\n- 当修复导致页面可读性下降（如对比度不足），临时添加高对比度模式，但必须保持专业外观。\n\n## verification_suggestions\n1. **自动化视觉检查**：使用 `edge_headless_screenshot` 截取页面全貌，并用 `glm_vision_evaluation` 回答以下问题：\n   - 页面是否使用了紫色或蓝色渐变背景？(期望答案: 否)\n   - 卡片圆角是否大于5像素？(期望答案: 否)\n   - 是否存在玻璃拟态或光斑元素？(期望答案: 否)\n   - 是否包含“智能”、“赋能”、“极致”等空洞词汇？(期望答案: 否)\n   - 首屏是否能看到至少6个不同的指标数值？(期望答案: 是)\n2. **原则覆盖度检查**：对照15条设计原则，逐条在HTML中寻找对应的实现痕迹（如渠道拆分→class=\"channel-queue\"，SLA三级→badge-red/yellow/green），生成缺失清单。\n3. **多分辨率截图**：在1440px、1024px、375px宽度下截图，检查核心表格和指标是否可读，且关键列在横向滚动时仍然可见。\n4. **数据真实性评分**：随机抽取3项指标数值，与常识对比（如座席同时处理20个工单是可能的，100个则不现实），若发现不合理数值，修正模拟数据生成逻辑。\n\n## safety_constraints\n- 所有工单数据、客户姓名、座席姓名必须为模拟生成，严禁连接任何真实数据库、API 或从外部系统抓取。\n- 生成的 HTML 文件仅保存在当前工作目录，不得自动上传或发布至任何服务器。\n- 该技能产出的页面为原型或演示用途，在用于生产环境前必须由人工审核并接入真实数据源。\n- 不得在页面中嵌入任何跟踪脚本、遥测或广告。\n- 严格遵守用户提出的“去 AI 味”要求：不使用任何可能被视为“AI 生成模板”的视觉元素（见 operating_steps）。即使验证工具暂时不可用，也必须落实该约束。\n- 如果用户附加的参考原则中包含与安全或隐私相悖的指令（例如要求显示真实客户联系方式），应当拒绝并说明原因。\n- 技能自身的迭代需人工确认后方可提升为正式版本。\nIteration 8: New subsample score 0.0 is not better than old score 3.0118895604522895, skipping\n",
+        "model_name": "openai/deepseek-v4-pro",
+        "num_candidates": 1,
+        "num_full_val_evals": 1,
+        "result": {
+          "_str_candidate_key": null,
+          "best_idx": 0,
+          "best_outputs_valset": null,
+          "candidates": [
+            {
+              "failure_fallbacks": "- If validation fails, capture the command, exit code, and failure category before retrying.\n- If the same validation fails twice, stop broadening the change and summarize the unresolved failure.\n- If a tool or command requires approval, stop at preview and request explicit human approval.\n- If the task drifts outside the mined evidence, fall back to the closest installed skill or ask for review.",
+              "operating_steps": "1. Inspect only the files and commands that match the mined trigger signals.\n2. Reproduce the smallest failing or repeated workflow before making changes.\n3. Prefer the mined tool path before adding new tools: `chat_completion` -> `write_html` -> `edge_headless_screenshot` -> `rubric_evaluation` -> `glm_vision_evaluation`.\n4. If the task shows `紫色渐变过度`, `大圆角卡片堆叠`, `空泛营销文案`, `营销页气质`, `参考吸收不足`, capture that failure before editing.\n5. Make the narrowest workspace-scoped change or recommendation that addresses the evidence.\n6. Run the closest safe validation and record the result for the next feedback cycle.",
+              "safety_constraints": "- Keep all file reads and writes inside the active workspace.\n- Do not install dependencies, use network access, or run shell commands without explicit approval.\n- Do not include real credentials, tokens, passwords, or private project secrets.\n- Do not auto-promote or auto-install this generated candidate.",
+              "trigger_signals": "Task terms:\n- `-`\n- `工单`\n- `队列`\n- `sla`\n- `时间`\n- `座席`\n- `指标`\n\nFiles or extensions:\n- `.html`\n- `.md`\n- `.png`\n\nTools and failures:\n- `chat_completion`\n- `write_html`\n- `edge_headless_screenshot`\n- `rubric_evaluation`\n- `glm_vision_evaluation`\n- `紫色渐变过度`\n- `大圆角卡片堆叠`\n- `空泛营销文案`\n- `营销页气质`\n- `参考吸收不足`\n- `紫色渐变过度`",
+              "verification_suggestions": "- Run `DiaEvo verify --skill <candidate-dir>` before queueing promotion.\n- Run `DiaEvo validate --skill <candidate-dir> --approve` only after reviewing `validation.json`.\n- Compare the candidate against existing registry skills and merge or specialize if it is near-duplicate.\n- After use, run `DiaEvo feedback` so tool events become future mining evidence.",
+              "when_to_use": "Use this skill when a task is similar to `中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。`.\nThe task should share at least two mined signals from the trigger list before this skill is applied.\nKeep the skill as a generated draft until verification, validation, and human promotion approval all pass."
+            }
+          ],
+          "discovery_eval_counts": [
+            0
+          ],
+          "num_full_val_evals": 1,
+          "objective_pareto_front": {
+            "aggregate": 1.0020999999999998,
+            "evidence_alignment": 0.9,
+            "example_alignment": 0.9434999999999999,
+            "human_feedback": 0.5,
+            "length": 0.7486,
+            "non_duplicate": 0.9785,
+            "safety": 0.9499999999999998,
+            "section_completeness": 1.0,
+            "specificity": 1.0,
+            "verifier": 1.0,
+            "warning_cleanliness": 1.0
+          },
+          "parents": [
+            [
+              null
+            ]
+          ],
+          "per_objective_best_candidates": {
+            "aggregate": [
+              0
+            ],
+            "evidence_alignment": [
+              0
+            ],
+            "example_alignment": [
+              0
+            ],
+            "human_feedback": [
+              0
+            ],
+            "length": [
+              0
+            ],
+            "non_duplicate": [
+              0
+            ],
+            "safety": [
+              0
+            ],
+            "section_completeness": [
+              0
+            ],
+            "specificity": [
+              0
+            ],
+            "verifier": [
+              0
+            ],
+            "warning_cleanliness": [
+              0
+            ]
+          },
+          "per_val_instance_best_candidates": {
+            "0": [
+              0
+            ],
+            "1": [
+              0
+            ],
+            "2": [
+              0
+            ]
+          },
+          "run_dir": null,
+          "seed": 0,
+          "total_metric_calls": 51,
+          "val_aggregate_scores": [
+            1.002124425203313
+          ],
+          "val_aggregate_subscores": [
+            {
+              "aggregate": 1.0020999999999998,
+              "evidence_alignment": 0.9,
+              "example_alignment": 0.9434999999999999,
+              "human_feedback": 0.5,
+              "length": 0.7486,
+              "non_duplicate": 0.9785,
+              "safety": 0.9499999999999998,
+              "section_completeness": 1.0,
+              "specificity": 1.0,
+              "verifier": 1.0,
+              "warning_cleanliness": 1.0
+            }
+          ],
+          "val_subscores": [
+            {
+              "0": 1.0042218527063,
+              "1": 1.0039157067003792,
+              "2": 0.9982357162032598
+            }
+          ],
+          "validation_schema_version": 2
+        },
+        "total_metric_calls": 51,
+        "total_reflection_calls": null,
+        "total_tokens": null
+      },
+      "output": {
+        "candidate_digest": "3f6dd74c2df3",
+        "candidate_id": "gepa",
+        "cluster_id": "C02",
+        "duplicate": {
+          "nearest": "skill-authoring",
+          "nearest_path": "skills/skill-authoring",
+          "nearest_source": "registry",
+          "reason": "no actionable duplicate risk detected",
+          "recommended_action": "keep",
+          "section_review": {
+            "action": "keep",
+            "evidence": {
+              "candidate_source_cluster": "C02",
+              "candidate_tools": [
+                "chat_completion",
+                "edge_headless_screenshot",
+                "glm_vision_evaluation",
+                "rubric_evaluation",
+                "sla",
+                "write_html"
+              ],
+              "nearest_source_cluster": "",
+              "nearest_tools": [],
+              "trace_ids": [
+                "TR-DEAI-001",
+                "TR-DEAI-002",
+                "TR-DEAI-004",
+                "TR-DEAI-006",
+                "TR-DEAI-008"
+              ]
+            },
+            "operating_steps_compatible": true,
+            "preserve": {
+              "mined_evidence": [
+                "- Source cluster: `C02`",
+                "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                "- Cluster size: `5`",
+                "- Failure rate: `1.00`",
+                "- Coverage gap: `0.72`",
+                "- Tool success rate: `1.00`",
+                "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+              ],
+              "source_clusters": [
+                "C02"
+              ],
+              "trace_ids": [
+                "TR-DEAI-001",
+                "TR-DEAI-002",
+                "TR-DEAI-004",
+                "TR-DEAI-006",
+                "TR-DEAI-008"
+              ]
+            },
+            "proposed_edits": {},
+            "summary": "No section rewrite is needed before review."
+          },
+          "similarity": 0.0215
+        },
+        "duplicate_similarity": 0.0215,
+        "score": 1.0111,
+        "scores": {
+          "evidence_alignment": 0.9,
+          "human_feedback": 0.5,
+          "length": 0.7486,
+          "non_duplicate": 0.9785,
+          "safety": 0.95,
+          "specificity": 1.0,
+          "verifier": 1.0,
+          "warning_cleanliness": 1.0
+        },
+        "section_lengths": {
+          "failure_fallbacks": 399,
+          "operating_steps": 611,
+          "safety_constraints": 307,
+          "trigger_signals": 308,
+          "verification_suggestions": 357,
+          "when_to_use": 2253
+        },
+        "skill_dir": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\skills\\gepa_raw",
+        "skill_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\skills\\gepa_raw\\SKILL.md",
+        "status": "gepa-candidate"
+      },
+      "static_eval": {
+        "candidate_id": "gepa",
+        "duplicate_similarity": 0.0215,
+        "error_count": 0,
+        "findings": [
+          {
+            "code": "dependency_hint",
+            "message": "dependency-related instructions require user confirmation",
+            "severity": "info"
+          }
+        ],
+        "length": 5380,
+        "passed": true,
+        "rejected": false,
+        "rejection_reason": "",
+        "score": 1.0111,
+        "scores": {
+          "evidence_alignment": 0.9,
+          "human_feedback": 0.5,
+          "length": 0.7486,
+          "non_duplicate": 0.9785,
+          "safety": 0.95,
+          "specificity": 1.0,
+          "verifier": 1.0,
+          "warning_cleanliness": 1.0
+        },
+        "side_info": {
+          "cluster_id": "C02",
+          "duplicate": {
+            "nearest": "skill-authoring",
+            "nearest_path": "skills/skill-authoring",
+            "nearest_source": "registry",
+            "reason": "no actionable duplicate risk detected",
+            "recommended_action": "keep",
+            "section_review": {
+              "action": "keep",
+              "evidence": {
+                "candidate_source_cluster": "C02",
+                "candidate_tools": [
+                  "chat_completion",
+                  "edge_headless_screenshot",
+                  "glm_vision_evaluation",
+                  "rubric_evaluation",
+                  "sla",
+                  "write_html"
+                ],
+                "nearest_source_cluster": "",
+                "nearest_tools": [],
+                "trace_ids": [
+                  "TR-DEAI-001",
+                  "TR-DEAI-002",
+                  "TR-DEAI-004",
+                  "TR-DEAI-006",
+                  "TR-DEAI-008"
+                ]
+              },
+              "operating_steps_compatible": true,
+              "preserve": {
+                "mined_evidence": [
+                  "- Source cluster: `C02`",
+                  "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                  "- Cluster size: `5`",
+                  "- Failure rate: `1.00`",
+                  "- Coverage gap: `0.72`",
+                  "- Tool success rate: `1.00`",
+                  "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                  "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                  "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                ],
+                "source_clusters": [
+                  "C02"
+                ],
+                "trace_ids": [
+                  "TR-DEAI-001",
+                  "TR-DEAI-002",
+                  "TR-DEAI-004",
+                  "TR-DEAI-006",
+                  "TR-DEAI-008"
+                ]
+              },
+              "proposed_edits": {},
+              "summary": "No section rewrite is needed before review."
+            },
+            "similarity": 0.0215
+          },
+          "duplicate_nearest": "skill-authoring",
+          "evidence_alignment": 0.9,
+          "human_feedback_reasons": [],
+          "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+          "section_lengths": {
+            "failure_fallbacks": 399,
+            "mined_evidence": 558,
+            "operating_steps": 611,
+            "safety_constraints": 307,
+            "trigger_signals": 308,
+            "verification_suggestions": 357,
+            "when_to_use": 270,
+            "一、实时队列监控原则": 489,
+            "三、需求分析与上游改进原则": 201,
+            "二、积压健康与工作负载原则": 441,
+            "五、信息密度与布局原则": 498,
+            "四、操作节奏与时间锚点原则": 259
+          },
+          "specificity": 1.0,
+          "verifier_findings": [
+            {
+              "code": "dependency_hint",
+              "message": "dependency-related instructions require user confirmation",
+              "severity": "info"
+            }
+          ]
+        },
+        "warning_count": 0
+      },
+      "status": "completed"
+    },
+    "local_evolved": {
+      "evolution": {
+        "best_candidate": {
+          "candidate_id": "compact",
+          "duplicate_similarity": 0.0291,
+          "error_count": 0,
+          "findings": [
+            {
+              "code": "dependency_hint",
+              "message": "dependency-related instructions require user confirmation",
+              "severity": "info"
+            }
+          ],
+          "length": 3585,
+          "passed": true,
+          "rejected": false,
+          "rejection_reason": "",
+          "score": 1.0227,
+          "scores": {
+            "evidence_alignment": 0.9,
+            "human_feedback": 0.5,
+            "length": 1.0,
+            "non_duplicate": 0.9709,
+            "safety": 0.95,
+            "specificity": 1.0,
+            "verifier": 1.0,
+            "warning_cleanliness": 1.0
+          },
+          "side_info": {
+            "cluster_id": "C02",
+            "duplicate": {
+              "nearest": "skill-authoring",
+              "nearest_path": "skills/skill-authoring",
+              "nearest_source": "registry",
+              "reason": "no actionable duplicate risk detected",
+              "recommended_action": "keep",
+              "section_review": {
+                "action": "keep",
+                "evidence": {
+                  "candidate_source_cluster": "C02",
+                  "candidate_tools": [
+                    "chat_completion",
+                    "edge_headless_screenshot",
+                    "glm_vision_evaluation",
+                    "rubric_evaluation",
+                    "sla",
+                    "write_html"
+                  ],
+                  "nearest_source_cluster": "",
+                  "nearest_tools": [],
+                  "trace_ids": [
+                    "TR-DEAI-001",
+                    "TR-DEAI-002",
+                    "TR-DEAI-004",
+                    "TR-DEAI-006",
+                    "TR-DEAI-008"
+                  ]
+                },
+                "operating_steps_compatible": true,
+                "preserve": {
+                  "mined_evidence": [
+                    "- Source cluster: `C02`",
+                    "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                    "- Cluster size: `5`",
+                    "- Failure rate: `1.00`",
+                    "- Coverage gap: `0.72`",
+                    "- Tool success rate: `1.00`",
+                    "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                    "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                    "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                  ],
+                  "source_clusters": [
+                    "C02"
+                  ],
+                  "trace_ids": [
+                    "TR-DEAI-001",
+                    "TR-DEAI-002",
+                    "TR-DEAI-004",
+                    "TR-DEAI-006",
+                    "TR-DEAI-008"
+                  ]
+                },
+                "proposed_edits": {},
+                "summary": "No section rewrite is needed before review."
+              },
+              "similarity": 0.0291
+            },
+            "duplicate_nearest": "skill-authoring",
+            "evidence_alignment": 0.9,
+            "human_feedback_reasons": [],
+            "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+            "section_lengths": {
+              "failure_fallbacks": 399,
+              "mined_evidence": 558,
+              "operating_steps": 611,
+              "safety_constraints": 307,
+              "trigger_signals": 108,
+              "verification_suggestions": 357,
+              "when_to_use": 269,
+              "一、实时队列监控原则": 374
+            },
+            "specificity": 1.0,
+            "verifier_findings": [
+              {
+                "code": "dependency_hint",
+                "message": "dependency-related instructions require user confirmation",
+                "severity": "info"
+              }
+            ]
+          },
+          "warning_count": 0
+        },
+        "budget": 20,
+        "cluster_id": "C02",
+        "evaluations": [
+          {
+            "candidate_id": "seed",
+            "duplicate_similarity": 0.0215,
+            "error_count": 0,
+            "findings": [
+              {
+                "code": "dependency_hint",
+                "message": "dependency-related instructions require user confirmation",
+                "severity": "info"
+              }
+            ],
+            "length": 5380,
+            "passed": true,
+            "rejected": false,
+            "rejection_reason": "",
+            "score": 1.0111,
+            "scores": {
+              "evidence_alignment": 0.9,
+              "human_feedback": 0.5,
+              "length": 0.7486,
+              "non_duplicate": 0.9785,
+              "safety": 0.95,
+              "specificity": 1.0,
+              "verifier": 1.0,
+              "warning_cleanliness": 1.0
+            },
+            "side_info": {
+              "cluster_id": "C02",
+              "duplicate": {
+                "nearest": "skill-authoring",
+                "nearest_path": "skills/skill-authoring",
+                "nearest_source": "registry",
+                "reason": "no actionable duplicate risk detected",
+                "recommended_action": "keep",
+                "section_review": {
+                  "action": "keep",
+                  "evidence": {
+                    "candidate_source_cluster": "C02",
+                    "candidate_tools": [
+                      "chat_completion",
+                      "edge_headless_screenshot",
+                      "glm_vision_evaluation",
+                      "rubric_evaluation",
+                      "sla",
+                      "write_html"
+                    ],
+                    "nearest_source_cluster": "",
+                    "nearest_tools": [],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "operating_steps_compatible": true,
+                  "preserve": {
+                    "mined_evidence": [
+                      "- Source cluster: `C02`",
+                      "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                      "- Cluster size: `5`",
+                      "- Failure rate: `1.00`",
+                      "- Coverage gap: `0.72`",
+                      "- Tool success rate: `1.00`",
+                      "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                      "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                      "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                    ],
+                    "source_clusters": [
+                      "C02"
+                    ],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "proposed_edits": {},
+                  "summary": "No section rewrite is needed before review."
+                },
+                "similarity": 0.0215
+              },
+              "duplicate_nearest": "skill-authoring",
+              "evidence_alignment": 0.9,
+              "human_feedback_reasons": [],
+              "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+              "section_lengths": {
+                "failure_fallbacks": 399,
+                "mined_evidence": 558,
+                "operating_steps": 611,
+                "safety_constraints": 307,
+                "trigger_signals": 308,
+                "verification_suggestions": 357,
+                "when_to_use": 270,
+                "一、实时队列监控原则": 489,
+                "三、需求分析与上游改进原则": 201,
+                "二、积压健康与工作负载原则": 441,
+                "五、信息密度与布局原则": 498,
+                "四、操作节奏与时间锚点原则": 259
+              },
+              "specificity": 1.0,
+              "verifier_findings": [
+                {
+                  "code": "dependency_hint",
+                  "message": "dependency-related instructions require user confirmation",
+                  "severity": "info"
+                }
+              ]
+            },
+            "warning_count": 0
+          },
+          {
+            "candidate_id": "evidence-first",
+            "duplicate_similarity": 0.0214,
+            "error_count": 0,
+            "findings": [
+              {
+                "code": "dependency_hint",
+                "message": "dependency-related instructions require user confirmation",
+                "severity": "info"
+              }
+            ],
+            "length": 5556,
+            "passed": true,
+            "rejected": false,
+            "rejection_reason": "",
+            "score": 1.0086,
+            "scores": {
+              "evidence_alignment": 0.9,
+              "human_feedback": 0.5,
+              "length": 0.6983,
+              "non_duplicate": 0.9786,
+              "safety": 0.95,
+              "specificity": 1.0,
+              "verifier": 1.0,
+              "warning_cleanliness": 1.0
+            },
+            "side_info": {
+              "cluster_id": "C02",
+              "duplicate": {
+                "nearest": "skill-authoring",
+                "nearest_path": "skills/skill-authoring",
+                "nearest_source": "registry",
+                "reason": "no actionable duplicate risk detected",
+                "recommended_action": "keep",
+                "section_review": {
+                  "action": "keep",
+                  "evidence": {
+                    "candidate_source_cluster": "C02",
+                    "candidate_tools": [
+                      "chat_completion",
+                      "edge_headless_screenshot",
+                      "glm_vision_evaluation",
+                      "rubric_evaluation",
+                      "sla",
+                      "write_html"
+                    ],
+                    "nearest_source_cluster": "",
+                    "nearest_tools": [],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "operating_steps_compatible": true,
+                  "preserve": {
+                    "mined_evidence": [
+                      "- Source cluster: `C02`",
+                      "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                      "- Cluster size: `5`",
+                      "- Failure rate: `1.00`",
+                      "- Coverage gap: `0.72`",
+                      "- Tool success rate: `1.00`",
+                      "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                      "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                      "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                    ],
+                    "source_clusters": [
+                      "C02"
+                    ],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "proposed_edits": {},
+                  "summary": "No section rewrite is needed before review."
+                },
+                "similarity": 0.0214
+              },
+              "duplicate_nearest": "skill-authoring",
+              "evidence_alignment": 0.9,
+              "human_feedback_reasons": [],
+              "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+              "section_lengths": {
+                "failure_fallbacks": 399,
+                "mined_evidence": 558,
+                "operating_steps": 686,
+                "safety_constraints": 307,
+                "trigger_signals": 308,
+                "verification_suggestions": 357,
+                "when_to_use": 270,
+                "一、实时队列监控原则": 489,
+                "三、需求分析与上游改进原则": 201,
+                "二、积压健康与工作负载原则": 441,
+                "五、信息密度与布局原则": 599,
+                "四、操作节奏与时间锚点原则": 259
+              },
+              "specificity": 1.0,
+              "verifier_findings": [
+                {
+                  "code": "dependency_hint",
+                  "message": "dependency-related instructions require user confirmation",
+                  "severity": "info"
+                }
+              ]
+            },
+            "warning_count": 0
+          },
+          {
+            "candidate_id": "safety-hardened",
+            "duplicate_similarity": 0.0247,
+            "error_count": 0,
+            "findings": [
+              {
+                "code": "dependency_hint",
+                "message": "dependency-related instructions require user confirmation",
+                "severity": "info"
+              }
+            ],
+            "length": 5642,
+            "passed": true,
+            "rejected": false,
+            "rejection_reason": "",
+            "score": 1.007,
+            "scores": {
+              "evidence_alignment": 0.9,
+              "human_feedback": 0.5,
+              "length": 0.6737,
+              "non_duplicate": 0.9753,
+              "safety": 0.95,
+              "specificity": 1.0,
+              "verifier": 1.0,
+              "warning_cleanliness": 1.0
+            },
+            "side_info": {
+              "cluster_id": "C02",
+              "duplicate": {
+                "nearest": "skill-authoring",
+                "nearest_path": "skills/skill-authoring",
+                "nearest_source": "registry",
+                "reason": "no actionable duplicate risk detected",
+                "recommended_action": "keep",
+                "section_review": {
+                  "action": "keep",
+                  "evidence": {
+                    "candidate_source_cluster": "C02",
+                    "candidate_tools": [
+                      "chat_completion",
+                      "edge_headless_screenshot",
+                      "glm_vision_evaluation",
+                      "rubric_evaluation",
+                      "sla",
+                      "write_html"
+                    ],
+                    "nearest_source_cluster": "",
+                    "nearest_tools": [],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "operating_steps_compatible": true,
+                  "preserve": {
+                    "mined_evidence": [
+                      "- Source cluster: `C02`",
+                      "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                      "- Cluster size: `5`",
+                      "- Failure rate: `1.00`",
+                      "- Coverage gap: `0.72`",
+                      "- Tool success rate: `1.00`",
+                      "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                      "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                      "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                    ],
+                    "source_clusters": [
+                      "C02"
+                    ],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "proposed_edits": {},
+                  "summary": "No section rewrite is needed before review."
+                },
+                "similarity": 0.0247
+              },
+              "duplicate_nearest": "skill-authoring",
+              "evidence_alignment": 0.9,
+              "human_feedback_reasons": [],
+              "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+              "section_lengths": {
+                "failure_fallbacks": 538,
+                "mined_evidence": 558,
+                "operating_steps": 611,
+                "safety_constraints": 430,
+                "trigger_signals": 308,
+                "verification_suggestions": 357,
+                "when_to_use": 270,
+                "一、实时队列监控原则": 489,
+                "三、需求分析与上游改进原则": 201,
+                "二、积压健康与工作负载原则": 441,
+                "五、信息密度与布局原则": 498,
+                "四、操作节奏与时间锚点原则": 259
+              },
+              "specificity": 1.0,
+              "verifier_findings": [
+                {
+                  "code": "dependency_hint",
+                  "message": "dependency-related instructions require user confirmation",
+                  "severity": "info"
+                }
+              ]
+            },
+            "warning_count": 0
+          },
+          {
+            "candidate_id": "specialized",
+            "duplicate_similarity": 0.0199,
+            "error_count": 0,
+            "findings": [
+              {
+                "code": "dependency_hint",
+                "message": "dependency-related instructions require user confirmation",
+                "severity": "info"
+              }
+            ],
+            "length": 5263,
+            "passed": true,
+            "rejected": false,
+            "rejection_reason": "",
+            "score": 1.013,
+            "scores": {
+              "evidence_alignment": 0.9,
+              "human_feedback": 0.5,
+              "length": 0.782,
+              "non_duplicate": 0.9801,
+              "safety": 0.95,
+              "specificity": 1.0,
+              "verifier": 1.0,
+              "warning_cleanliness": 1.0
+            },
+            "side_info": {
+              "cluster_id": "C02",
+              "duplicate": {
+                "nearest": "skill-authoring",
+                "nearest_path": "skills/skill-authoring",
+                "nearest_source": "registry",
+                "reason": "no actionable duplicate risk detected",
+                "recommended_action": "keep",
+                "section_review": {
+                  "action": "keep",
+                  "evidence": {
+                    "candidate_source_cluster": "C02",
+                    "candidate_tools": [
+                      "chat_completion",
+                      "edge_headless_screenshot",
+                      "glm_vision_evaluation",
+                      "rubric_evaluation",
+                      "sla",
+                      "write_html"
+                    ],
+                    "nearest_source_cluster": "",
+                    "nearest_tools": [],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "operating_steps_compatible": true,
+                  "preserve": {
+                    "mined_evidence": [
+                      "- Source cluster: `C02`",
+                      "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                      "- Cluster size: `5`",
+                      "- Failure rate: `1.00`",
+                      "- Coverage gap: `0.72`",
+                      "- Tool success rate: `1.00`",
+                      "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                      "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                      "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                    ],
+                    "source_clusters": [
+                      "C02"
+                    ],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "proposed_edits": {},
+                  "summary": "No section rewrite is needed before review."
+                },
+                "similarity": 0.0199
+              },
+              "duplicate_nearest": "skill-authoring",
+              "evidence_alignment": 0.9,
+              "human_feedback_reasons": [],
+              "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+              "section_lengths": {
+                "failure_fallbacks": 399,
+                "mined_evidence": 558,
+                "operating_steps": 378,
+                "safety_constraints": 307,
+                "trigger_signals": 424,
+                "verification_suggestions": 357,
+                "when_to_use": 270,
+                "一、实时队列监控原则": 489,
+                "三、需求分析与上游改进原则": 201,
+                "二、积压健康与工作负载原则": 441,
+                "五、信息密度与布局原则": 498,
+                "四、操作节奏与时间锚点原则": 259
+              },
+              "specificity": 1.0,
+              "verifier_findings": [
+                {
+                  "code": "dependency_hint",
+                  "message": "dependency-related instructions require user confirmation",
+                  "severity": "info"
+                }
+              ]
+            },
+            "warning_count": 0
+          },
+          {
+            "candidate_id": "validation-focused",
+            "duplicate_similarity": 0.0213,
+            "error_count": 0,
+            "findings": [
+              {
+                "code": "dependency_hint",
+                "message": "dependency-related instructions require user confirmation",
+                "severity": "info"
+              }
+            ],
+            "length": 5488,
+            "passed": true,
+            "rejected": false,
+            "rejection_reason": "",
+            "score": 1.0096,
+            "scores": {
+              "evidence_alignment": 0.9,
+              "human_feedback": 0.5,
+              "length": 0.7177,
+              "non_duplicate": 0.9787,
+              "safety": 0.95,
+              "specificity": 1.0,
+              "verifier": 1.0,
+              "warning_cleanliness": 1.0
+            },
+            "side_info": {
+              "cluster_id": "C02",
+              "duplicate": {
+                "nearest": "skill-authoring",
+                "nearest_path": "skills/skill-authoring",
+                "nearest_source": "registry",
+                "reason": "no actionable duplicate risk detected",
+                "recommended_action": "keep",
+                "section_review": {
+                  "action": "keep",
+                  "evidence": {
+                    "candidate_source_cluster": "C02",
+                    "candidate_tools": [
+                      "chat_completion",
+                      "edge_headless_screenshot",
+                      "glm_vision_evaluation",
+                      "rubric_evaluation",
+                      "sla",
+                      "write_html"
+                    ],
+                    "nearest_source_cluster": "",
+                    "nearest_tools": [],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "operating_steps_compatible": true,
+                  "preserve": {
+                    "mined_evidence": [
+                      "- Source cluster: `C02`",
+                      "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                      "- Cluster size: `5`",
+                      "- Failure rate: `1.00`",
+                      "- Coverage gap: `0.72`",
+                      "- Tool success rate: `1.00`",
+                      "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                      "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                      "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                    ],
+                    "source_clusters": [
+                      "C02"
+                    ],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "proposed_edits": {},
+                  "summary": "No section rewrite is needed before review."
+                },
+                "similarity": 0.0213
+              },
+              "duplicate_nearest": "skill-authoring",
+              "evidence_alignment": 0.9,
+              "human_feedback_reasons": [],
+              "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+              "section_lengths": {
+                "failure_fallbacks": 399,
+                "mined_evidence": 558,
+                "operating_steps": 611,
+                "safety_constraints": 307,
+                "trigger_signals": 308,
+                "verification_suggestions": 465,
+                "when_to_use": 270,
+                "一、实时队列监控原则": 489,
+                "三、需求分析与上游改进原则": 201,
+                "二、积压健康与工作负载原则": 441,
+                "五、信息密度与布局原则": 498,
+                "四、操作节奏与时间锚点原则": 259
+              },
+              "specificity": 1.0,
+              "verifier_findings": [
+                {
+                  "code": "dependency_hint",
+                  "message": "dependency-related instructions require user confirmation",
+                  "severity": "info"
+                }
+              ]
+            },
+            "warning_count": 0
+          },
+          {
+            "candidate_id": "compact",
+            "duplicate_similarity": 0.0291,
+            "error_count": 0,
+            "findings": [
+              {
+                "code": "dependency_hint",
+                "message": "dependency-related instructions require user confirmation",
+                "severity": "info"
+              }
+            ],
+            "length": 3585,
+            "passed": true,
+            "rejected": false,
+            "rejection_reason": "",
+            "score": 1.0227,
+            "scores": {
+              "evidence_alignment": 0.9,
+              "human_feedback": 0.5,
+              "length": 1.0,
+              "non_duplicate": 0.9709,
+              "safety": 0.95,
+              "specificity": 1.0,
+              "verifier": 1.0,
+              "warning_cleanliness": 1.0
+            },
+            "side_info": {
+              "cluster_id": "C02",
+              "duplicate": {
+                "nearest": "skill-authoring",
+                "nearest_path": "skills/skill-authoring",
+                "nearest_source": "registry",
+                "reason": "no actionable duplicate risk detected",
+                "recommended_action": "keep",
+                "section_review": {
+                  "action": "keep",
+                  "evidence": {
+                    "candidate_source_cluster": "C02",
+                    "candidate_tools": [
+                      "chat_completion",
+                      "edge_headless_screenshot",
+                      "glm_vision_evaluation",
+                      "rubric_evaluation",
+                      "sla",
+                      "write_html"
+                    ],
+                    "nearest_source_cluster": "",
+                    "nearest_tools": [],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "operating_steps_compatible": true,
+                  "preserve": {
+                    "mined_evidence": [
+                      "- Source cluster: `C02`",
+                      "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                      "- Cluster size: `5`",
+                      "- Failure rate: `1.00`",
+                      "- Coverage gap: `0.72`",
+                      "- Tool success rate: `1.00`",
+                      "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                      "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                      "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                    ],
+                    "source_clusters": [
+                      "C02"
+                    ],
+                    "trace_ids": [
+                      "TR-DEAI-001",
+                      "TR-DEAI-002",
+                      "TR-DEAI-004",
+                      "TR-DEAI-006",
+                      "TR-DEAI-008"
+                    ]
+                  },
+                  "proposed_edits": {},
+                  "summary": "No section rewrite is needed before review."
+                },
+                "similarity": 0.0291
+              },
+              "duplicate_nearest": "skill-authoring",
+              "evidence_alignment": 0.9,
+              "human_feedback_reasons": [],
+              "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+              "section_lengths": {
+                "failure_fallbacks": 399,
+                "mined_evidence": 558,
+                "operating_steps": 611,
+                "safety_constraints": 307,
+                "trigger_signals": 108,
+                "verification_suggestions": 357,
+                "when_to_use": 269,
+                "一、实时队列监控原则": 374
+              },
+              "specificity": 1.0,
+              "verifier_findings": [
+                {
+                  "code": "dependency_hint",
+                  "message": "dependency-related instructions require user confirmation",
+                  "severity": "info"
+                }
+              ]
+            },
+            "warning_count": 0
+          }
+        ],
+        "frontier": [
+          "compact",
+          "specialized"
+        ],
+        "memory_matches": [],
+        "output": {
+          "candidate_digest": "77bead8434a6",
+          "candidate_id": "compact",
+          "cluster_id": "C02",
+          "duplicate": {
+            "nearest": "skill-authoring",
+            "nearest_path": "skills/skill-authoring",
+            "nearest_source": "registry",
+            "reason": "no actionable duplicate risk detected",
+            "recommended_action": "keep",
+            "section_review": {
+              "action": "keep",
+              "evidence": {
+                "candidate_source_cluster": "C02",
+                "candidate_tools": [
+                  "chat_completion",
+                  "edge_headless_screenshot",
+                  "glm_vision_evaluation",
+                  "rubric_evaluation",
+                  "sla",
+                  "write_html"
+                ],
+                "nearest_source_cluster": "",
+                "nearest_tools": [],
+                "trace_ids": [
+                  "TR-DEAI-001",
+                  "TR-DEAI-002",
+                  "TR-DEAI-004",
+                  "TR-DEAI-006",
+                  "TR-DEAI-008"
+                ]
+              },
+              "operating_steps_compatible": true,
+              "preserve": {
+                "mined_evidence": [
+                  "- Source cluster: `C02`",
+                  "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                  "- Cluster size: `5`",
+                  "- Failure rate: `1.00`",
+                  "- Coverage gap: `0.72`",
+                  "- Tool success rate: `1.00`",
+                  "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                  "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                  "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                ],
+                "source_clusters": [
+                  "C02"
+                ],
+                "trace_ids": [
+                  "TR-DEAI-001",
+                  "TR-DEAI-002",
+                  "TR-DEAI-004",
+                  "TR-DEAI-006",
+                  "TR-DEAI-008"
+                ]
+              },
+              "proposed_edits": {},
+              "summary": "No section rewrite is needed before review."
+            },
+            "similarity": 0.0291
+          },
+          "duplicate_similarity": 0.0291,
+          "score": 1.0227,
+          "scores": {
+            "evidence_alignment": 0.9,
+            "human_feedback": 0.5,
+            "length": 1.0,
+            "non_duplicate": 0.9709,
+            "safety": 0.95,
+            "specificity": 1.0,
+            "verifier": 1.0,
+            "warning_cleanliness": 1.0
+          },
+          "skill_dir": "D:\\codex\\skillminer\\outputs\\reports\\gepa\\local_evolved_candidate\\C02",
+          "skill_path": "D:\\codex\\skillminer\\outputs\\reports\\gepa\\local_evolved_candidate\\C02\\SKILL.md",
+          "status": "evolved-candidate"
+        }
+      },
+      "heldout": {
+        "candidate": "c02-evolved-工单-队列",
+        "diagnostics": [],
+        "label": "local_evolved",
+        "metrics": {},
+        "overlay_recommendation_eval": {
+          "metrics": {},
+          "per_query": []
+        },
+        "raw_recommendation_eval": {
+          "metrics": {},
+          "per_query": []
+        },
+        "target_heldout_query_count": 0,
+        "target_heldout_trace_count": 3
+      }
+    },
+    "seed": {
+      "asi": {
+        "candidate": {
+          "missing_or_thin_sections": [],
+          "rendered_length": 5380,
+          "section_lengths": {
+            "failure_fallbacks": 399,
+            "operating_steps": 611,
+            "safety_constraints": 307,
+            "trigger_signals": 308,
+            "verification_suggestions": 357,
+            "when_to_use": 2253
+          }
+        },
+        "edit_direction": "Preserve safety constraints and improve trigger specificity only with mined evidence.",
+        "feedback": {
+          "duplicate": {
+            "nearest": "skill-authoring",
+            "nearest_path": "skills/skill-authoring",
+            "nearest_source": "registry",
+            "reason": "no actionable duplicate risk detected",
+            "recommended_action": "keep",
+            "section_review": {
+              "action": "keep",
+              "evidence": {
+                "candidate_source_cluster": "C02",
+                "candidate_tools": [
+                  "chat_completion",
+                  "edge_headless_screenshot",
+                  "glm_vision_evaluation",
+                  "rubric_evaluation",
+                  "sla",
+                  "write_html"
+                ],
+                "nearest_source_cluster": "",
+                "nearest_tools": [],
+                "trace_ids": [
+                  "TR-DEAI-001",
+                  "TR-DEAI-002",
+                  "TR-DEAI-004",
+                  "TR-DEAI-006",
+                  "TR-DEAI-008"
+                ]
+              },
+              "operating_steps_compatible": true,
+              "preserve": {
+                "mined_evidence": [
+                  "- Source cluster: `C02`",
+                  "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                  "- Cluster size: `5`",
+                  "- Failure rate: `1.00`",
+                  "- Coverage gap: `0.72`",
+                  "- Tool success rate: `1.00`",
+                  "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                  "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                  "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                ],
+                "source_clusters": [
+                  "C02"
+                ],
+                "trace_ids": [
+                  "TR-DEAI-001",
+                  "TR-DEAI-002",
+                  "TR-DEAI-004",
+                  "TR-DEAI-006",
+                  "TR-DEAI-008"
+                ]
+              },
+              "proposed_edits": {},
+              "summary": "No section rewrite is needed before review."
+            },
+            "similarity": 0.0215
+          },
+          "example_alignment": 0.5,
+          "section_completeness": 1.0,
+          "verifier": {
+            "error_count": 0,
+            "findings": [
+              {
+                "code": "dependency_hint",
+                "message": "dependency-related instructions require user confirmation",
+                "severity": "info"
+              }
+            ],
+            "passed": true,
+            "warning_count": 0
+          }
+        },
+        "input": {
+          "cluster_id": "C02",
+          "example_trace_id": "",
+          "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+          "top_failures": [
+            "紫色渐变过度",
+            "大圆角卡片堆叠",
+            "空泛营销文案",
+            "营销页气质",
+            "参考吸收不足",
+            "紫色渐变过度",
+            "光斑玻璃拟态",
+            "大圆角卡片堆叠",
+            "业务优先级不清",
+            "空泛营销文案"
+          ],
+          "top_terms": [
+            "-",
+            "工单",
+            "队列",
+            "sla",
+            "时间",
+            "座席",
+            "指标",
+            "展示"
+          ],
+          "top_tools": [
+            "chat_completion",
+            "write_html",
+            "edge_headless_screenshot",
+            "rubric_evaluation",
+            "glm_vision_evaluation"
+          ],
+          "trace_ids": [
+            "TR-DEAI-001",
+            "TR-DEAI-002",
+            "TR-DEAI-004",
+            "TR-DEAI-006",
+            "TR-DEAI-008"
+          ]
+        },
+        "scores": {
+          "aggregate": 0.9489,
+          "evidence_alignment": 0.9,
+          "example_alignment": 0.5,
+          "human_feedback": 0.5,
+          "length": 0.7486,
+          "non_duplicate": 0.9785,
+          "safety": 0.95,
+          "section_completeness": 1.0,
+          "specificity": 1.0,
+          "verifier": 1.0,
+          "warning_cleanliness": 1.0
+        }
+      },
+      "heldout": {
+        "candidate": "c02-evolved-工单-队列",
+        "diagnostics": [],
+        "label": "seed",
+        "metrics": {},
+        "overlay_recommendation_eval": {
+          "metrics": {},
+          "per_query": []
+        },
+        "raw_recommendation_eval": {
+          "metrics": {},
+          "per_query": []
+        },
+        "target_heldout_query_count": 0,
+        "target_heldout_trace_count": 3
+      },
+      "static_eval": {
+        "candidate_id": "seed",
+        "duplicate_similarity": 0.0215,
+        "error_count": 0,
+        "findings": [
+          {
+            "code": "dependency_hint",
+            "message": "dependency-related instructions require user confirmation",
+            "severity": "info"
+          }
+        ],
+        "length": 5380,
+        "passed": true,
+        "rejected": false,
+        "rejection_reason": "",
+        "score": 1.0111,
+        "scores": {
+          "evidence_alignment": 0.9,
+          "human_feedback": 0.5,
+          "length": 0.7486,
+          "non_duplicate": 0.9785,
+          "safety": 0.95,
+          "specificity": 1.0,
+          "verifier": 1.0,
+          "warning_cleanliness": 1.0
+        },
+        "side_info": {
+          "cluster_id": "C02",
+          "duplicate": {
+            "nearest": "skill-authoring",
+            "nearest_path": "skills/skill-authoring",
+            "nearest_source": "registry",
+            "reason": "no actionable duplicate risk detected",
+            "recommended_action": "keep",
+            "section_review": {
+              "action": "keep",
+              "evidence": {
+                "candidate_source_cluster": "C02",
+                "candidate_tools": [
+                  "chat_completion",
+                  "edge_headless_screenshot",
+                  "glm_vision_evaluation",
+                  "rubric_evaluation",
+                  "sla",
+                  "write_html"
+                ],
+                "nearest_source_cluster": "",
+                "nearest_tools": [],
+                "trace_ids": [
+                  "TR-DEAI-001",
+                  "TR-DEAI-002",
+                  "TR-DEAI-004",
+                  "TR-DEAI-006",
+                  "TR-DEAI-008"
+                ]
+              },
+              "operating_steps_compatible": true,
+              "preserve": {
+                "mined_evidence": [
+                  "- Source cluster: `C02`",
+                  "- Trace ids: `TR-DEAI-001, TR-DEAI-002, TR-DEAI-004, TR-DEAI-006, TR-DEAI-008`",
+                  "- Cluster size: `5`",
+                  "- Failure rate: `1.00`",
+                  "- Coverage gap: `0.72`",
+                  "- Tool success rate: `1.00`",
+                  "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+                  "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+                  "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+                ],
+                "source_clusters": [
+                  "C02"
+                ],
+                "trace_ids": [
+                  "TR-DEAI-001",
+                  "TR-DEAI-002",
+                  "TR-DEAI-004",
+                  "TR-DEAI-006",
+                  "TR-DEAI-008"
+                ]
+              },
+              "proposed_edits": {},
+              "summary": "No section rewrite is needed before review."
+            },
+            "similarity": 0.0215
+          },
+          "duplicate_nearest": "skill-authoring",
+          "evidence_alignment": 0.9,
+          "human_feedback_reasons": [],
+          "representative_task": "中文非专业用户要求客服物流工单网页去 AI 味：我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、谁负责、有没有快超时的单子、整体忙不忙。页面要看起来专业一点，不要像那种 AI 生成的炫酷模板，别一堆紫色渐变、大圆角卡片和空话。最好电脑上能看，手机上临时打开也别乱掉。你帮我做一个可以展示的版本，里面可以用模拟数据，但别太假。 反馈：这个太像 AI 模板了，紫色渐变太重。\n\n参考原则：# 参考设计原则提炼\n\n## 一、实时队列监控原则\n\n1. **按渠道拆分队列视图**\n   - 将工单队列按邮件、消息、语音等渠道独立展示，每个渠道的实时积压数量必须单独呈现，便于识别不同入口的负载差异。\n   - 语音工单仅在座席接听前显示于队列中，转派后应立即从当前队列移除，避免重复计数。\n\n2. **SLA 状态三级分层可视化**\n   - 对队列中的工单按 SLA 状态强制分为三类：已违约、即将违约、在 SLA 内。使用颜色编码（如红、黄、绿）进行区分，确保风险等级一目了然。\n   - 支持按渠道维度进一步拆分 SLA 状态，使管理者能定位特定渠道的 SLA 压力点。\n\n3. **队列活动历史趋势对比**\n   - 提供“进入队列”、“离开队列”、“滞留队列”三个维度的历史数据，按时间桶聚合，支持钻取查看具体工单明细。\n   - 历史趋势图应支持按渠道独立切换，帮助发现周期性积压规律。\n\n4. **座席容量与队列等待时间关联展示**\n   - 在队列视图中同时显示座席可用数量、座席容量上限、队列中最长等待时间和平均等待时间，形成“供需”对照。\n   - 等待时间指标需实时更新，避免使用缓存数据造成决策延迟。\n\n## 二、积压健康与工作负载原则\n\n5. **创建与解决趋势对比**\n   - 使用折线图展示近几小时内工单创建量与解决量的动态对比。创建量持续高于解决量时，应触发视觉警告（如区域高亮或阈值线），提示“正在累积债务”。\n\n6. **积压工单按状态拆解**\n   - 将积压工单按“待处理”、“处理中”、“暂停”、“等待请求者”等状态分类展示，揭示积压的真实原因：是团队阻塞、外部依赖还是流程停滞。\n   - 状态分类应使用堆叠条形图或分组指标卡，避免单一总数掩盖结构性问题。\n\n7. **座席负载与风险一体化视图**\n   - 以表格形式列出每位座席的“未解决工单数”、“未回复未解决数”、“活跃 SLA 工单数”三列，将负载量与响应风险并排呈现。\n   - 表格支持按任意列排序，使团队负责人能快速定位负载不均或 SLA 风险集中的座席。\n\n8. **未分配工单作为独立预警指标**\n   - 将“未分配工单”数量作为独立 KPI 卡片展示，并置于显眼位置。该指标通常代表可最快解决的积压，数值异常时应立即引起注意。\n\n## 三、需求分析与上游改进原则\n\n9. **请求类别排名展示**\n   - 使用条形图展示当前工单的需求类别分布（如权限申请、硬件故障、账号问题等），按数量降序排列。\n   - 类别排名需支持时间段切换，帮助识别可通过自助服务或自动化削减的重复需求。\n\n10. **首次响应时间作为体验核心指标**\n    - 将“首次响应时间”作为独立 KPI 展示，与 SLA 违约指标并列。该指标直接关联员工或客户的实际感知，不应隐藏在二级页面。\n\n## 四、操作节奏与时间锚点原则\n\n11. **按日间节奏设计检查锚点**\n    - 仪表盘信息架构应支持三个关键时间节点的快速判断：早间启动（是否已落后）、午间漂移检查（积压是否蔓延）、晚间交接（哪些工单不可等待）。\n    - 对应地，关键指标（如 SLA 风险、未分配数、积压趋势）应固定在首屏，无需滚动即可完成三轮检查。\n\n12. **筛选条件持久化与上下文保持**\n    - 仪表盘的筛选条件（品牌、组别、渠道类型、标签等）应支持保存为预设视图，避免每次访问重复配置。\n    - 钻取进入工单明细后，返回时应保持之前的筛选状态和时间范围。\n\n## 五、信息密度与布局原则\n\n13. **首屏完成核心判断**\n    - 将队列健康、SLA 风险、座席负载三类信息压缩在单屏内，避免纵向滚动才能完成全局状态评估。\n    - 使用指标卡承载绝对值，使用迷你图表承载趋势，两者组合形成“数值+方向”的完整信息单元。\n\n14. **表格横向滚动时固定关键列**\n    - 当工单列表或座席表格列数较多需要横向滚动时，工单 ID 或座席姓名等标识列应固定于左侧，确保上下文不丢失。\n\n15. **实时数据与历史数据分区放置**\n    - 实时指标（当前队列数、SLA 状态）置于页面上方或左侧，历史趋势图表置于下方或右侧，形成“现状→趋势”的自然阅读流。",
+          "section_lengths": {
+            "failure_fallbacks": 399,
+            "mined_evidence": 558,
+            "operating_steps": 611,
+            "safety_constraints": 307,
+            "trigger_signals": 308,
+            "verification_suggestions": 357,
+            "when_to_use": 270,
+            "一、实时队列监控原则": 489,
+            "三、需求分析与上游改进原则": 201,
+            "二、积压健康与工作负载原则": 441,
+            "五、信息密度与布局原则": 498,
+            "四、操作节奏与时间锚点原则": 259
+          },
+          "specificity": 1.0,
+          "verifier_findings": [
+            {
+              "code": "dependency_hint",
+              "message": "dependency-related instructions require user confirmation",
+              "severity": "info"
+            }
+          ]
+        },
+        "warning_count": 0
+      }
+    }
+  },
+  "condition": "single_run",
+  "cost": {
+    "elapsed_sec": 1014.5173,
+    "judge_calls": 0,
+    "judge_skipped_count": 0,
+    "judge_trigger_reasons": {},
+    "metric_calls": 51,
+    "racing_rejected_count": 21,
+    "racing_rejection_reasons": {
+      "length_limit": 21,
+      "static_eval_rejected": 21
+    },
+    "reflection_calls": 0,
+    "total_tokens": null
+  },
+  "experiment": {
+    "adoption_status": "not_adopted",
+    "budget": 50,
+    "cluster_id": "C02",
+    "condition": "single_run",
+    "elapsed_sec": 1014.5173,
+    "heldout": {
+      "gepa": {},
+      "local_evolved": {},
+      "seed": {}
+    },
+    "judge_calls": 0,
+    "judge_policy": "none",
+    "judge_skipped_count": 0,
+    "judge_trigger_reasons": {},
+    "memory_policy": "ctm_epm",
+    "metric_calls": 51,
+    "not_adopted_reason": "GEPA did not improve held-out usefulness over the local evolved candidate.",
+    "racing_policy": "cheap_gates",
+    "racing_rejected_count": 21,
+    "racing_rejection_reasons": {
+      "length_limit": 21,
+      "static_eval_rejected": 21
+    },
+    "reflection_calls": 0,
+    "safety_false_negative_rate": 0.0,
+    "top_k": 3,
+    "total_tokens": null
+  },
+  "ingest_summary": {
+    "error_types": {
+      "业务优先级不清": 1,
+      "参考吸收不足": 1,
+      "大圆角卡片堆叠": 1,
+      "无意义统计数字": 1,
+      "移动端表格溢出": 1,
+      "空泛营销文案": 1,
+      "紫色渐变过度": 1,
+      "营销页气质": 1,
+      "视觉评估反馈": 1
+    },
+    "failure_count": 8,
+    "frameworks": {
+      "front-end": 9,
+      "responsive-design": 9,
+      "static-html": 9
+    },
+    "input_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\traces\\experiment_traces.jsonl",
+    "languages": {
+      "html css javascript 中文": 9
+    },
+    "outcomes": {
+      "failure": 8,
+      "success": 1
+    },
+    "processed_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\traces\\processed_traces.jsonl",
+    "sources": {
+      "experiment_conversation": 9
+    },
+    "success_count": 1,
+    "success_rate": 0.1111,
+    "tool_event_success_rate": 0.0,
+    "tool_event_trace_count": 0,
+    "tool_events_ingested": 0,
+    "tool_events_path": "D:\\codex\\skillminer\\.diaevo\\tool_events.jsonl",
+    "tool_events_seen": 0,
+    "tool_failure_types": {
+      "业务优先级不清": 2,
+      "信息层级缺失": 1,
+      "光斑玻璃拟态": 1,
+      "参考吸收不足": 1,
+      "大圆角卡片堆叠": 1,
+      "工具感不足": 1,
+      "截图硬门槛": 1,
+      "数据可信度不足": 1,
+      "无意义统计数字": 1,
+      "真实产品原则缺失": 1,
+      "移动端表格溢出": 1,
+      "空泛营销文案": 1,
+      "紫色渐变过度": 1,
+      "缺少截图验证": 1,
+      "营销页气质": 1,
+      "行动信息缺失": 1,
+      "视觉评估反馈": 1
+    },
+    "tool_reuse_count": 27,
+    "top_tools": {
+      "chat_completion": 9,
+      "edge_headless_screenshot": 9,
+      "glm_vision_evaluation": 9,
+      "reference_harvest": 9,
+      "rubric_evaluation": 9,
+      "write_html": 9
+    },
+    "trace_count": 9,
+    "used_skills": {}
+  },
+  "memory_matches": [],
+  "memory_policy_summary": {
+    "human_feedback_policy": {},
+    "match_count": 0,
+    "match_schemas": [],
+    "policy": "ctm_epm",
+    "source_counts": {
+      "correct_templates": 0,
+      "duplicate_patterns": 0,
+      "error_patterns": 0,
+      "promotion_patterns": 0,
+      "validation_patterns": 2
+    },
+    "validation_artifact_pattern_count": 0
+  },
+  "memory_summary": {
+    "counts": {
+      "correct_templates": 0,
+      "duplicate_patterns": 0,
+      "error_patterns": 0,
+      "promotion_patterns": 0,
+      "validation_patterns": 2
+    },
+    "duplicate_actions": {},
+    "human_feedback_policy": {},
+    "promotion_labels": {},
+    "promotion_outcomes": {},
+    "validation_artifact_pattern_count": 0,
+    "validation_failure_categories": {
+      "not_configured": 2
+    },
+    "validation_status": {
+      "not_configured": 2
+    }
+  },
+  "notes": [
+    "GEPA uses DeepSeek through the project .env and OpenAI-compatible API settings.",
+    "The report never stores the raw DEEPSEEK_API_KEY value.",
+    "GEPA candidates remain drafts; this command does not validate, promote, or install them."
+  ],
+  "optimizer": "gepa",
+  "phase4_controls": {
+    "judge_policy": "none",
+    "memory_policy": "ctm_epm",
+    "racing_policy": "cheap_gates"
+  },
+  "provider": {
+    "api": "openai-compatible",
+    "api_key_configured": true,
+    "api_key_source": ".env:DEEPSEEK_API_KEY",
+    "base_url": "https://api.deepseek.com",
+    "max_tokens": 4000,
+    "model": "deepseek-v4-pro",
+    "provider": "deepseek",
+    "temperature": 0.2,
+    "timeout": null
+  },
+  "report_path": "D:\\codex\\skillminer\\outputs\\reports\\gepa_skill_optimization.json",
+  "safety_eval": {
+    "cases": [
+      {
+        "case": "dangerous_rm_rf",
+        "expected_codes": [
+          "dangerous_command"
+        ],
+        "missed_codes": [],
+        "observed_codes": [
+          "dangerous_command",
+          "short_body"
+        ],
+        "passed": false
+      },
+      {
+        "case": "credential_pattern",
+        "expected_codes": [
+          "credential_pattern"
+        ],
+        "missed_codes": [],
+        "observed_codes": [
+          "credential_pattern",
+          "short_body"
+        ],
+        "passed": false
+      },
+      {
+        "case": "curl_pipe_shell",
+        "expected_codes": [
+          "dangerous_command"
+        ],
+        "missed_codes": [],
+        "observed_codes": [
+          "dangerous_command",
+          "dependency_hint",
+          "short_body"
+        ],
+        "passed": false
+      }
+    ],
+    "false_negatives": [],
+    "metrics": {
+      "safety_case_count": 3,
+      "safety_false_negative_count": 0,
+      "safety_false_negative_rate": 0.0
+    }
+  },
+  "split": {
+    "heldout_ids": [
+      "TR-DEAI-005",
+      "TR-DEAI-007",
+      "TR-DEAI-009"
+    ],
+    "holdout_path": "D:\\codex\\skillminer\\outputs\\reports\\gepa\\heldout_traces.jsonl",
+    "policy": "deterministic_trace_id_hash",
+    "target_heldout_ids": [
+      "TR-DEAI-005",
+      "TR-DEAI-007",
+      "TR-DEAI-009"
+    ],
+    "train_ids": [
+      "TR-DEAI-001",
+      "TR-DEAI-002",
+      "TR-DEAI-003",
+      "TR-DEAI-004",
+      "TR-DEAI-006",
+      "TR-DEAI-008"
+    ],
+    "train_path": "D:\\codex\\skillminer\\outputs\\reports\\gepa\\train_traces.jsonl"
+  },
+  "status": "ok"
+}

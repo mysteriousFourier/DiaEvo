@@ -25,3 +25,4 @@ outputs/candidate_skills/*
 !outputs/candidate_skills/.gitkeep
 outputs/screenshots/*
 !outputs/screenshots/.gitkeep
+experiments/**/archive/

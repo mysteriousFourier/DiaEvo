@@ -70,6 +70,7 @@ diaevo
 /tools
 /tool read_file path=README.md limit=20
 /model deepseek-v4-pro
+/image screenshots\stage1_desktop.png 这张页面还有哪些 AI 味？
 /baseurl https://api.deepseek.com
 /key
 /home
@@ -77,6 +78,8 @@ diaevo
 ```
 
 普通文本会按 `.env` 配置发送给 DeepSeek。模型可以请求本地工具；只读工具直接执行，写入、删除、补丁、shell 和网络工具会先显示预览并等待审批。
+
+图片理解使用 `/image <图片路径或URL> <问题>`，走 OpenAI 兼容的 GLM 视觉配置。默认视觉模型是 `glm-4.6v-flash`，运行时读取 `GLM_VISION_API_KEY`、`GLM_VISION_BASE_URL`、`GLM_VISION_MODEL`、`GLM_VISION_MAX_TOKENS`、`GLM_VISION_TEMPERATURE` 和 `GLM_VISION_TIMEOUT`。进程内视觉请求会串行化，最高并发为 1。`diaevo chat-test --image <path> --prompt "..."` 可用于非交互式 smoke test。
 
 ## 常用脚本命令
 
@@ -120,6 +123,7 @@ diaevo-home
 | --- | --- |
 | 交互式工作台 | 默认 `diaevo` 打开终端首页，包含可信工作区确认、仪表盘、斜杠菜单、多行输入、`/home`、`/tools` 和 `/tool`。 |
 | 模型聊天 | 通过 `.env` 和运行时 `/model`、`/baseurl`、`/key` 配置 DeepSeek 或 OpenAI 兼容接口；普通文本进入带工具调用的聊天循环。 |
+| 图像理解 | `/image <path|url> <问题>` 使用 GLM 视觉模型理解图片，默认 `glm-4.6v-flash`，并发上限为 1，结果会写回主会话历史。 |
 | 本地工具层 | `list_files`、`read_file`、`write_file`、`edit_file`、`delete_file`、`apply_patch`、`run_shell`、`web_search`、`web_fetch`，带工作区边界、只读/写入分级和审批门。 |
 | 轨迹捕获与反馈 | 本地工具调用会写入 `.diaevo/tool_events.jsonl`；`ingest` 规范化样例/真实轨迹，`feedback` 将工具事件折叠回可挖掘轨迹。 |
 | 挖掘快照 | 使用 TF-IDF、K-Means、关联规则、频繁序列、task-skill-tool 图和覆盖缺口生成 `data/mining_snapshots/YYMMDD/` 可读证据包。 |

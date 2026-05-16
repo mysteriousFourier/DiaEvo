@@ -1,0 +1,8 @@
+{
+  "commands": [],
+  "expected_status": "passed",
+  "network": false,
+  "status": "not_configured",
+  "timeout_sec": 60,
+  "workspace_only": true
+}

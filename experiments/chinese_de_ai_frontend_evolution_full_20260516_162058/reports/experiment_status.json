@@ -1,0 +1,9 @@
+{
+  "completed_at": "2026-05-16T17:54:22.362000",
+  "experiment_root": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058",
+  "final_cleanup_manifest": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\archive\\runtime_cleanup_after_20260516_175422\\cleanup_manifest.json",
+  "final_report": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\reports\\最终中文实验报告.md",
+  "resumed_at": "2026-05-16T17:25:55.245946",
+  "started_at": "20260516_162058",
+  "status": "completed"
+}

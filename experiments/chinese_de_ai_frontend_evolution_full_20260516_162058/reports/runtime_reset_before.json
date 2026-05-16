@@ -1,0 +1,34 @@
+{
+  "archive_root": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\archive\\runtime_reset_before_20260516_162058",
+  "items": [
+    {
+      "archive": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\archive\\runtime_reset_before_20260516_162058\\outputs_candidate_skills",
+      "existed": true,
+      "had_payload": true,
+      "source": "D:\\codex\\skillminer\\outputs\\candidate_skills"
+    },
+    {
+      "archive": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\archive\\runtime_reset_before_20260516_162058\\outputs_reports",
+      "existed": true,
+      "had_payload": true,
+      "source": "D:\\codex\\skillminer\\outputs\\reports"
+    },
+    {
+      "archive": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\archive\\runtime_reset_before_20260516_162058\\tmp_validation_runs",
+      "existed": true,
+      "had_payload": true,
+      "source": "D:\\codex\\skillminer\\.tmp\\validation-runs"
+    },
+    {
+      "archive": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\archive\\runtime_reset_before_20260516_162058\\data_processed_traces.jsonl",
+      "existed": true,
+      "source": "D:\\codex\\skillminer\\data\\processed_traces.jsonl"
+    },
+    {
+      "archive": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\archive\\runtime_reset_before_20260516_162058\\data_evolution_memory.json",
+      "existed": true,
+      "source": "D:\\codex\\skillminer\\data\\evolution_memory.json"
+    }
+  ],
+  "label": "runtime_reset_before"
+}

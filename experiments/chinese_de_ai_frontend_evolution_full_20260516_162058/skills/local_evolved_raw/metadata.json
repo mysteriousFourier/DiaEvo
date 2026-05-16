@@ -1,0 +1,69 @@
+{
+  "candidate_digest": "c649d169d2a8",
+  "candidate_id": "specialized",
+  "cluster_id": "C02",
+  "duplicate": {
+    "nearest": "skill-authoring",
+    "nearest_path": "skills/skill-authoring",
+    "nearest_source": "registry",
+    "reason": "no actionable duplicate risk detected",
+    "recommended_action": "keep",
+    "section_review": {
+      "action": "keep",
+      "evidence": {
+        "candidate_source_cluster": "C02",
+        "candidate_tools": [
+          "chat_completion",
+          "edge_headless_screenshot",
+          "glm_vision_evaluation",
+          "rubric_evaluation",
+          "sla",
+          "write_html"
+        ],
+        "nearest_source_cluster": "",
+        "nearest_tools": [],
+        "trace_ids": [
+          "TR-DEAI-009"
+        ]
+      },
+      "operating_steps_compatible": true,
+      "preserve": {
+        "mined_evidence": [
+          "- Source cluster: `C02`",
+          "- Trace ids: `TR-DEAI-009`",
+          "- Cluster size: `1`",
+          "- Failure rate: `1.00`",
+          "- Coverage gap: `0.72`",
+          "- Tool success rate: `1.00`",
+          "- `coverage_gap` score `0.72`: High failure, retry, or no-skill rate indicates work that is not well covered by existing skills.",
+          "- `failure_hotspot` score `1.00`: Repeated failures or tool errors suggest a workflow that needs explicit recovery guidance.",
+          "- `high_reuse_path` score `1.00`: A recurring tool sequence can be captured as a reusable operational path."
+        ],
+        "source_clusters": [
+          "C02"
+        ],
+        "trace_ids": [
+          "TR-DEAI-009"
+        ]
+      },
+      "proposed_edits": {},
+      "summary": "No section rewrite is needed before review."
+    },
+    "similarity": 0.0202
+  },
+  "duplicate_similarity": 0.0202,
+  "score": 1.0307,
+  "scores": {
+    "evidence_alignment": 1.0,
+    "human_feedback": 0.5,
+    "length": 0.7757,
+    "non_duplicate": 0.9798,
+    "safety": 0.95,
+    "specificity": 1.0,
+    "verifier": 1.0,
+    "warning_cleanliness": 1.0
+  },
+  "skill_dir": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\skills\\local_evolved_raw",
+  "skill_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\skills\\local_evolved_raw\\SKILL.md",
+  "status": "evolved-candidate"
+}

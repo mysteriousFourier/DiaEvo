@@ -1,0 +1,29 @@
+{
+  "sources": [
+    {
+      "focus": "队列、等待时间、agent availability、SLA、ticket distribution",
+      "name": "Zendesk incoming tickets real-time dashboard",
+      "url": "https://support.zendesk.com/hc/en-us/articles/9757103190810-Using-the-incoming-tickets-real-time-dashboard"
+    },
+    {
+      "focus": "backlog health、SLA risk、workload",
+      "name": "Geckoboard Zendesk SLA/backlog dashboard",
+      "url": "https://www.geckoboard.com/dashboard-examples/itsm/zendesk-service-desk-dashboard/"
+    },
+    {
+      "focus": "客服支持 dashboard 信息密度",
+      "name": "Zendesk dashboard pattern gallery",
+      "url": "https://www.saasui.design/pattern/dashboard/zendesk"
+    },
+    {
+      "focus": "订单列表、筛选、搜索、状态管理",
+      "name": "Shopify admin orders",
+      "url": "https://help.shopify.com/en/manual/orders/manage-orders/search-view-print-orders"
+    },
+    {
+      "focus": "中文企业后台表格、筛选、状态标签和布局密度",
+      "name": "Ant Design Pro",
+      "url": "https://pro.ant.design/"
+    }
+  ]
+}

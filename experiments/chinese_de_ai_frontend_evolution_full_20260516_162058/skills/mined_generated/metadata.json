@@ -1,0 +1,14 @@
+{
+  "cluster_id": "C02",
+  "code_artifacts_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\skills\\mined_generated\\code_artifacts.json",
+  "code_backed": true,
+  "helper_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\skills\\mined_generated\\scripts\\skill_flow.py",
+  "name_hint": "c02-工单-队列",
+  "skill_dir": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\skills\\mined_generated",
+  "skill_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\skills\\mined_generated\\SKILL.md",
+  "status": "candidate",
+  "validation_commands": [
+    "python D:/codex/skillminer/experiments/chinese_de_ai_frontend_evolution_full_20260516_162058/skills/mined_generated/scripts/skill_flow.py --describe"
+  ],
+  "validation_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\skills\\mined_generated\\validation.json"
+}

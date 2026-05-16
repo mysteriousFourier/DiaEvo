@@ -816,9 +816,10 @@ def _temporary_litellm_env(deepseek: DeepSeekConfig):
     updates = {
         "OPENAI_API_KEY": deepseek.api_key,
         "OPENAI_BASE_URL": deepseek.base_url.rstrip("/"),
-        "LITELLM_TIMEOUT": str(deepseek.timeout),
         "LITELLM_TEMPERATURE": str(deepseek.temperature),
     }
+    if deepseek.timeout is not None:
+        updates["LITELLM_TIMEOUT"] = str(deepseek.timeout)
     original = {key: os.environ.get(key) for key in updates}
     os.environ.update(updates)
     try:

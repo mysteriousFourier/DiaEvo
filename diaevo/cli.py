@@ -372,6 +372,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser.add_argument("--max-tokens", type=int, default=None, help="Override DEEPSEEK_MAX_TOKENS.")
     chat_parser.add_argument("--temperature", type=float, default=None, help="Override DEEPSEEK_TEMPERATURE.")
     chat_parser.add_argument("--no-thinking", action="store_true", help="Disable DeepSeek thinking field for this test.")
+    chat_parser.add_argument("--image", action="append", default=[], help="Attach an image path or URL and use GLM vision config.")
     chat_parser.add_argument("--interactive", action="store_true", help="Keep conversation history locally and chat until /exit.")
 
     return parser
@@ -600,6 +601,7 @@ def main(argv: list[str] | None = None) -> int:
                 temperature=args.temperature,
                 no_thinking=args.no_thinking,
                 interactive=args.interactive,
+                image_paths=args.image,
             )
         else:
             parser.error(f"Unknown command: {args.command}")

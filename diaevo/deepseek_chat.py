@@ -1,11 +1,16 @@
 from __future__ import annotations
 
 import json
+import mimetypes
 import os
+import socket
 import sys
+import threading
 import urllib.error
 import urllib.request
+import base64
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 from .env import load_env
@@ -15,6 +20,15 @@ from ui.progress import status
 
 Message = dict[str, Any]
 NO_EMOJI_SYSTEM_RULE = "Do not use emoji in any user-facing text, code, comments, lists, or tool explanations."
+DEFAULT_DEEPSEEK_TIMEOUT = None
+DEFAULT_GLM_VISION_BASE_URL = "https://open.bigmodel.cn/api/paas/v4"
+DEFAULT_GLM_VISION_MODEL = "glm-4.6v-flash"
+MAX_IMAGE_BYTES = 20 * 1024 * 1024
+VISION_REQUEST_LOCK = threading.Lock()
+
+
+class DeepSeekRequestTimeout(RuntimeError):
+    """Raised when the DeepSeek request exceeds the configured socket timeout."""
 
 
 @dataclass(slots=True)
@@ -26,11 +40,32 @@ class DeepSeekConfig:
     temperature: float = 0.3
     reasoning_effort: str = "high"
     thinking: str = "enabled"
-    timeout: float = 60.0
+    timeout: float | None = DEFAULT_DEEPSEEK_TIMEOUT
 
     @property
     def endpoint(self) -> str:
         return f"{self.base_url.rstrip('/')}/chat/completions"
+
+
+def _env_timeout(name: str, default: float | None) -> float | None:
+    raw = os.environ.get(name)
+    if raw is None or not raw.strip():
+        return default
+    normalized = raw.strip().lower()
+    if normalized in {"0", "none", "no", "false", "off", "unlimited", "infinite"}:
+        return None
+    try:
+        value = float(raw)
+    except ValueError as exc:
+        raise ValueError(f"{name} must be a number of seconds or 0 for no timeout, got {raw!r}") from exc
+    if value <= 0:
+        return None
+    return value
+
+
+def _format_seconds(value: float) -> str:
+    value = float(value)
+    return str(int(value)) if value.is_integer() else f"{value:g}"
 
 
 def config_from_env(
@@ -53,8 +88,80 @@ def config_from_env(
         temperature=temperature if temperature is not None else float(os.environ.get("DEEPSEEK_TEMPERATURE", "0.3")),
         reasoning_effort="" if no_thinking else os.environ.get("DEEPSEEK_REASONING_EFFORT", "high"),
         thinking="disabled" if no_thinking else os.environ.get("DEEPSEEK_THINKING", "enabled"),
-        timeout=float(os.environ.get("DEEPSEEK_TIMEOUT", "60")),
+        timeout=_env_timeout("DEEPSEEK_TIMEOUT", DEFAULT_DEEPSEEK_TIMEOUT),
     )
+
+
+def vision_config_from_env(
+    env_path: str | None = None,
+    model: str | None = None,
+    base_url: str | None = None,
+    max_tokens: int | None = None,
+    temperature: float | None = None,
+) -> DeepSeekConfig:
+    load_env(env_path)
+    api_key = (
+        os.environ.get("GLM_VISION_API_KEY", "").strip()
+        or os.environ.get("GLM_API_KEY", "").strip()
+    )
+    if not api_key or api_key.startswith("sk-your-"):
+        raise ValueError("GLM_VISION_API_KEY is missing. Fill it in .env before using image understanding.")
+    return DeepSeekConfig(
+        api_key=api_key,
+        base_url=base_url
+        or os.environ.get("GLM_VISION_BASE_URL")
+        or os.environ.get("GLM_BASE_URL")
+        or DEFAULT_GLM_VISION_BASE_URL,
+        model=model or os.environ.get("GLM_VISION_MODEL", DEFAULT_GLM_VISION_MODEL),
+        max_tokens=max_tokens or int(os.environ.get("GLM_VISION_MAX_TOKENS", "4096")),
+        temperature=temperature
+        if temperature is not None
+        else float(os.environ.get("GLM_VISION_TEMPERATURE", os.environ.get("DEEPSEEK_TEMPERATURE", "0.2"))),
+        reasoning_effort="",
+        thinking="",
+        timeout=_env_timeout("GLM_VISION_TIMEOUT", _env_timeout("DEEPSEEK_TIMEOUT", DEFAULT_DEEPSEEK_TIMEOUT)),
+    )
+
+
+def image_file_to_data_url(path: str | Path, *, max_bytes: int = MAX_IMAGE_BYTES) -> str:
+    target = Path(path).expanduser()
+    if not target.exists() or not target.is_file():
+        raise ValueError(f"image file not found: {target}")
+    size = target.stat().st_size
+    if size <= 0:
+        raise ValueError(f"image file is empty: {target}")
+    if size > max_bytes:
+        raise ValueError(f"image file is too large: {target} ({size} bytes > {max_bytes} bytes)")
+    mime_type, _ = mimetypes.guess_type(str(target))
+    if mime_type not in {"image/png", "image/jpeg", "image/webp", "image/gif", "image/bmp"}:
+        raise ValueError(f"unsupported image type for {target}; use png, jpg, webp, gif, or bmp")
+    encoded = base64.b64encode(target.read_bytes()).decode("ascii")
+    return f"data:{mime_type};base64,{encoded}"
+
+
+def image_url_part(path_or_url: str | Path) -> dict[str, Any]:
+    text = str(path_or_url).strip()
+    if text.startswith(("http://", "https://", "data:image/")):
+        url = text
+    else:
+        url = image_file_to_data_url(text)
+    return {"type": "image_url", "image_url": {"url": url}}
+
+
+def multimodal_user_message(prompt: str, image_paths: list[str | Path]) -> Message:
+    content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+    content.extend(image_url_part(path) for path in image_paths)
+    return {"role": "user", "content": content}
+
+
+def _contains_image_part(value: Any) -> bool:
+    if isinstance(value, dict):
+        if value.get("type") == "image_url" or "image_url" in value:
+            return True
+        return any(_contains_image_part(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_contains_image_part(item) for item in value)
+    return False
 
 
 def chat_completion(
@@ -89,12 +196,29 @@ def chat_completion(
         method="POST",
     )
     try:
-        with urllib.request.urlopen(request, timeout=config.timeout) as response:
-            raw = response.read().decode("utf-8")
+        if _contains_image_part(messages):
+            with VISION_REQUEST_LOCK:
+                with urllib.request.urlopen(request, timeout=config.timeout) as response:
+                    raw = response.read().decode("utf-8")
+        else:
+            with urllib.request.urlopen(request, timeout=config.timeout) as response:
+                raw = response.read().decode("utf-8")
+    except (TimeoutError, socket.timeout) as exc:
+        timeout = _format_seconds(config.timeout or 0)
+        raise DeepSeekRequestTimeout(
+            f"DeepSeek API request timed out after {timeout}s. "
+            "Set DEEPSEEK_TIMEOUT=0 in .env to disable the request timeout, or reduce DEEPSEEK_MAX_TOKENS."
+        ) from exc
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"DeepSeek API HTTP {exc.code}: {body}") from exc
     except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            timeout = _format_seconds(config.timeout or 0)
+            raise DeepSeekRequestTimeout(
+                f"DeepSeek API request timed out after {timeout}s. "
+                "Set DEEPSEEK_TIMEOUT=0 in .env to disable the request timeout, or reduce DEEPSEEK_MAX_TOKENS."
+            ) from exc
         raise RuntimeError(f"DeepSeek API request failed: {exc.reason}") from exc
     data = json.loads(raw)
     if "error" in data:
@@ -123,6 +247,24 @@ def chat_once(prompt: str, system: str, config: DeepSeekConfig) -> tuple[str, di
     else:
         messages.append({"role": "system", "content": NO_EMOJI_SYSTEM_RULE})
     messages.append({"role": "user", "content": prompt})
+    response = chat_completion(messages, config)
+    return extract_assistant_text(response), response
+
+
+def vision_chat_once(
+    prompt: str,
+    image_paths: list[str | Path],
+    system: str,
+    config: DeepSeekConfig,
+) -> tuple[str, dict[str, Any]]:
+    if not image_paths:
+        return chat_once(prompt, system, config)
+    messages: list[Message] = []
+    if system:
+        messages.append({"role": "system", "content": f"{system}\n\n{NO_EMOJI_SYSTEM_RULE}"})
+    else:
+        messages.append({"role": "system", "content": NO_EMOJI_SYSTEM_RULE})
+    messages.append(multimodal_user_message(prompt, image_paths))
     response = chat_completion(messages, config)
     return extract_assistant_text(response), response
 
@@ -163,19 +305,34 @@ def run_chat_test(
     temperature: float | None = None,
     no_thinking: bool = False,
     interactive: bool = False,
+    image_paths: list[str] | None = None,
 ) -> int:
-    config = config_from_env(
-        env_path=env_path,
-        model=model,
-        base_url=base_url,
-        max_tokens=max_tokens,
-        temperature=temperature,
-        no_thinking=no_thinking,
-    )
+    if image_paths:
+        config = vision_config_from_env(
+            env_path=env_path,
+            model=model,
+            base_url=base_url,
+            max_tokens=max_tokens,
+            temperature=temperature,
+        )
+    else:
+        config = config_from_env(
+            env_path=env_path,
+            model=model,
+            base_url=base_url,
+            max_tokens=max_tokens,
+            temperature=temperature,
+            no_thinking=no_thinking,
+        )
     if interactive:
+        if image_paths:
+            raise ValueError("chat-test --interactive does not support --image; use a single prompt with --image.")
         return interactive_chat(system, config)
     with status("正在请求模型"):
-        answer, response = chat_once(prompt, system, config)
+        if image_paths:
+            answer, response = vision_chat_once(prompt, image_paths, system, config)
+        else:
+            answer, response = chat_once(prompt, system, config)
     print_assistant(answer)
     usage = response.get("usage")
     if usage:

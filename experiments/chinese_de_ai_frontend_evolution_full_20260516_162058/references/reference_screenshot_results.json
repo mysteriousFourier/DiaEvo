@@ -1,0 +1,92 @@
+[
+  {
+    "command": [
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "--headless=new",
+      "--disable-gpu",
+      "--window-size=1440,1000",
+      "--user-data-dir=D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\.edge-profile-reference_01",
+      "--screenshot=D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_01.png",
+      "https://support.zendesk.com/hc/en-us/articles/9757103190810-Using-the-incoming-tickets-real-time-dashboard"
+    ],
+    "elapsed_sec": 20.748,
+    "exists": true,
+    "returncode": 0,
+    "screenshot_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_01.png",
+    "stderr": "[32364:25048:0516/162527.890:ERROR:components\\edge_ess\\vbs_encoder.cc:100] LoadEnclaveImageW failed, error code 577\n[32364:25048:0516/162528.839:ERROR:chrome\\browser\\task_manager\\providers\\fallback_task_provider.cc:126] Every renderer should have at least one task provided by a primary task provider. If a \"Renderer\" fallback task is shown, it is a bug. If you have repro steps, please file a new bug and tag it as a dependency of crbug.com/40528867.\n[32364:25048:0516/162532.104:ERROR:chrome\\browser\\task_manager\\providers\\fallback_task_provider.cc:126] Every renderer should have at least one task provided by a primary task provider. If a \"Renderer\" fallback task is shown, it is a bug. If you have repro steps, please file a new bug and tag it as a dependency of crbug.com/40528867.\n115911 bytes written to file D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_01.png\n",
+    "stdout": "",
+    "url": "https://support.zendesk.com/hc/en-us/articles/9757103190810-Using-the-incoming-tickets-real-time-dashboard"
+  },
+  {
+    "command": [
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "--headless=new",
+      "--disable-gpu",
+      "--window-size=1440,1000",
+      "--user-data-dir=D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\.edge-profile-reference_02",
+      "--screenshot=D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_02.png",
+      "https://www.geckoboard.com/dashboard-examples/itsm/zendesk-service-desk-dashboard/"
+    ],
+    "elapsed_sec": 41.401,
+    "exists": true,
+    "returncode": 0,
+    "screenshot_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_02.png",
+    "stderr": "[1612:18828:0516/162549.873:ERROR:components\\edge_ess\\vbs_encoder.cc:100] LoadEnclaveImageW failed, error code 577\n[1612:18828:0516/162550.788:ERROR:chrome\\browser\\task_manager\\providers\\fallback_task_provider.cc:126] Every renderer should have at least one task provided by a primary task provider. If a \"Renderer\" fallback task is shown, it is a bug. If you have repro steps, please file a new bug and tag it as a dependency of crbug.com/40528867.\n[1612:18828:0516/162552.088:ERROR:chrome\\browser\\task_manager\\providers\\fallback_task_provider.cc:126] Every renderer should have at least one task provided by a primary task provider. If a \"Renderer\" fallback task is shown, it is a bug. If you have repro steps, please file a new bug and tag it as a dependency of crbug.com/40528867.\n[1612:18828:0516/162602.550:ERROR:chrome\\browser\\task_manager\\providers\\fallback_task_provider.cc:126] Every renderer should have at least one task provided by a primary task provider. If a \"Renderer\" fallback task is shown, it is a bug. If you have repro steps, please file a new bug and tag it as a dependency of crbug.com/40528867.\n[1612:17436:0516/162621.537:ERROR:extensions\\common\\file_util.cc:144] Moving extension from : C:\\Users\\csc20\\AppData\\Local\\Temp\\scoped_dir1612_2016734256\\CRX_INSTALL to : D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\.edge-profile-reference_02\\Default\\Extensions\\Temp\\scoped_dir1612_673205854\\CRX_INSTALL failed.\n111241 bytes written to file D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_02.png\n[1612:12404:0516/162630.955:ERROR:components\\sync\\engine\\get_updates_processor.cc:424] PostClientToServerMessage() failed during GetUpdates with error Network error (ERR_ABORTED)\n",
+    "stdout": "",
+    "url": "https://www.geckoboard.com/dashboard-examples/itsm/zendesk-service-desk-dashboard/"
+  },
+  {
+    "command": [
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "--headless=new",
+      "--disable-gpu",
+      "--window-size=1440,1000",
+      "--user-data-dir=D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\.edge-profile-reference_03",
+      "--screenshot=D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_03.png",
+      "https://www.saasui.design/pattern/dashboard/zendesk"
+    ],
+    "elapsed_sec": 11.498,
+    "exists": true,
+    "returncode": 0,
+    "screenshot_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_03.png",
+    "stderr": "[7816:27000:0516/162632.603:ERROR:components\\edge_ess\\vbs_encoder.cc:100] LoadEnclaveImageW failed, error code 577\n[7816:27000:0516/162633.545:ERROR:chrome\\browser\\task_manager\\providers\\fallback_task_provider.cc:126] Every renderer should have at least one task provided by a primary task provider. If a \"Renderer\" fallback task is shown, it is a bug. If you have repro steps, please file a new bug and tag it as a dependency of crbug.com/40528867.\n[7816:27000:0516/162635.135:ERROR:chrome\\browser\\task_manager\\providers\\fallback_task_provider.cc:126] Every renderer should have at least one task provided by a primary task provider. If a \"Renderer\" fallback task is shown, it is a bug. If you have repro steps, please file a new bug and tag it as a dependency of crbug.com/40528867.\n223731 bytes written to file D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_03.png\n[7816:24316:0516/162643.765:ERROR:components\\sync\\engine\\get_updates_processor.cc:424] PostClientToServerMessage() failed during GetUpdates with error Network error (ERR_ABORTED)\n",
+    "stdout": "",
+    "url": "https://www.saasui.design/pattern/dashboard/zendesk"
+  },
+  {
+    "command": [
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "--headless=new",
+      "--disable-gpu",
+      "--window-size=1440,1000",
+      "--user-data-dir=D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\.edge-profile-reference_04",
+      "--screenshot=D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_04.png",
+      "https://help.shopify.com/en/manual/orders/manage-orders/search-view-print-orders"
+    ],
+    "elapsed_sec": 10.205,
+    "exists": true,
+    "returncode": 0,
+    "screenshot_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_04.png",
+    "stderr": "[27224:23568:0516/162646.571:ERROR:components\\edge_ess\\vbs_encoder.cc:100] LoadEnclaveImageW failed, error code 577\n[27224:23568:0516/162647.532:ERROR:chrome\\browser\\task_manager\\providers\\fallback_task_provider.cc:126] Every renderer should have at least one task provided by a primary task provider. If a \"Renderer\" fallback task is shown, it is a bug. If you have repro steps, please file a new bug and tag it as a dependency of crbug.com/40528867.\n[27224:23568:0516/162648.719:ERROR:chrome\\browser\\task_manager\\providers\\fallback_task_provider.cc:126] Every renderer should have at least one task provided by a primary task provider. If a \"Renderer\" fallback task is shown, it is a bug. If you have repro steps, please file a new bug and tag it as a dependency of crbug.com/40528867.\n11430 bytes written to file D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_04.png\n",
+    "stdout": "",
+    "url": "https://help.shopify.com/en/manual/orders/manage-orders/search-view-print-orders"
+  },
+  {
+    "command": [
+      "C:\\Program Files (x86)\\Microsoft\\Edge\\Application\\msedge.exe",
+      "--headless=new",
+      "--disable-gpu",
+      "--window-size=1440,1000",
+      "--user-data-dir=D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\.edge-profile-reference_05",
+      "--screenshot=D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_05.png",
+      "https://pro.ant.design/"
+    ],
+    "elapsed_sec": 26.824,
+    "exists": true,
+    "returncode": 0,
+    "screenshot_path": "D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_05.png",
+    "stderr": "[25976:15480:0516/162657.663:ERROR:components\\edge_ess\\vbs_encoder.cc:100] LoadEnclaveImageW failed, error code 577\n[25976:15480:0516/162658.568:ERROR:chrome\\browser\\task_manager\\providers\\fallback_task_provider.cc:126] Every renderer should have at least one task provided by a primary task provider. If a \"Renderer\" fallback task is shown, it is a bug. If you have repro steps, please file a new bug and tag it as a dependency of crbug.com/40528867.\n[25976:15480:0516/162700.718:ERROR:chrome\\browser\\task_manager\\providers\\fallback_task_provider.cc:126] Every renderer should have at least one task provided by a primary task provider. If a \"Renderer\" fallback task is shown, it is a bug. If you have repro steps, please file a new bug and tag it as a dependency of crbug.com/40528867.\n7105 bytes written to file D:\\codex\\skillminer\\experiments\\chinese_de_ai_frontend_evolution_full_20260516_162058\\references\\reference_screenshots\\reference_05.png\n[25976:27288:0516/162724.141:ERROR:components\\sync\\engine\\get_updates_processor.cc:424] PostClientToServerMessage() failed during GetUpdates with error Network error (ERR_ABORTED)\n",
+    "stdout": "",
+    "url": "https://pro.ant.design/"
+  }
+]
