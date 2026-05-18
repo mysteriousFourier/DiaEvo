@@ -27,6 +27,7 @@ from .mining_snapshot import export_mining_snapshot
 from .paths import DATA_DIR, bootstrap_workspace
 from .promotion import PROMOTION_LABELS, label_promotion, promote, queue_promotion, rewrite_promotion
 from .recommender import recommend
+from .script_artifacts import SCRIPT_REVIEW_STATUSES, review_script
 from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
 from .validation_runner import run_validation
 from .verifier import verify_skill
@@ -46,6 +47,7 @@ PUBLIC_COMMANDS = (
     "promote",
     "label-promotion",
     "rewrite-promotion",
+    "review-script",
     "demo",
     "home",
     "tools",
@@ -178,6 +180,13 @@ def build_parser() -> argparse.ArgumentParser:
         help="重写动作；auto 会根据标签和 duplicate 建议选择。",
     )
     rewrite_parser.add_argument("--output-dir", default=None, help="可选：重写草案输出目录。")
+
+    review_script_parser = subparsers.add_parser("review-script", help="审核 skill 目录中的只读 helper 脚本状态。")
+    review_script_parser.add_argument("--skill", required=True, help="Candidate skill directory or SKILL.md path.")
+    review_script_parser.add_argument("--status", choices=sorted(SCRIPT_REVIEW_STATUSES), required=True, help="脚本审核状态。")
+    review_script_parser.add_argument("--note", default="", help="Optional reviewer note.")
+    review_script_parser.add_argument("--reviewer", default="", help="Optional reviewer id.")
+    review_script_parser.add_argument("--approve", action="store_true", help="确认写入 code_artifacts.json 审核状态。")
 
     demo_parser = subparsers.add_parser("demo", help="Run the full MVP pipeline on sample data.")
     demo_parser.add_argument("--task", default="给当前项目生成测试修复 skill", help="Task used for recommendation.")
@@ -467,6 +476,14 @@ def main(argv: list[str] | None = None) -> int:
             result = label_promotion(args.queue_id, labels=args.label, note=args.note, reviewer=args.reviewer)
         elif args.command == "rewrite-promotion":
             result = rewrite_promotion(args.queue_id, action=args.action, output_dir=args.output_dir)
+        elif args.command == "review-script":
+            result = review_script(
+                args.skill,
+                status=args.status,
+                note=args.note,
+                reviewer=args.reviewer,
+                approve=args.approve,
+            )
         elif args.command == "demo":
             result = run_demo(args.task, args.cluster_id)
         elif args.command == "tools":

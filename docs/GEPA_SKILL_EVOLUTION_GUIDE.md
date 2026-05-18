@@ -6,7 +6,7 @@ GEPA 是 DiaEvo 技能自演化循环的可选反思式优化器。
 
 DiaEvo 负责 CLI、数据层、evaluator 和安全层。GEPA 不应替代 ingest、mine、verify、validate、recommend、evaluate 或 promote。GEPA 只优化由 DiaEvo 发现、评估和治理的文本制品。
 
-当前项目阶段：**Phase 6 人工反馈学习已完成，Phase 7 安全代码演化研究已开始**。GEPA 仍然是可选依赖；任何 patch guidance 或 code evolution 必须停留在沙盒中，直到人工审查。
+当前项目阶段：**Phase 6 人工反馈学习已完成，Phase 7 安全代码演化研究已开始**。GEPA 仍然是可选依赖；任何 patch guidance 或 code evolution 必须停留在沙盒中，直到人工审查。code-backed skill 的 helper 脚本也必须先走 validation 和 `review-script`，未审查时按 `SKILL.md` 回退。
 
 推荐架构：
 
@@ -54,6 +54,8 @@ candidate = {
 
 不要先优化生产代码，也不要先优化整块原始 Markdown。结构化章节让 diff 可审查，并保留 verifier 契约。
 
+code-backed skill 的 helper 脚本是独立审查制品，不是 GEPA 的首个优化目标。GEPA 可以后续辅助生成脚本建议或 validation metadata，但不能自动把脚本置为 `approved`；`recommend` 必须在脚本未 approved、validation 未 passed 或 verifier 发现 helper hard error 时回退到 `SKILL.md`。
+
 ## 权责边界
 
 DiaEvo 负责：
@@ -65,6 +67,7 @@ DiaEvo 负责：
 - `SKILL.md` rendering contract
 - verifier 和 validation gates
 - duplicate checks
+- code-backed helper script validation, review status, and fallback metadata
 - recommendation ranking
 - held-out evaluation
 - promotion queue

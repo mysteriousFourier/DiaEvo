@@ -11,7 +11,7 @@ def read_json(path: str | Path, default: Any = None) -> Any:
     target = Path(path)
     if not target.exists():
         return default
-    with target.open("r", encoding="utf-8") as handle:
+    with target.open("r", encoding="utf-8-sig") as handle:
         return json.load(handle)
 
 

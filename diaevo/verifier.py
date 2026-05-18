@@ -5,6 +5,7 @@ from pathlib import Path
 from typing import Any
 
 from .paths import REPORTS_DIR, ensure_project_dirs
+from .script_artifacts import SCRIPT_REVIEW_STATUSES
 from .storage import read_json, write_json
 
 
@@ -130,6 +131,14 @@ def _extend_code_artifact_findings(skill_dir: Path, findings: list[dict[str, str
         return
     if artifacts.get("schema") != "diaevo.code_backed_skill.v1":
         findings.append({"severity": "error", "code": "invalid_code_artifacts_schema", "message": "code_artifacts.json schema is invalid"})
+    review_status = str(artifacts.get("review_status") or "pending").lower()
+    if review_status not in SCRIPT_REVIEW_STATUSES:
+        findings.append({"severity": "error", "code": "invalid_script_review_status", "message": f"unknown script review status: {review_status}"})
+    elif review_status != "approved":
+        findings.append({"severity": "warning", "code": "script_not_approved", "message": f"script review status is `{review_status}`; skill should use SKILL.md fallback"})
+    fallback_mode = str(artifacts.get("fallback_mode") or "skill_md")
+    if fallback_mode != "skill_md":
+        findings.append({"severity": "warning", "code": "unsupported_script_fallback", "message": "fallback_mode should be `skill_md`"})
     entrypoint = str(artifacts.get("entrypoint") or "").replace("\\", "/").strip("/")
     if entrypoint not in ALLOWED_CODE_ARTIFACT_ENTRYPOINTS:
         findings.append({"severity": "error", "code": "unsupported_code_entrypoint", "message": f"unsupported helper entrypoint: {entrypoint}"})

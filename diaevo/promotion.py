@@ -8,6 +8,7 @@ from typing import Any
 from .evolution import record_promotion_feedback
 from .paths import CANDIDATE_SKILLS_DIR, DATA_DIR, WORKSPACE_ROOT, REPORTS_DIR, ensure_project_dirs
 from .quality import collect_skill_texts, extract_skill_sections, nearest_duplicate
+from .script_artifacts import script_status_for_skill_dir
 from .storage import read_json, write_json
 from .verifier import parse_frontmatter, verify_skill
 
@@ -353,6 +354,7 @@ def promote(queue_id: str, *, approve: bool = False, registry_path: str | Path |
         "cost": 0.25,
         "source": "generated-candidate",
         "installed": False,
+        "script": script_status_for_skill_dir(skill_path.parent),
     }
     replaced = False
     for index, item in enumerate(registry):

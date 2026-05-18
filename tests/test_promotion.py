@@ -3,6 +3,7 @@ import shutil
 
 from diaevo import evolution
 from diaevo.promotion import label_promotion, promote, queue_promotion, rewrite_promotion
+from diaevo.script_artifacts import review_script
 from diaevo.storage import read_json
 
 
@@ -42,6 +43,23 @@ def _write_promotable_skill(root: Path) -> None:
     (root / "validation.json").write_text('{"status":"passed","approved":true,"commands":["python --version"]}', encoding="utf-8")
 
 
+def _write_script_artifacts(root: Path, *, review_status: str = "pending", validation_status: str = "passed") -> None:
+    (root / "scripts").mkdir(parents=True, exist_ok=True)
+    (root / "scripts" / "skill_flow.py").write_text("print('describe')\n", encoding="utf-8")
+    (root / "code_artifacts.json").write_text(
+        (
+            "{"
+            '"schema":"diaevo.code_backed_skill.v1",'
+            f'"review_status":"{review_status}",'
+            '"entrypoint":"scripts/skill_flow.py",'
+            '"fallback_mode":"skill_md",'
+            f'"last_validation_status":"{validation_status}"'
+            "}"
+        ),
+        encoding="utf-8",
+    )
+
+
 def test_queue_promotion_records_ready_entry(tmp_path):
     skill_dir = Path(".tmp") / "tests" / tmp_path.name / "promotion-ready"
     shutil.rmtree(skill_dir.parent, ignore_errors=True)
@@ -71,6 +89,39 @@ def test_promote_requires_approval_then_updates_registry(tmp_path):
     assert promoted["status"] == "promoted"
     assert "accepted" in promoted["labels"]
     assert "unique-promotion-skill" in registry.read_text(encoding="utf-8")
+
+
+def test_review_script_requires_approval_then_writes_status(tmp_path):
+    skill_dir = Path(".tmp") / "tests" / tmp_path.name / "script-review"
+    shutil.rmtree(skill_dir.parent, ignore_errors=True)
+    _write_promotable_skill(skill_dir)
+    _write_script_artifacts(skill_dir, review_status="pending")
+
+    preview = review_script(skill_dir, status="approved", note="只读脚本已审查", reviewer="tester")
+    reviewed = review_script(skill_dir, status="approved", note="只读脚本已审查", reviewer="tester", approve=True)
+    artifacts = read_json(skill_dir / "code_artifacts.json")
+
+    assert preview["status"] == "requires_approval"
+    assert reviewed["status"] == "reviewed"
+    assert artifacts["review_status"] == "approved"
+    assert artifacts["reviewer"] == "tester"
+
+
+def test_promote_records_script_metadata_in_registry(tmp_path):
+    skill_dir = Path(".tmp") / "tests" / tmp_path.name / "promotion-script"
+    shutil.rmtree(skill_dir.parent, ignore_errors=True)
+    _write_promotable_skill(skill_dir)
+    _write_script_artifacts(skill_dir, review_status="approved", validation_status="passed")
+    queued = queue_promotion(skill_dir)
+    registry = tmp_path / "registry.json"
+    registry.write_text("[]", encoding="utf-8")
+
+    promoted = promote(queued["queue_id"], approve=True, registry_path=registry)
+    saved = read_json(registry)
+
+    assert promoted["record"]["script"]["available"] is True
+    assert saved[0]["script"]["review_status"] == "approved"
+    assert saved[0]["script"]["execution_mode"] == "script"
 
 
 def test_queue_promotion_records_feedback_memory(tmp_path, monkeypatch):

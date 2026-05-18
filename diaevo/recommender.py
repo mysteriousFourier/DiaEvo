@@ -11,6 +11,7 @@ from .features import FeatureStore, cosine
 from .ingest import load_plugins, load_skill_registry, load_traces
 from .models import PluginRecord, SkillRecord, TraceRecord
 from .paths import DATA_DIR, REPORTS_DIR, ensure_project_dirs
+from .script_artifacts import script_status_for_skill_dir, script_status_from_artifacts
 from .skill_graph import build_skill_graph, personalized_pagerank, seeds_for_task
 from .storage import read_json, write_json
 
@@ -46,6 +47,7 @@ class Recommendation:
     installed: bool
     source: str
     reason: str
+    script: dict[str, Any]
 
     def to_mapping(self) -> dict[str, Any]:
         return {
@@ -64,6 +66,11 @@ class Recommendation:
             "installed": self.installed,
             "source": self.source,
             "reason": self.reason,
+            "script_available": bool(self.script.get("available", False)),
+            "script_status": str(self.script.get("review_status") or "missing"),
+            "script_entrypoint": str(self.script.get("entrypoint") or ""),
+            "execution_mode": str(self.script.get("execution_mode") or "skill_md_fallback"),
+            "fallback_reason": str(self.script.get("fallback_reason") or ""),
         }
 
 
@@ -259,6 +266,21 @@ def _cluster_signal_for_skill(skill: SkillRecord, clusters: list[dict[str, Any]]
     return best_gap, best_reuse
 
 
+def _script_metadata(skill: SkillRecord) -> dict[str, Any]:
+    if isinstance(skill.script, dict) and skill.script:
+        return script_status_from_artifacts(
+            {
+                "review_status": skill.script.get("review_status") or skill.script.get("script_status"),
+                "entrypoint": skill.script.get("entrypoint") or skill.script.get("script_entrypoint"),
+                "fallback_mode": skill.script.get("fallback_mode") or "skill_md",
+                "last_validation_status": skill.script.get("last_validation_status"),
+            }
+        )
+    if skill.path and skill.source != "plugin":
+        return script_status_for_skill_dir(skill.path)
+    return script_status_from_artifacts({})
+
+
 def recommend(
     task: str,
     traces_path: str | Path | None = None,
@@ -314,6 +336,7 @@ def recommend(
         success = skill.success_rate
         coverage_gap, recent_reuse = _cluster_signal_for_skill(skill, clusters)
         human_feedback, feedback_reasons = _skill_human_feedback(skill, feedback_index)
+        script = _script_metadata(skill)
         score = (
             active_weights["similarity"] * similarity
             + active_weights["rules"] * rule_score
@@ -360,6 +383,7 @@ def recommend(
                 installed=skill.installed,
                 source=skill.source,
                 reason=", ".join(reason_parts),
+                script=script,
             )
         )
     recommendations.sort(key=lambda item: item.score, reverse=True)

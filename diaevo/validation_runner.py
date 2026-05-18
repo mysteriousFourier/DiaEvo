@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from .paths import WORKSPACE_ROOT, REPORTS_DIR, ensure_project_dirs
+from .script_artifacts import update_validation_summary
 from .storage import read_json, write_json
 from .tool_layer import resolve_workspace_path
 from .verifier import DANGEROUS_PATTERNS, verify_skill
@@ -57,10 +58,18 @@ EXCLUDED_COPY_NAMES = {
     "node_modules",
     "dist",
     "build",
+    ".idea",
+    ".skillminer",
+    ".uploads",
+    ".uv-cache",
+    "diaevo.egg-info",
+    "experiments",
 }
 
 EXCLUDED_COPY_PATHS = {
     ("outputs", "reports"),
+    ("data", "mining_snapshots"),
+    ("data", "knowledge_graph"),
 }
 
 
@@ -466,6 +475,7 @@ def run_validation(skill: str | Path, *, approve: bool = False) -> dict[str, Any
     write_json(sandbox_report_path, result)
     validation.update(_validation_summary(result))
     write_json(skill_dir / "validation.json", validation)
+    update_validation_summary(skill_dir, result)
     write_json(REPORTS_DIR / f"validation_{skill_dir.name}.json", result)
     record_validation_feedback(result)
     return result

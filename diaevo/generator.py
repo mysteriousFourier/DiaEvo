@@ -260,11 +260,15 @@ def _write_code_artifacts(target_root: Path, cluster: dict[str, Any]) -> dict[st
     artifacts = {
         "schema": "diaevo.code_backed_skill.v1",
         "status": "candidate",
+        "review_status": "pending",
         "entrypoint": "scripts/skill_flow.py",
         "mode": "read_only_skill_flow",
+        "fallback_mode": "skill_md",
         "allowed_capabilities": ["describe_flow"],
         "forbidden_capabilities": ["workspace_write", "shell_execution", "network", "dependency_install"],
         "validation_commands": validation["commands"],
+        "last_validation_status": "",
+        "last_sandbox_report_path": "",
         "source_cluster": str(cluster.get("id", "")),
     }
     write_json(target_root / "code_artifacts.json", artifacts)

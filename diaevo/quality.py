@@ -239,6 +239,20 @@ def section_review_proposal(candidate_text: str, nearest_text: str = "", *, acti
 
 
 def nearest_duplicate(text: str, known_texts: list[SkillText]) -> dict[str, Any]:
+    candidate_name = _frontmatter_value(text, "name").strip().lower()
+    if candidate_name:
+        for item in known_texts:
+            if item.name.strip().lower() == candidate_name:
+                action, reason = duplicate_action(1.0)
+                return {
+                    "similarity": 1.0,
+                    "nearest": item.name,
+                    "nearest_source": item.source,
+                    "nearest_path": item.path,
+                    "recommended_action": action,
+                    "reason": "skill name already exists in known skills",
+                    "section_review": section_review_proposal(text, item.text, action=action),
+                }
     if not known_texts:
         action, reason = duplicate_action(0.0)
         return {

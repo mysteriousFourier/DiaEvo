@@ -46,11 +46,14 @@ def test_generate_code_backed_skill_validates_in_sandbox(tmp_path):
     assert "## Executable Artifacts" in text
     artifacts = read_json(skill_dir / "code_artifacts.json")
     assert artifacts["entrypoint"] == "scripts/skill_flow.py"
+    assert artifacts["review_status"] == "pending"
+    assert artifacts["fallback_mode"] == "skill_md"
     validation = read_json(skill_dir / "validation.json")
     assert validation["commands"] == [f"python {skill_dir.as_posix()}/scripts/skill_flow.py --describe"]
 
     verify_result = verify_skill(skill_dir)
     assert verify_result["passed"]
+    assert any(item["code"] == "script_not_approved" for item in verify_result["findings"])
 
     preview = run_validation(skill_dir)
     assert preview["status"] == "requires_approval"
@@ -59,6 +62,9 @@ def test_generate_code_backed_skill_validates_in_sandbox(tmp_path):
     assert "read_only_skill_flow" in validated["results"][0]["stdout"]
     assert Path(validated["sandbox_workspace"]).exists()
     assert (skill_dir / "scripts" / "skill_flow.py").exists()
+    updated_artifacts = read_json(skill_dir / "code_artifacts.json")
+    assert updated_artifacts["last_validation_status"] == "passed"
+    assert updated_artifacts["last_sandbox_report_path"]
 
 
 def test_cli_accepts_generate_with_code():

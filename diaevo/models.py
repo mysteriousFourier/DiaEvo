@@ -177,6 +177,7 @@ class SkillRecord:
     cost: float = 0.0
     source: str = "registry"
     installed: bool = True
+    script: dict[str, Any] = field(default_factory=dict)
 
     @classmethod
     def from_mapping(cls, value: dict[str, Any]) -> "SkillRecord":
@@ -194,6 +195,7 @@ class SkillRecord:
             cost=max(0.0, min(1.0, _as_float(value.get("cost")))),
             source=str(value.get("source") or "registry").strip(),
             installed=bool(value.get("installed", True)),
+            script=dict(value.get("script")) if isinstance(value.get("script"), dict) else {},
         )
 
     @property
@@ -222,6 +224,7 @@ class SkillRecord:
             "cost": self.cost,
             "source": self.source,
             "installed": self.installed,
+            "script": self.script,
         }
 
 
