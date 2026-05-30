@@ -2,7 +2,6 @@
 
 import re
 import shutil
-import textwrap
 import unicodedata
 import os
 from pathlib import Path
@@ -89,6 +88,24 @@ def _fit(text: str, width: int) -> str:
     return _truncate(text, width)
 
 
+def _wrap_display_line(text: str, width: int) -> list[str]:
+    if width <= 0:
+        return [text]
+    lines: list[str] = []
+    current: list[str] = []
+    used = 0
+    for char in text:
+        char_width = _char_width(char)
+        if current and used + char_width > width:
+            lines.append("".join(current))
+            current = [char]
+            used = char_width
+            continue
+        current.append(char)
+        used += char_width
+    return lines + (["".join(current)] if current else [])
+
+
 def _as_int(value: object, default: int = 0) -> int:
     try:
         return int(value)  # type: ignore[arg-type]
@@ -153,26 +170,26 @@ def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
     top_tools = _top_items(ingest.get("top_tools", {}), limit=3)
 
     lines = [
-        f"{BLUE}{BOLD}Tips for getting started{RESET}",
-        "Run /ingest to load traces, then /mine to build skill memory",
+        f"{BLUE}{BOLD}开始使用{RESET}",
+        "先运行 /ingest 导入轨迹，再运行 /mine 构建技能记忆",
         "",
-        f"{BLUE}{BOLD}Current workspace{RESET}",
+        f"{BLUE}{BOLD}当前工作区{RESET}",
         "  ".join(
             [
-                _metric("traces", trace_count),
-                _metric("clusters", len(clusters)),
-                _metric("rules", rule_count),
-                _metric("seq", sequence_count),
+                _metric("轨迹", trace_count),
+                _metric("簇", len(clusters)),
+                _metric("规则", rule_count),
+                _metric("序列", sequence_count),
             ]
         ),
-        f"success {_percent(success_rate) if success_rate != '' else '--'}"
-        + (f"  lang {top_languages}" if top_languages else ""),
-        f"tools {top_tools}" if top_tools else "tools --",
+        f"成功率 {_percent(success_rate) if success_rate != '' else '--'}"
+        + (f"  语言 {top_languages}" if top_languages else ""),
+        f"工具 {top_tools}" if top_tools else "工具 --",
         "",
-        f"{BLUE}{BOLD}Next actions{RESET}",
-        "/mine refreshes the mining report",
-        "/recommend <task> ranks reusable skills",
-        "/tools shows local tool schemas",
+        f"{BLUE}{BOLD}下一步{RESET}",
+        "/mine 刷新挖掘报告",
+        "/recommend <任务> 推荐可复用技能",
+        "/tools 查看本地工具说明",
     ]
     return lines
 
@@ -188,10 +205,10 @@ def render_logo_card() -> str:
     title = f"{BLUE}{BOLD}DiaEvo{RESET} {DIM}v0.1.0{RESET}"
     left = [
         "",
-        f"{BOLD}Welcome back!{RESET}",
+        f"{BOLD}欢迎回来{RESET}",
         "",
         *whale_lines(),
-        f"{DIM}{_truncate(model_name, left_width - 18)} {GLYPHS['dot']} Skill Mining{RESET}",
+        f"{DIM}{_truncate(model_name, left_width - 2)}{RESET}",
         f"{DIM}{_truncate(str(WORKSPACE_ROOT), left_width - 2)}{RESET}",
         title,
         "",
@@ -214,7 +231,7 @@ def render_prompt_box() -> str:
     width = min(max(72, _term_width() - 4), 144)
     lines = [
         f"{GLYPHS['prompt']} {' ' * max(0, width - 2)}",
-        f"  {DIM}? for shortcuts{RESET}",
+        f"  {DIM}? 查看快捷键{RESET}",
     ]
     return "\n".join(lines)
 
@@ -239,27 +256,26 @@ def save_trusted_workspace() -> None:
 def render_trust_dialog(selected: int = 1) -> str:
     width = min(max(72, _term_width() - 4), 120)
     body_width = width - 4
-    title = f"{BLUE}Accessing workspace:{RESET}"
+    title = f"{BLUE}正在访问工作区：{RESET}"
     paragraphs = [
         str(WORKSPACE_ROOT),
         "",
-        "Quick safety check: Is this a project you created or one you trust? "
-        "(Like your own code, a well-known open source project, or work from your team). "
-        "If not, take a moment to review what's in this folder first.",
+        "安全确认：这是你创建或信任的项目吗？",
+        "例如你自己的代码、知名开源项目，或团队内部工作区；如果不确定，请先检查目录内容。",
         "",
-        "DiaEvo can read project traces, generate candidate skills, and run local verification commands here.",
+        "DiaEvo 会在这里读取项目轨迹、生成候选技能，并可能运行本地验证命令。",
         "",
-        "Security guide",
+        "安全选择",
         "",
-        f"{GLYPHS['prompt'] if selected == 1 else ' '} 1. Yes, I trust this folder",
-        f"{GLYPHS['prompt'] if selected == 2 else ' '} 2. No, exit",
+        f"{GLYPHS['prompt'] if selected == 1 else ' '} 1. 是，我信任这个目录",
+        f"{GLYPHS['prompt'] if selected == 2 else ' '} 2. 否，退出",
         "",
-        f"{DIM}Enter to confirm {GLYPHS['dot']} Esc/Ctrl+C to cancel{RESET}",
+        f"{DIM}Enter 确认 {GLYPHS['dot']} Esc/Ctrl+C 取消{RESET}",
     ]
 
     lines = [_frame_line(GLYPHS["tl"], GLYPHS["tr"], width, title)]
     for paragraph in paragraphs:
-        wrapped = textwrap.wrap(paragraph, width=body_width) if paragraph else [""]
+        wrapped = _wrap_display_line(paragraph, body_width) if paragraph else [""]
         for line in wrapped:
             lines.append(f"{BLUE}{GLYPHS['v']}{RESET} {_pad(line, body_width)} {BLUE}{GLYPHS['v']}{RESET}")
     lines.append(_frame_line(GLYPHS["bl"], GLYPHS["br"], width))
@@ -271,10 +287,10 @@ def maybe_show_trust_dialog() -> bool:
         return True
     print(render_trust_dialog())
     while True:
-        choice = input("Select 1 or 2 [1]: ").strip().lower()
+        choice = input("选择 1 或 2 [1]: ").strip().lower()
         if choice in {"", "1", "y", "yes"}:
             save_trusted_workspace()
             return True
         if choice in {"2", "n", "no", "exit", "q"}:
             return False
-        print("Please choose 1 or 2.")
+        print("请输入 1 或 2。")

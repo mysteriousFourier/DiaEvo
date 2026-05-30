@@ -107,6 +107,7 @@ def verify_skill(skill_dir: str | Path, write_report: bool = True) -> dict[str, 
                     "message": f"executable validation status is `{status}`",
                 }
             )
+    _extend_migration_manifest_findings(skill_file.parent, findings)
     _extend_code_artifact_findings(skill_file.parent, findings)
     return _finalize(skill_file, findings, executable_validation, write_report=write_report)
 
@@ -119,6 +120,42 @@ def _load_executable_validation(skill_file: Path) -> dict[str, Any]:
     if value:
         value.setdefault("path", str(validation_path))
     return value
+
+
+def _extend_migration_manifest_findings(skill_dir: Path, findings: list[dict[str, str]]) -> None:
+    manifest_path = skill_dir / "migration_manifest.json"
+    if not manifest_path.exists():
+        return
+    manifest = read_json(manifest_path, default={})
+    if not isinstance(manifest, dict):
+        findings.append({"severity": "error", "code": "invalid_migration_manifest", "message": "migration_manifest.json must be an object"})
+        return
+    if manifest.get("schema") != "diaevo.skill_package_migration.v1":
+        findings.append({"severity": "error", "code": "invalid_migration_manifest_schema", "message": "migration_manifest.json schema is invalid"})
+    mode = str(manifest.get("mode") or "")
+    if mode != "skill_package":
+        findings.append({"severity": "warning", "code": "unknown_migration_mode", "message": f"migration mode is `{mode}`"})
+    references = manifest.get("copied_references", [])
+    if not isinstance(references, list):
+        findings.append({"severity": "error", "code": "invalid_copied_references", "message": "copied_references must be a list"})
+        return
+    root = skill_dir.resolve(strict=False)
+    for item in references:
+        if not isinstance(item, dict):
+            findings.append({"severity": "error", "code": "invalid_reference_entry", "message": "copied reference entry must be an object"})
+            continue
+        rel = str(item.get("path") or "").replace("\\", "/").strip("/")
+        if not rel:
+            findings.append({"severity": "error", "code": "empty_reference_path", "message": "copied reference path is empty"})
+            continue
+        target = (skill_dir / rel).resolve(strict=False)
+        try:
+            target.relative_to(root)
+        except ValueError:
+            findings.append({"severity": "error", "code": "reference_outside_skill_dir", "message": f"reference path escapes skill dir: {rel}"})
+            continue
+        if not target.exists() or not target.is_file():
+            findings.append({"severity": "error", "code": "missing_copied_reference", "message": f"copied reference is missing: {rel}"})
 
 
 def _extend_code_artifact_findings(skill_dir: Path, findings: list[dict[str, str]]) -> None:

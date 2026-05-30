@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from ui import prompt_bar
 from ui.cli_style import ANSI_RE, GLYPHS, _plain_len
 from ui.interactive_shell import (
     FLOW_INPUT_QUEUE,
@@ -10,6 +11,8 @@ from ui.interactive_shell import (
     _denied_tool_result,
     _tool_reason,
 )
+from ui.action_report import build_turn_report
+from ui.flow_input import FlowInputController
 from diaevo.tool_chat import RequestedToolCall
 from ui.output_policy import render_assistant_text, sanitize_no_emoji, strip_markdown
 from ui.progress import status
@@ -82,6 +85,169 @@ def test_tool_reason_explains_why_tool_is_used() -> None:
 
     assert "读取相关文件内容" in reason
     assert "README.md" in reason
+
+
+def test_tool_reason_omits_empty_path() -> None:
+    reason = _tool_reason(RequestedToolCall(id="call", name="write_file", args={"path": ""}))
+
+    assert "写入文件" in reason
+    assert "path=" not in reason
+
+
+def test_turn_report_includes_goal_files_tools_and_next_step() -> None:
+    messages = [{"role": "user", "content": "重构终端交互"}]
+
+    rendered = build_turn_report(messages, 0, queued_inputs=2, tools="list_files, read_file").render()
+
+    assert rendered.startswith("计划  ")
+    assert "report>" not in rendered
+    assert "目标：重构终端交互" in rendered
+    assert "文件：" in rendered
+    assert "工具：list_files, read_file" in rendered
+    assert "下一步：请求模型理解任务并选择下一步" in rendered
+    assert "待处理输入：2" in rendered
+
+
+def test_flow_input_enter_queues_interrupting_next_input() -> None:
+    controller = FlowInputController()
+    controller.draft = "继续检查 README"
+
+    controller._queue_enter()
+    events = controller.drain()
+
+    assert events == [FlowInputEvent("继续检查 README", interrupt=True)]
+    assert controller.draft == ""
+
+
+def test_flow_input_escape_interrupt_takes_over_typed_input() -> None:
+    controller = FlowInputController()
+    controller.draft = "新的任务"
+
+    controller._queue_escape_interrupt()
+    events = controller.drain()
+
+    assert events == [FlowInputEvent("新的任务", interrupt=True, hard_interrupt=True)]
+    assert controller.force_terminate_event.is_set()
+    assert controller.interrupt_event.is_set()
+
+
+def test_flow_input_prompt_can_stay_visible(monkeypatch) -> None:
+    controller = FlowInputController()
+    writes = []
+
+    monkeypatch.setattr("ui.flow_input.msvcrt", object())
+    monkeypatch.setattr("ui.flow_input.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("ui.flow_input.sys.stdout.write", lambda text: writes.append(text))
+    monkeypatch.setattr("ui.flow_input.sys.stdout.flush", lambda: None)
+    monkeypatch.setattr("ui.prompt_bar._term_width", lambda: 80)
+
+    controller.show_prompt()
+    controller.show_prompt()
+    controller.show_prompt(force=True)
+
+    rendered = "".join(writes)
+    assert rendered.count("❯ ") == 2
+    assert "Enter 运行命令或当前菜单项" in rendered
+    assert not any("next" in item for item in writes)
+
+
+def test_flow_input_output_clears_prompt_and_status(monkeypatch) -> None:
+    controller = FlowInputController()
+    writes = []
+
+    monkeypatch.setattr("ui.flow_input.msvcrt", object())
+    monkeypatch.setattr("ui.flow_input.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("ui.flow_input.sys.stdout.write", lambda text: writes.append(text))
+    monkeypatch.setattr("ui.flow_input.sys.stdout.flush", lambda: None)
+    monkeypatch.setattr("ui.prompt_bar._term_width", lambda: 80)
+
+    controller.show_prompt()
+    controller.update_status_line("正在请求模型")
+    controller.begin_output()
+
+    assert "正在请求模型" in "".join(writes)
+    assert "\033[1A\r\033[2K" in writes
+    assert not controller.prompt_visible.is_set()
+    assert not controller.status_visible.is_set()
+
+
+def test_flow_input_shows_same_command_menu_as_prompt_bar(monkeypatch) -> None:
+    controller = FlowInputController()
+    writes = []
+
+    monkeypatch.setattr("ui.flow_input.msvcrt", object())
+    monkeypatch.setattr("ui.flow_input.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("ui.flow_input.sys.stdout.write", lambda text: writes.append(text))
+    monkeypatch.setattr("ui.flow_input.sys.stdout.flush", lambda: None)
+    monkeypatch.setattr("ui.prompt_bar._term_width", lambda: 80)
+
+    controller.draft = "/m"
+    controller.show_prompt()
+
+    rendered = "".join(writes)
+    assert "/mine" in rendered
+    assert "/model" in rendered
+    assert "Enter 运行命令或当前菜单项" in rendered
+
+
+def test_flow_input_enter_selects_current_command_menu_item() -> None:
+    controller = FlowInputController()
+    controller.draft = "/"
+    controller.selected_index = len(prompt_bar.COMMANDS) - 1
+
+    controller._queue_enter()
+    events = controller.drain()
+
+    assert events == [FlowInputEvent("/exit", interrupt=True)]
+
+
+def test_flow_input_tab_completes_current_command_menu_item(monkeypatch) -> None:
+    controller = FlowInputController()
+    writes = []
+
+    monkeypatch.setattr("ui.flow_input.sys.stdout.write", lambda text: writes.append(text))
+    monkeypatch.setattr("ui.flow_input.sys.stdout.flush", lambda: None)
+    monkeypatch.setattr("ui.prompt_bar._term_width", lambda: 80)
+
+    controller.draft = "/"
+    controller.selected_index = len(prompt_bar.COMMANDS) - 1
+    controller._complete_selected_command()
+
+    assert controller.draft == "/exit "
+    assert controller.selected_index == 0
+
+
+def test_flow_input_can_drain_only_talk_events() -> None:
+    controller = FlowInputController()
+    started = []
+    controller.queue.put(FlowInputEvent("普通输入", interrupt=True))
+    controller.queue.put(FlowInputEvent("旁路问题", talk=True))
+
+    handled = controller.handle_talk_queued(lambda text: started.append(text))
+
+    assert handled == 1
+    assert started == ["旁路问题"]
+    assert controller.drain() == [FlowInputEvent("普通输入", interrupt=True)]
+
+
+def test_flow_status_animates_status_line_without_touching_draft(monkeypatch, capsys) -> None:
+    from ui import interactive_shell
+
+    updates = []
+    monkeypatch.setattr(interactive_shell, "_show_flow_prompt", lambda *args, **kwargs: None)
+    monkeypatch.setattr(interactive_shell.FLOW_INPUT, "update_status_line", lambda text: updates.append(text))
+    monkeypatch.setattr(interactive_shell.FLOW_INPUT, "clear_status_line", lambda: updates.append(""))
+
+    with interactive_shell._flow_status("正在请求模型"):
+        print("inside")
+        interactive_shell.FLOW_INPUT.draft = "abc"
+
+    captured = capsys.readouterr()
+    assert "inside" in captured.out
+    assert any("正在请求模型" in item for item in updates)
+    assert updates[-1] == ""
+    assert interactive_shell.FLOW_INPUT.draft == "abc"
+    assert captured.err == ""
 
 
 def test_chat_config_state_tracks_session_tool_approvals() -> None:
@@ -180,6 +346,218 @@ def test_tool_loop_sends_queued_input_after_tool_finishes(monkeypatch) -> None:
 
     assert answer == "updated"
     assert calls[1][-1] == {"role": "user", "content": "下一步先读 README"}
+
+
+def test_tool_loop_completes_pending_tool_messages_before_user_interrupt(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    while not FLOW_INPUT_QUEUE.empty():
+        FLOW_INPUT_QUEUE.get_nowait()
+    calls = []
+
+    def fake_chat_completion(messages, config, *, tools=None, tool_choice=None):
+        calls.append([dict(item) for item in messages])
+        if len(calls) == 2:
+            return {"choices": [{"message": {"content": "updated"}}]}
+        return {
+            "id": "turn",
+            "choices": [
+                {
+                    "message": {
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "list_files", "arguments": "{}"},
+                            },
+                            {
+                                "id": "call_2",
+                                "type": "function",
+                                "function": {"name": "read_file", "arguments": '{"path":"README.md"}'},
+                            },
+                        ],
+                    }
+                }
+            ],
+        }
+
+    def fake_execute_tool(name, args, **kwargs):
+        FLOW_INPUT_QUEUE.put(FlowInputEvent("先处理新需求", interrupt=True))
+        return {"status": "ok", "tool": name, "entries": []}
+
+    monkeypatch.setattr(interactive_shell, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(interactive_shell, "execute_tool", fake_execute_tool)
+    monkeypatch.setattr(interactive_shell, "_start_flow_input_listener", lambda: False)
+    monkeypatch.setattr(interactive_shell, "_stop_flow_input_listener", lambda enabled: None)
+
+    state = ChatConfigState()
+    state.value = object()
+    answer = interactive_shell._chat_turn_with_tools([{"role": "user", "content": "list"}], state)
+
+    second_messages = calls[1]
+    assistant_index = next(index for index, item in enumerate(second_messages) if item.get("role") == "assistant")
+    following = second_messages[assistant_index + 1 : assistant_index + 4]
+
+    assert answer == "updated"
+    assert [item.get("tool_call_id") for item in following[:2]] == ["call_1", "call_2"]
+    assert '"status": "interrupted"' in following[1]["content"]
+    assert following[2] == {"role": "user", "content": "先处理新需求"}
+
+
+def test_flow_talk_starts_background_thread_without_main_history(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    started = []
+
+    monkeypatch.setattr(interactive_shell, "_start_talk_thread", lambda text, state: started.append(text))
+
+    state = ChatConfigState()
+    messages: list[dict[str, object]] = []
+    FLOW_INPUT_QUEUE.put(FlowInputEvent("旁路问题", talk=True))
+
+    interrupted = interactive_shell._handle_flow_inputs(messages, state)
+
+    assert interrupted is False
+    assert messages == []
+    assert started == ["旁路问题"]
+
+
+def test_talk_command_starts_background_thread(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    started = []
+
+    monkeypatch.setattr(interactive_shell, "_start_talk_thread", lambda text, state: started.append(text))
+
+    state = ChatConfigState()
+    keep_running = interactive_shell._dispatch_command("/talk 快速解释一下", state, messages=[])
+
+    assert keep_running is True
+    assert started == ["快速解释一下"]
+
+
+def test_skill_selection_appends_context_message(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    messages: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        interactive_shell,
+        "load_skill_context",
+        lambda name, task="": {
+            "status": "ok",
+            "name": name,
+            "skill_file": f"skills/{name}/SKILL.md",
+            "skill_text": "workflow body",
+            "references": [],
+        },
+    )
+
+    interactive_shell._append_skill_context_messages(
+        messages,
+        "做一个前端页面",
+        [{"name": "web-design-engineer"}],
+    )
+
+    assert len(messages) == 1
+    assert messages[0]["role"] == "system"
+    assert "[Loaded skill: web-design-engineer]" in str(messages[0]["content"])
+    assert "workflow body" in str(messages[0]["content"])
+
+
+def test_run_shell_repeated_failure_marks_note(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    calls = []
+
+    def fake_execute_tool(name, args, **kwargs):
+        calls.append((name, args))
+        return {"status": "error", "tool": name, "command": args.get("command"), "stderr": "boom"}
+
+    monkeypatch.setattr(interactive_shell, "execute_tool", fake_execute_tool)
+    monkeypatch.setattr(interactive_shell, "_approval_prompt", lambda tool_name: interactive_shell.ApprovalDecision(interactive_shell.APPROVAL_DENY))
+
+    state = interactive_shell.ChatConfigState()
+    call = RequestedToolCall(id="1", name="run_shell", args={"command": "pytest -q"})
+
+    first = interactive_shell._execute_model_tool_call(call, turn_id="turn1", chat_state=state)
+    second = interactive_shell._execute_model_tool_call(call, turn_id="turn2", chat_state=state)
+
+    assert first["status"] == "error"
+    assert "连续失败" in second["note"]
+    assert len(calls) == 2
+
+
+def test_web_search_result_renders_titles_links_and_source() -> None:
+    rendered = render_tool_result(
+        {
+            "status": "ok",
+            "tool": "web_search",
+            "query": "DiaEvo",
+            "source": "duckduckgo_html",
+            "results": [
+                {
+                    "title": "DiaEvo docs",
+                    "url": "https://example.com/diaevo",
+                    "snippet": "Project documentation",
+                }
+            ],
+        }
+    )
+
+    assert "query: DiaEvo" in rendered
+    assert "source: duckduckgo_html" in rendered
+    assert "DiaEvo docs" in rendered
+    assert "https://example.com/diaevo" in rendered
+    assert "Project documentation" in rendered
+
+
+def test_web_fetch_result_renders_url_metadata_and_content() -> None:
+    rendered = render_tool_result(
+        {
+            "status": "ok",
+            "tool": "web_fetch",
+            "url": "https://example.com/page",
+            "status_code": 200,
+            "content_type": "text/html",
+            "truncated": False,
+            "content": "<html><title>Example</title></html>",
+        }
+    )
+
+    assert "url: https://example.com/page" in rendered
+    assert "status: 200" in rendered
+    assert "type: text/html" in rendered
+    assert "Example" in rendered
+
+
+def test_arxiv_result_renders_title_links_and_summary() -> None:
+    rendered = render_tool_result(
+        {
+            "status": "ok",
+            "tool": "arxiv_search",
+            "query": "retrieval",
+            "source": "arxiv_api",
+            "total_results": 1,
+            "results": [
+                {
+                    "title": "Retrieval Paper",
+                    "authors": ["Ada Lovelace", "Alan Turing"],
+                    "published": "2024-01-02T00:00:00Z",
+                    "primary_category": "cs.CL",
+                    "summary": "A paper about retrieval.",
+                    "abs_url": "http://arxiv.org/abs/2401.01234v1",
+                    "pdf_url": "http://arxiv.org/pdf/2401.01234v1",
+                }
+            ],
+        }
+    )
+
+    assert "Retrieval Paper" in rendered
+    assert "Ada Lovelace, Alan Turing" in rendered
+    assert "abs: http://arxiv.org/abs/2401.01234v1" in rendered
+    assert "pdf: http://arxiv.org/pdf/2401.01234v1" in rendered
+    assert "A paper about retrieval." in rendered
 
 
 def test_talk_command_does_not_append_to_main_history(monkeypatch) -> None:

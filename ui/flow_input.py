@@ -1,0 +1,319 @@
+from __future__ import annotations
+
+import queue
+import sys
+import threading
+import time
+from contextlib import contextmanager
+from dataclasses import dataclass
+from typing import Callable, Iterator
+
+from .prompt_bar import (
+    _cursor_to_bottom,
+    _cursor_to_input,
+    _erase_lines,
+    _matching_commands,
+    _move_menu_selection,
+    _submit_value,
+    render_prompt_state,
+)
+
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - Windows is the primary target.
+    msvcrt = None
+
+
+@dataclass(frozen=True)
+class FlowInputEvent:
+    text: str
+    interrupt: bool = False
+    talk: bool = False
+    hard_interrupt: bool = False
+
+
+class FlowInputController:
+    """Keeps the bottom draft prompt alive while model/tool work is running."""
+
+    def __init__(self) -> None:
+        self.queue: "queue.Queue[FlowInputEvent]" = queue.Queue()
+        self.active = threading.Event()
+        self.paused = threading.Event()
+        self.interrupt_event = threading.Event()
+        self.force_terminate_event = threading.Event()
+        self.prompt_visible = threading.Event()
+        self.status_visible = threading.Event()
+        self.draft = ""
+        self.selected_index = 0
+        self._rendered_lines = 0
+        self._rendered_value = ""
+        self._lock = threading.Lock()
+        self._render_lock = threading.RLock()
+        self._thread: threading.Thread | None = None
+
+    @property
+    def available(self) -> bool:
+        return msvcrt is not None and sys.stdin.isatty()
+
+    def start(self) -> bool:
+        if not self.available:
+            return False
+        with self._lock:
+            if self._thread is None or not self._thread.is_alive():
+                self._thread = threading.Thread(target=self._worker, daemon=True)
+                self._thread.start()
+        self.active.set()
+        return True
+
+    def stop(self, enabled: bool) -> None:
+        if not enabled:
+            return
+        self.active.clear()
+        self.interrupt_event.clear()
+        self.force_terminate_event.clear()
+        self.prompt_visible.clear()
+        self.status_visible.clear()
+        self.draft = ""
+        self.selected_index = 0
+        self._rendered_lines = 0
+        self._rendered_value = ""
+
+    @contextmanager
+    def session(self) -> Iterator[None]:
+        enabled = self.start()
+        try:
+            yield
+        finally:
+            self.stop(enabled)
+
+    @contextmanager
+    def pause(self) -> Iterator[None]:
+        self.paused.set()
+        try:
+            yield
+        finally:
+            self.paused.clear()
+
+    def begin_output(self) -> None:
+        with self._render_lock:
+            if self.prompt_visible.is_set() and self._rendered_lines:
+                sys.stdout.write(_cursor_to_bottom(self._rendered_lines, self._rendered_value))
+                _erase_lines(self._rendered_lines)
+            if self.status_visible.is_set():
+                sys.stdout.write("\033[1A\r\033[2K")
+                self.status_visible.clear()
+            sys.stdout.flush()
+            self.prompt_visible.clear()
+            self._rendered_lines = 0
+            self._rendered_value = ""
+
+    def show_prompt(self, label: str = "", *, force: bool = False) -> None:
+        if not self.available or self.paused.is_set():
+            return
+        with self._render_lock:
+            if self.prompt_visible.is_set() and not force:
+                return
+            self._render_prompt_line(label=label)
+
+    def update_status_line(self, text: str) -> None:
+        if not self.available or self.paused.is_set():
+            return
+        clean = str(text).replace("\n", " ").strip()
+        with self._render_lock:
+            if not self.prompt_visible.is_set():
+                return
+            if not self.status_visible.is_set():
+                self._erase_rendered_prompt()
+                sys.stdout.write(clean)
+                sys.stdout.write("\n")
+                self.status_visible.set()
+                self._render_prompt_line()
+                return
+            self._erase_rendered_prompt()
+            sys.stdout.write("\033[1A\r\033[2K")
+            sys.stdout.write(clean)
+            sys.stdout.write("\n")
+            self._render_prompt_line()
+
+    def clear_status_line(self) -> None:
+        if not self.available or self.paused.is_set():
+            return
+        with self._render_lock:
+            if not self.prompt_visible.is_set() or not self.status_visible.is_set():
+                return
+            self._erase_rendered_prompt()
+            sys.stdout.write("\033[1A\r\033[2K")
+            self.status_visible.clear()
+            self._render_prompt_line()
+
+    def _render_prompt_line(self, label: str = "") -> None:
+        if self._rendered_lines:
+            self._erase_rendered_prompt()
+        rendered = render_prompt_state(self.draft, self.selected_index)
+        self._rendered_lines = rendered.count("\n") + 1
+        self._rendered_value = self.draft
+        if label:
+            sys.stdout.write(f"{label} ")
+        sys.stdout.write(rendered)
+        sys.stdout.write(_cursor_to_input(self._rendered_lines, self.draft))
+        sys.stdout.flush()
+        self.prompt_visible.set()
+
+    def _erase_rendered_prompt(self) -> None:
+        if self._rendered_lines:
+            sys.stdout.write(_cursor_to_bottom(self._rendered_lines, self._rendered_value))
+            _erase_lines(self._rendered_lines)
+            self._rendered_lines = 0
+            self._rendered_value = ""
+            return
+        sys.stdout.write("\r\033[2K")
+
+    def drain(self) -> list[FlowInputEvent]:
+        events: list[FlowInputEvent] = []
+        while True:
+            try:
+                events.append(self.queue.get_nowait())
+            except queue.Empty:
+                return events
+
+    def handle_queued(
+        self,
+        messages: list[dict[str, object]],
+        talk_handler: Callable[[str], None],
+    ) -> bool:
+        interrupted = False
+        for event in self.drain():
+            if event.hard_interrupt and not event.text:
+                interrupted = True
+                continue
+            if event.talk:
+                talk_handler(event.text)
+                continue
+            if event.text:
+                messages.append({"role": "user", "content": event.text})
+            if event.interrupt:
+                interrupted = True
+        return interrupted
+
+    def handle_talk_queued(self, talk_handler: Callable[[str], None]) -> int:
+        talk_events: list[FlowInputEvent] = []
+        with self.queue.mutex:
+            kept = self.queue.queue.__class__()
+            while self.queue.queue:
+                event = self.queue.queue.popleft()
+                if event.talk:
+                    talk_events.append(event)
+                else:
+                    kept.append(event)
+            self.queue.queue.extend(kept)
+        for event in talk_events:
+            if event.text:
+                talk_handler(event.text)
+        return len(talk_events)
+
+    def _worker(self) -> None:
+        while True:
+            if not self.active.is_set() or msvcrt is None:
+                time.sleep(0.05)
+                continue
+            if self.paused.is_set() or not msvcrt.kbhit():
+                time.sleep(0.05)
+                continue
+
+            char = msvcrt.getwch()
+            if char in {"\x00", "\xe0"}:
+                key = msvcrt.getwch()
+                self._handle_extended_key(key)
+                continue
+            if char == "\003":
+                self._queue_interrupt(hard=True)
+                continue
+            if char == "\x1b":
+                self._queue_escape_interrupt()
+                continue
+            if char in {"\r", "\n"}:
+                self._queue_enter()
+                continue
+            if char == "\b":
+                with self._render_lock:
+                    self.draft = self.draft[:-1]
+                    self.selected_index = 0
+                    self._render_prompt_line()
+                continue
+            if char == "\t":
+                self._complete_selected_command()
+                continue
+            if char.isprintable():
+                self._append_printable(char)
+
+    def _queue_enter(self) -> None:
+        text = _submit_value(self.draft, self.selected_index).strip()
+        if not text:
+            return
+        self.queue.put(_event_from_text(text, interrupt=True))
+        with self._render_lock:
+            self.draft = ""
+            self.selected_index = 0
+            self.begin_output()
+
+    def _queue_interrupt(self, *, hard: bool) -> None:
+        payload = self.draft.strip()
+        self.queue.put(FlowInputEvent(payload, interrupt=True, hard_interrupt=hard))
+        self.force_terminate_event.set()
+        self.interrupt_event.set()
+
+    def _queue_escape_interrupt(self) -> None:
+        text = self.draft.strip()
+        if text:
+            self.queue.put(_event_from_text(text, interrupt=True, hard_interrupt=True))
+            self.force_terminate_event.set()
+            self.interrupt_event.set()
+            with self._render_lock:
+                self.draft = ""
+                self.selected_index = 0
+                self.begin_output()
+                sys.stdout.write("已终止当前模型请求；新输入已排队。\n")
+                self.show_prompt(force=True)
+            return
+
+        self.queue.put(FlowInputEvent("", interrupt=True, hard_interrupt=True))
+        self.force_terminate_event.set()
+        self.interrupt_event.set()
+        with self._render_lock:
+            self.begin_output()
+            sys.stdout.write("已终止当前模型请求；可直接输入下一条。\n")
+            self.show_prompt(force=True)
+
+    def _append_printable(self, char: str) -> None:
+        with self._render_lock:
+            self.draft += char
+            self.selected_index = 0
+            self._render_prompt_line()
+
+    def _handle_extended_key(self, key: str) -> None:
+        matches = _matching_commands(self.draft)
+        if not matches:
+            return
+        with self._render_lock:
+            if key == "H":
+                self.selected_index = _move_menu_selection(self.selected_index, len(matches), -1)
+                self._render_prompt_line()
+            elif key == "P":
+                self.selected_index = _move_menu_selection(self.selected_index, len(matches), 1)
+                self._render_prompt_line()
+
+    def _complete_selected_command(self) -> None:
+        matches = _matching_commands(self.draft)
+        if not matches:
+            return
+        with self._render_lock:
+            self.selected_index = max(0, min(self.selected_index, len(matches) - 1))
+            self.draft = matches[self.selected_index][0] + " "
+            self.selected_index = 0
+            self._render_prompt_line()
+
+
+def _event_from_text(text: str, *, interrupt: bool, hard_interrupt: bool = False) -> FlowInputEvent:
+    talk = text.lower().startswith("/talk ")
+    payload = text[6:].strip() if talk else text
+    return FlowInputEvent(payload, interrupt=interrupt, talk=talk, hard_interrupt=hard_interrupt)

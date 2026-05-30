@@ -243,6 +243,36 @@ def _trace_examples(traces: list[Any], mine_report: dict[str, Any]) -> list[dict
     return [_trace_example(trace, _nearest_cluster_for_trace(trace, mine_report)) for trace in traces]
 
 
+def _target_cluster_traces(traces: list[Any], mine_report: dict[str, Any], cluster_id: str) -> list[Any]:
+    wanted = cluster_id.upper()
+    return [trace for trace in traces if _nearest_cluster_for_trace(trace, mine_report).upper() == wanted]
+
+
+def _learning_context_summary(
+    *,
+    train_traces: list[Any],
+    holdout_traces: list[Any],
+    memory_matches: list[dict[str, Any]],
+    fallback_used: bool,
+) -> dict[str, Any]:
+    match_sources: dict[str, int] = {}
+    for item in memory_matches:
+        schema = str(item.get("schema") or "unknown")
+        match_sources[schema] = match_sources.get(schema, 0) + 1
+    return {
+        "style": "hermes_inspired_retrieval_boundary",
+        "notes": [
+            "Optimize with target-cluster traces and relevant memory matches instead of the full trace corpus.",
+            "Keep generated skills as draft procedural memory until verifier, validation, and promotion gates pass.",
+            "Use memory matches as compact cues and cautions, not as text to copy.",
+        ],
+        "target_train_trace_count": len(train_traces),
+        "target_holdout_trace_count": len(holdout_traces),
+        "fallback_used": fallback_used,
+        "memory_match_schemas": dict(sorted(match_sources.items())),
+    }
+
+
 def _coerce_candidate_sections(candidate: Any) -> dict[str, str]:
     if isinstance(candidate, dict):
         return {key: str(candidate.get(key) or "").strip() for key in SECTION_KEYS}
@@ -793,6 +823,7 @@ def _build_background(cluster: dict[str, Any], memory_matches: list[dict[str, An
             "Failures: " + ", ".join([*_as_strings(cluster.get("top_errors"))[:5], *_as_strings(cluster.get("top_failure_types"))[:5]]),
             "Required sections: " + ", ".join(SECTION_KEYS),
             "Safety is a hard constraint; generated skills remain drafts until human promotion.",
+            "Learning boundary: use relevant trace and memory evidence as procedural cues; do not copy unrelated skills or optimize for unrelated clusters.",
             "Memory matches: "
             + "; ".join(str(item.get("summary") or item.get("recommended_action") or item.get("failure_category") or item.get("schema")) for item in memory_matches[:5]),
             "Human feedback labels: "
@@ -956,9 +987,24 @@ def evaluate_gepa(
     mine_report = mine(train_path)
     cluster = _cluster_lookup(mine_report, cluster_id)
     normalized_cluster_id = str(cluster.get("id") or cluster_id).upper()
+    target_train = _target_cluster_traces(train, mine_report, normalized_cluster_id)
+    target_holdout = _target_cluster_traces(holdout, mine_report, normalized_cluster_id)
+    used_trace_fallback = False
+    if not target_train:
+        target_train = train
+        used_trace_fallback = True
+    if not target_holdout:
+        target_holdout = holdout
+        used_trace_fallback = True
     raw_memory = _load_memory()
     memory = _filter_memory(raw_memory, normalized_memory_policy)
     matches = _memory_matches(cluster, memory)
+    learning_context = _learning_context_summary(
+        train_traces=target_train,
+        holdout_traces=target_holdout,
+        memory_matches=matches,
+        fallback_used=used_trace_fallback,
+    )
     seed = _seed_candidate(cluster, matches)
     output_root = Path(output_dir) if output_dir else CANDIDATE_SKILLS_DIR / normalized_cluster_id / "gepa"
     known_texts = _known_skill_texts(extra_paths=[output_root / "SKILL.md"])
@@ -999,9 +1045,6 @@ def evaluate_gepa(
     seed_registry_path = _write_augmented_registry(registry_root / "seed_registry.json", [seed_record])
     local_registry_path = _write_augmented_registry(registry_root / "local_evolved_registry.json", [local_record] if local_record else [])
 
-    target_holdout = [trace for trace in holdout if _nearest_cluster_for_trace(trace, mine_report).upper() == normalized_cluster_id]
-    if not target_holdout:
-        target_holdout = holdout
     labeled_target = [trace for trace in target_holdout if trace.used_skills]
     baseline_eval = evaluate_recommendations(labeled_target, traces_path=train_path, top_k=top_k)
     seed_name = _candidate_name_from_markdown(seed_markdown, normalized_cluster_id)
@@ -1049,8 +1092,8 @@ def evaluate_gepa(
             deepseek=deepseek if normalized_judge_policy == "uncertainty_only" else None,
             counters=mutable_counters,
         )
-        train_examples = _trace_examples(train, mine_report)
-        heldout_examples = _trace_examples(holdout, mine_report)
+        train_examples = _trace_examples(target_train, mine_report)
+        heldout_examples = _trace_examples(target_holdout, mine_report)
         gepa_candidate, gepa_optimizer = _run_gepa_optimizer(
             seed=seed,
             evaluator=evaluator,
@@ -1137,7 +1180,9 @@ def evaluate_gepa(
             "holdout_path": str(holdout_path),
             "train_ids": [trace.id for trace in train],
             "heldout_ids": [trace.id for trace in holdout],
+            "target_train_ids": [trace.id for trace in target_train],
             "target_heldout_ids": [trace.id for trace in target_holdout],
+            "target_trace_fallback_used": used_trace_fallback,
         },
         "cluster": {
             "id": normalized_cluster_id,
@@ -1146,6 +1191,7 @@ def evaluate_gepa(
             "top_terms": cluster.get("top_terms", []),
             "top_tools": cluster.get("top_tools", []),
         },
+        "learning_context": learning_context,
         "memory_policy_summary": _memory_policy_summary(memory, normalized_memory_policy, matches),
         "memory_matches": matches,
         "comparison": comparison,

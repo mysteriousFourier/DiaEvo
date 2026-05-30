@@ -9,6 +9,7 @@ __pycache__/
 !.env.example
 .diaevo/
 .skillminer/
+.uploads/
 .ruff_cache/
 .mypy_cache/
 .uv-cache/
@@ -19,10 +20,15 @@ data/processed_traces.jsonl
 data/evolution_memory.json
 data/knowledge_graph/current/graph_visualization.html
 outputs/reports/*.json
+outputs/reports/*.out.txt
+outputs/reports/*.err.txt
 outputs/reports/heldout/
 outputs/reports/gepa/
 outputs/candidate_skills/*
 !outputs/candidate_skills/.gitkeep
 outputs/screenshots/*
 !outputs/screenshots/.gitkeep
+experiments/*_20??????_??????/
+experiments/*_20??????/
+experiments/*_20??????_v*/
 experiments/**/archive/

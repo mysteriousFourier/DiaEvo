@@ -326,3 +326,38 @@ def test_evaluate_gepa_dependency_gate_after_env(tmp_path, monkeypatch):
             env_path=str(env_path),
             dry_run=False,
         )
+
+
+def test_evaluate_gepa_optimizer_uses_target_cluster_examples(tmp_path, monkeypatch):
+    for key in list(("DEEPSEEK_API_KEY", "DEEPSEEK_BASE_URL", "DEEPSEEK_MODEL", "DEEPSEEK_MAX_TOKENS", "DEEPSEEK_TEMPERATURE")):
+        monkeypatch.delenv(key, raising=False)
+    env_path = tmp_path / ".env"
+    env_path.write_text("DEEPSEEK_API_KEY=sk-real-test-secret\n", encoding="utf-8")
+    cluster_id = _cluster_id(tmp_path)
+    captured = {}
+
+    def fake_run_gepa_optimizer(**kwargs):
+        captured["train_examples"] = kwargs["train_examples"]
+        captured["heldout_examples"] = kwargs["heldout_examples"]
+        return dict(kwargs["seed"]), {
+            "model_name": "fake-gepa",
+            "call_counts": {"metric_calls": 0, "reflection_calls": 0},
+        }
+
+    monkeypatch.setattr(gepa_adapter, "_run_gepa_optimizer", fake_run_gepa_optimizer)
+
+    report = evaluate_gepa(
+        cluster_id,
+        budget=1,
+        processed_path=tmp_path / "processed_gepa.jsonl",
+        include_tool_events=False,
+        env_path=str(env_path),
+        dry_run=False,
+        top_k=3,
+    )
+
+    expected_cluster = report["cluster_id"]
+    assert report["learning_context"]["style"] == "hermes_inspired_retrieval_boundary"
+    assert captured["train_examples"]
+    assert {item["cluster_id"] for item in captured["train_examples"]} == {expected_cluster}
+    assert report["split"]["target_train_ids"] == [item["id"] for item in captured["train_examples"]]

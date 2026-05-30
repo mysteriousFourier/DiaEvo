@@ -1348,8 +1348,8 @@ def answer_kg(
             "strict": strict,
             "include_pending": include_pending,
             "retrieval_mode": retrieval_mode,
-            "answer": "KG insufficient: graph-vector retrieval found no accepted evidence subgraph for the query.",
-            "missing": ["vector-recalled accepted triple or claim", "graph-expanded reviewed evidence path"],
+            "answer": "知识图谱证据不足（KG insufficient）：没有为这个问题召回已审核的事实子图。",
+            "missing": ["向量召回的已审核三元组或声明", "图扩展后的已审核证据路径"],
             "evidence_paths": [],
             "facts": [],
             "retrieval": search,
@@ -1366,21 +1366,30 @@ def answer_kg(
             "status": item.get("status", ""),
         }
         facts.append(fact)
+    predicate_labels = {
+        "USES_SKILL": "使用技能",
+        "DESCRIBES_TASK": "对应任务",
+        "USES_TOOL": "使用工具",
+        "RELATED_TO": "关联",
+        "SUPPORTS": "支持",
+    }
     fact_lines = []
     for fact in facts:
         if fact["text"]:
-            fact_lines.append(f"{fact['text']} (confidence {fact['confidence']})")
+            fact_lines.append(f"{fact['text']}（置信度 {fact['confidence']}）")
         else:
+            predicate = str(fact["predicate"] or "")
+            relation_label = predicate_labels.get(predicate)
+            relation = f"{relation_label}（{predicate}）" if relation_label else predicate
             fact_lines.append(
-                f"{fact['subject']} {fact['predicate']} {fact['object']} "
-                f"(confidence {fact['confidence']})"
+                f"{fact['subject']} {relation} {fact['object']}（置信度 {fact['confidence']}）"
             )
     return {
         "status": "ok",
         "strict": strict,
         "include_pending": include_pending,
         "retrieval_mode": retrieval_mode,
-        "answer": "KG graph-vector evidence: " + " | ".join(fact_lines),
+        "answer": "已从已审核知识图谱找到相关证据：" + "；".join(fact_lines),
         "facts": facts,
         "evidence_paths": evidence_paths[: max(1, max_paths)],
         "retrieval": search,

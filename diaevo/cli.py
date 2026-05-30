@@ -2,6 +2,7 @@
 
 import argparse
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -28,6 +29,7 @@ from .paths import DATA_DIR, bootstrap_workspace
 from .promotion import PROMOTION_LABELS, label_promotion, promote, queue_promotion, rewrite_promotion
 from .recommender import recommend
 from .script_artifacts import SCRIPT_REVIEW_STATUSES, review_script
+from .skill_adapter import adapt_external_skill
 from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
 from .validation_runner import run_validation
 from .verifier import verify_skill
@@ -48,6 +50,7 @@ PUBLIC_COMMANDS = (
     "label-promotion",
     "rewrite-promotion",
     "review-script",
+    "adapt-skill",
     "demo",
     "home",
     "tools",
@@ -68,6 +71,10 @@ class DiaEvoArgumentParser(argparse.ArgumentParser):
         if "invalid choice" in message and "choose from" in message:
             prefix = message.split("(choose from", 1)[0].rstrip()
             message = f"{prefix}（可用命令：{', '.join(PUBLIC_COMMANDS)}）"
+        elif message.startswith("the following arguments are required:"):
+            message = "缺少必需参数：" + message.split(":", 1)[1]
+        elif message.startswith("unrecognized arguments:"):
+            message = "无法识别的参数：" + message.split(":", 1)[1]
         super().error(message)
 
 
@@ -81,11 +88,178 @@ def print_json(value: Any) -> None:
     print(json.dumps(value, ensure_ascii=False, indent=2, sort_keys=True))
 
 
+def _cli_output_mode(args: argparse.Namespace) -> str:
+    if getattr(args, "json", False):
+        return "json"
+    if getattr(args, "plain", False):
+        return "plain"
+    env_value = os.environ.get("DIAEVO_OUTPUT", "").strip().lower()
+    if env_value == "json":
+        return "json"
+    if env_value in {"plain", "terminal"}:
+        return "plain"
+    return "plain" if sys.stdout.isatty() else "json"
+
+
+_TOOL_LABELS = {
+    "list_files": "列出工作区文件",
+    "read_file": "读取工作区文件片段",
+    "write_file": "创建或覆盖工作区文件",
+    "edit_file": "替换文件中的精确字符串",
+    "delete_file": "删除工作区文件或目录",
+    "apply_patch": "应用 unified diff 补丁",
+    "run_shell": "运行本地 shell 命令",
+    "web_fetch": "抓取网页内容",
+    "web_search": "执行网页搜索",
+    "arxiv_search": "检索 arXiv 论文",
+    "kg_answer": "从已审核知识图谱回答",
+    "recommend_skills": "按任务推荐技能",
+    "load_skill_context": "载入技能上下文",
+}
+
+
+def _format_score(value: object) -> str:
+    try:
+        return f"{float(value):.4f}"
+    except (TypeError, ValueError):
+        return str(value)
+
+
+def _render_tools_result(result: dict[str, Any]) -> str:
+    specs = result.get("tools") if isinstance(result.get("tools"), list) else []
+    lines = ["本地工具", ""]
+    for spec in specs:
+        if not isinstance(spec, dict):
+            continue
+        name = str(spec.get("name") or "")
+        label = _TOOL_LABELS.get(name, str(spec.get("description") or ""))
+        mode = "只读" if spec.get("read_only") else "可写"
+        gate = "需审批" if spec.get("approval_required") else "直接执行"
+        risk = str(spec.get("risk") or "low")
+        lines.append(f"- {name}：{label}（{mode}，{gate}，风险：{risk}）")
+    return "\n".join(lines).rstrip()
+
+
+def _render_recommend_result(result: dict[str, Any]) -> str:
+    recommendations = result.get("recommendations") if isinstance(result.get("recommendations"), list) else []
+    lines = [
+        f"任务：{result.get('task', '')}",
+        f"推荐结果：Top {result.get('top_k', len(recommendations))}",
+        "",
+    ]
+    if not recommendations:
+        lines.append("没有找到可推荐的技能。")
+        return "\n".join(lines)
+    for index, item in enumerate(recommendations, start=1):
+        if not isinstance(item, dict):
+            continue
+        skill = item.get("skill", "")
+        score = _format_score(item.get("score", ""))
+        source = item.get("source", "")
+        reason = item.get("reason", "")
+        lines.append(f"{index}. {skill}（分数 {score}，来源 {source}）")
+        if reason:
+            lines.append(f"   原因：{reason}")
+        execution_mode = item.get("execution_mode", "")
+        fallback = item.get("fallback_reason", "")
+        if execution_mode:
+            lines.append(f"   执行方式：{execution_mode}")
+        if fallback:
+            lines.append(f"   说明：{fallback}")
+    return "\n".join(lines)
+
+
+def _render_answer_kg_result(result: dict[str, Any]) -> str:
+    lines = [str(result.get("answer") or "").strip()]
+    facts = result.get("facts") if isinstance(result.get("facts"), list) else []
+    evidence = result.get("evidence_paths") if isinstance(result.get("evidence_paths"), list) else []
+    if facts:
+        lines.extend(["", "证据事实："])
+        for item in facts:
+            if not isinstance(item, dict):
+                continue
+            confidence = item.get("confidence", "")
+            lines.append(
+                f"- {item.get('subject', '')} {item.get('predicate', '')} "
+                f"{item.get('object', '')}（置信度 {confidence}）"
+            )
+    missing = result.get("missing") if isinstance(result.get("missing"), list) else []
+    if missing:
+        lines.extend(["", "缺少证据："])
+        lines.extend(f"- {item}" for item in missing)
+    if evidence:
+        lines.extend(["", "证据路径："])
+        for item in evidence:
+            if not isinstance(item, dict):
+                continue
+            path = item.get("path", "")
+            summary = item.get("summary", "")
+            lines.append(f"- {path}  {summary}".rstrip())
+    return "\n".join(line for line in lines if line is not None).strip()
+
+
+def _render_tool_result_plain(result: dict[str, Any]) -> str:
+    tool = result.get("tool", "tool")
+    status = result.get("status", "")
+    lines = [f"{tool}：{status}"]
+    message = result.get("message") or result.get("error")
+    if message:
+        lines.append(str(message))
+    if status == "requires_approval":
+        lines.append("这是审批前预览，尚未修改工作区。确认执行时加 --approve。")
+    if "content" in result:
+        lines.extend(["", str(result.get("content") or "")])
+    elif "entries" in result and isinstance(result.get("entries"), list):
+        entries = result["entries"]
+        for item in entries[:30]:
+            if isinstance(item, dict):
+                lines.append(f"- {item.get('path', '')}")
+        if len(entries) > 30:
+            lines.append(f"... 还有 {len(entries) - 30} 项")
+    elif "preview" in result:
+        preview = result.get("preview")
+        if isinstance(preview, dict):
+            diff = preview.get("diff")
+            operation = preview.get("operation")
+            path = preview.get("path")
+            if operation or path:
+                lines.append(f"预览：{operation or ''} {path or ''}".strip())
+            if diff:
+                lines.extend(["", str(diff).rstrip()])
+    return "\n".join(lines).rstrip()
+
+
+def render_cli_result(command: str | None, result: dict[str, Any]) -> str:
+    if command == "tools":
+        return _render_tools_result(result)
+    if command == "recommend":
+        return _render_recommend_result(result)
+    if command == "answer-kg":
+        return _render_answer_kg_result(result)
+    if command == "tool":
+        return _render_tool_result_plain(result)
+    return json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
+
+
+def print_result(command: str | None, result: dict[str, Any], args: argparse.Namespace) -> None:
+    if _cli_output_mode(args) == "json":
+        print_json(result)
+        return
+    print(render_cli_result(command, result))
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = DiaEvoArgumentParser(
         prog="diaevo",
         description="从任务轨迹中挖掘、推荐、生成和验证 Agent 技能。",
+        add_help=False,
     )
+    parser.add_argument("-h", "--help", action="help", help="显示帮助并退出。")
+    parser._positionals.title = "命令"  # type: ignore[attr-defined]
+    parser._optionals.title = "选项"  # type: ignore[attr-defined]
+    output_group = parser.add_mutually_exclusive_group()
+    output_group.add_argument("--json", action="store_true", help="以 JSON 输出结果，适合脚本消费。")
+    output_group.add_argument("--plain", action="store_true", help="以人类可读文本输出结果。")
     subparsers = parser.add_subparsers(dest="command", required=False, metavar="command")
 
     def add_hidden_parser(name: str, **kwargs: Any) -> argparse.ArgumentParser:
@@ -95,78 +269,78 @@ def build_parser() -> argparse.ArgumentParser:
         ]
         return hidden
 
-    ingest_parser = subparsers.add_parser("ingest", help="Validate and normalize JSONL trace data.")
-    ingest_parser.add_argument("--input", required=True, help="Input JSONL trace file.")
-    ingest_parser.add_argument("--output", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed JSONL output path.")
-    ingest_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
-    ingest_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .diaevo/tool_events.jsonl.")
+    ingest_parser = subparsers.add_parser("ingest", help="校验并规范化 JSONL 任务轨迹。")
+    ingest_parser.add_argument("--input", required=True, help="输入 JSONL 轨迹文件。")
+    ingest_parser.add_argument("--output", default=str(DATA_DIR / "processed_traces.jsonl"), help="处理后 JSONL 输出路径。")
+    ingest_parser.add_argument("--tool-events", default=None, help="可选：工具事件 JSONL 路径。")
+    ingest_parser.add_argument("--no-tool-events", action="store_true", help="不合并 .diaevo/tool_events.jsonl。")
 
-    mine_parser = subparsers.add_parser("mine", help="Run clustering, association, sequence, and graph mining.")
-    mine_parser.add_argument("--traces", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
-    mine_parser.add_argument("--registry", default=str(DATA_DIR / "skill_registry.json"), help="Skill registry JSON path.")
-    mine_parser.add_argument("--plugins", default=str(DATA_DIR / "plugin_metadata.json"), help="Plugin metadata JSON path.")
-    mine_parser.add_argument("--clusters", type=int, default=None, help="Optional fixed K for K-Means.")
+    mine_parser = subparsers.add_parser("mine", help="运行聚类、关联规则、序列和图挖掘。")
+    mine_parser.add_argument("--traces", default=str(DATA_DIR / "processed_traces.jsonl"), help="处理后的轨迹 JSONL 路径。")
+    mine_parser.add_argument("--registry", default=str(DATA_DIR / "skill_registry.json"), help="技能注册表 JSON 路径。")
+    mine_parser.add_argument("--plugins", default=str(DATA_DIR / "plugin_metadata.json"), help="插件元数据 JSON 路径。")
+    mine_parser.add_argument("--clusters", type=int, default=None, help="可选：固定 K-Means 聚类数。")
 
-    snapshot_parser = subparsers.add_parser("export-mining-snapshot", help="Export human-readable mining findings to data/mining_snapshots/YYMMDD.")
-    snapshot_parser.add_argument("--traces", default=None, help="Processed trace JSONL path; if omitted, input is ingested first.")
-    snapshot_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file used when --traces is omitted.")
-    snapshot_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path used when --traces is omitted.")
-    snapshot_parser.add_argument("--registry", default=str(DATA_DIR / "skill_registry.json"), help="Skill registry JSON path.")
-    snapshot_parser.add_argument("--plugins", default=str(DATA_DIR / "plugin_metadata.json"), help="Plugin metadata JSON path.")
-    snapshot_parser.add_argument("--clusters", type=int, default=None, help="Optional fixed K for K-Means.")
-    snapshot_parser.add_argument("--date", default=None, help="Snapshot date as YYMMDD or ISO date; defaults to today.")
-    snapshot_parser.add_argument("--output-dir", default=None, help="Optional explicit snapshot output directory.")
-    snapshot_parser.add_argument("--include-tool-events", action="store_true", help="Merge .diaevo/tool_events.jsonl when ingesting input.")
+    snapshot_parser = subparsers.add_parser("export-mining-snapshot", help="导出人类可读的挖掘快照到 data/mining_snapshots/YYMMDD。")
+    snapshot_parser.add_argument("--traces", default=None, help="处理后的轨迹 JSONL 路径；省略时会先导入输入数据。")
+    snapshot_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="省略 --traces 时使用的基础 JSONL 轨迹文件。")
+    snapshot_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="省略 --traces 时写入的处理后轨迹路径。")
+    snapshot_parser.add_argument("--registry", default=str(DATA_DIR / "skill_registry.json"), help="技能注册表 JSON 路径。")
+    snapshot_parser.add_argument("--plugins", default=str(DATA_DIR / "plugin_metadata.json"), help="插件元数据 JSON 路径。")
+    snapshot_parser.add_argument("--clusters", type=int, default=None, help="可选：固定 K-Means 聚类数。")
+    snapshot_parser.add_argument("--date", default=None, help="快照日期，格式 YYMMDD 或 ISO 日期；默认今天。")
+    snapshot_parser.add_argument("--output-dir", default=None, help="可选：显式指定快照输出目录。")
+    snapshot_parser.add_argument("--include-tool-events", action="store_true", help="导入输入数据时合并 .diaevo/tool_events.jsonl。")
 
-    recommend_parser = subparsers.add_parser("recommend", help="Recommend top-K skills for a task.")
-    recommend_parser.add_argument("--task", required=True, help="Task description.")
-    recommend_parser.add_argument("--top-k", type=int, default=5, help="Number of recommendations.")
-    recommend_parser.add_argument("--language", default="", help="Optional project language signal.")
-    recommend_parser.add_argument("--framework", action="append", default=[], help="Optional framework signal; can be repeated.")
-    recommend_parser.add_argument("--traces", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
-    recommend_parser.add_argument("--registry", default=str(DATA_DIR / "skill_registry.json"), help="Skill registry JSON path.")
-    recommend_parser.add_argument("--plugins", default=str(DATA_DIR / "plugin_metadata.json"), help="Plugin metadata JSON path.")
-    recommend_parser.add_argument("--weights", default=None, help="Optional recommender weight JSON path.")
-    recommend_parser.add_argument("--rerank", choices=["weighted", "pareto"], default="weighted", help="Optional reranking strategy.")
+    recommend_parser = subparsers.add_parser("recommend", help="按任务推荐 Top-K 技能。")
+    recommend_parser.add_argument("--task", required=True, help="任务描述。")
+    recommend_parser.add_argument("--top-k", type=int, default=5, help="推荐数量。")
+    recommend_parser.add_argument("--language", default="", help="可选：项目语言信号。")
+    recommend_parser.add_argument("--framework", action="append", default=[], help="可选：项目框架信号，可重复。")
+    recommend_parser.add_argument("--traces", default=str(DATA_DIR / "processed_traces.jsonl"), help="处理后的轨迹 JSONL 路径。")
+    recommend_parser.add_argument("--registry", default=str(DATA_DIR / "skill_registry.json"), help="技能注册表 JSON 路径。")
+    recommend_parser.add_argument("--plugins", default=str(DATA_DIR / "plugin_metadata.json"), help="插件元数据 JSON 路径。")
+    recommend_parser.add_argument("--weights", default=None, help="可选：推荐器权重 JSON 路径。")
+    recommend_parser.add_argument("--rerank", choices=["weighted", "pareto"], default="weighted", help="可选：重排策略。")
 
-    generate_parser = subparsers.add_parser("generate", help="Generate a candidate SKILL.md from a mined cluster.")
-    generate_parser.add_argument("--cluster-id", required=True, help="Cluster id such as C03.")
-    generate_parser.add_argument("--output-dir", default=None, help="Optional target directory.")
-    generate_parser.add_argument("--with-code", action="store_true", help="Generate restricted helper code and validation.json for a code-backed skill.")
+    generate_parser = subparsers.add_parser("generate", help="从挖掘簇生成候选 SKILL.md。")
+    generate_parser.add_argument("--cluster-id", required=True, help="簇 ID，例如 C03。")
+    generate_parser.add_argument("--output-dir", default=None, help="可选：目标输出目录。")
+    generate_parser.add_argument("--with-code", action="store_true", help="为 code-backed skill 生成受限 helper code 和 validation.json。")
 
-    verify_parser = subparsers.add_parser("verify", help="Verify a candidate skill directory or SKILL.md.")
-    verify_parser.add_argument("--skill", required=True, help="Candidate skill directory or SKILL.md path.")
+    verify_parser = subparsers.add_parser("verify", help="验证候选技能目录或 SKILL.md。")
+    verify_parser.add_argument("--skill", required=True, help="候选技能目录或 SKILL.md 路径。")
 
-    evolve_parser = subparsers.add_parser("evolve", help="Evolve generated skill candidates with local metric/Pareto optimization.")
+    evolve_parser = subparsers.add_parser("evolve", help="用本地指标和 Pareto 选择演化候选技能。")
     evolve_target = evolve_parser.add_mutually_exclusive_group()
-    evolve_target.add_argument("--cluster-id", default=None, help="Cluster id such as C03.")
-    evolve_target.add_argument("--all-entrypoints", action="store_true", help="Evolve all mining report generation entrypoints.")
-    evolve_parser.add_argument("--budget", type=int, default=50, help="Maximum local candidate variants per cluster.")
-    evolve_parser.add_argument("--output-dir", default=None, help="Optional target directory for a single evolved candidate.")
+    evolve_target.add_argument("--cluster-id", default=None, help="簇 ID，例如 C03。")
+    evolve_target.add_argument("--all-entrypoints", action="store_true", help="演化 mining report 中的全部生成入口。")
+    evolve_parser.add_argument("--budget", type=int, default=50, help="每个簇最多评估的本地候选变体数。")
+    evolve_parser.add_argument("--output-dir", default=None, help="可选：单个演化候选的目标目录。")
 
-    validate_parser = subparsers.add_parser("validate", help="Run approved validation.json commands for a candidate skill.")
-    validate_parser.add_argument("--skill", required=True, help="Candidate skill directory or SKILL.md path.")
-    validate_parser.add_argument("--approve", action="store_true", help="Execute validation commands after preview/safety checks.")
+    validate_parser = subparsers.add_parser("validate", help="运行已审批的候选技能 validation.json 命令。")
+    validate_parser.add_argument("--skill", required=True, help="候选技能目录或 SKILL.md 路径。")
+    validate_parser.add_argument("--approve", action="store_true", help="预览和安全检查后执行验证命令。")
 
-    queue_parser = subparsers.add_parser("queue-promotion", help="Queue a verified candidate for human promotion review.")
-    queue_parser.add_argument("--skill", required=True, help="Candidate skill directory or SKILL.md path.")
+    queue_parser = subparsers.add_parser("queue-promotion", help="将已验证候选加入人工晋升审核队列。")
+    queue_parser.add_argument("--skill", required=True, help="候选技能目录或 SKILL.md 路径。")
 
-    promote_parser = subparsers.add_parser("promote", help="Promote an approved queue item into the local registry.")
-    promote_parser.add_argument("--queue-id", required=True, help="Promotion queue entry id.")
-    promote_parser.add_argument("--approve", action="store_true", help="Update the registry after human approval.")
-    promote_parser.add_argument("--registry", default=None, help="Optional registry JSON path.")
+    promote_parser = subparsers.add_parser("promote", help="把已审批队列项晋升到本地注册表。")
+    promote_parser.add_argument("--queue-id", required=True, help="晋升队列项 ID。")
+    promote_parser.add_argument("--approve", action="store_true", help="人工确认后更新注册表。")
+    promote_parser.add_argument("--registry", default=None, help="可选：注册表 JSON 路径。")
 
-    label_parser = subparsers.add_parser("label-promotion", help="Attach human review labels to a promotion queue item.")
-    label_parser.add_argument("--queue-id", required=True, help="Promotion queue entry id.")
+    label_parser = subparsers.add_parser("label-promotion", help="给晋升队列项添加人工审核标签。")
+    label_parser.add_argument("--queue-id", required=True, help="晋升队列项 ID。")
     label_parser.add_argument(
         "--label",
         action="append",
         choices=sorted(PROMOTION_LABELS),
         required=True,
-        help="Review label; can be repeated.",
+        help="审核标签；可重复。",
     )
-    label_parser.add_argument("--note", default="", help="Optional reviewer note.")
-    label_parser.add_argument("--reviewer", default="", help="Optional reviewer id.")
+    label_parser.add_argument("--note", default="", help="可选：审核备注。")
+    label_parser.add_argument("--reviewer", default="", help="可选：审核人 ID。")
 
     rewrite_parser = subparsers.add_parser(
         "rewrite-promotion",
@@ -182,24 +356,41 @@ def build_parser() -> argparse.ArgumentParser:
     rewrite_parser.add_argument("--output-dir", default=None, help="可选：重写草案输出目录。")
 
     review_script_parser = subparsers.add_parser("review-script", help="审核 skill 目录中的只读 helper 脚本状态。")
-    review_script_parser.add_argument("--skill", required=True, help="Candidate skill directory or SKILL.md path.")
+    review_script_parser.add_argument("--skill", required=True, help="候选技能目录或 SKILL.md 路径。")
     review_script_parser.add_argument("--status", choices=sorted(SCRIPT_REVIEW_STATUSES), required=True, help="脚本审核状态。")
-    review_script_parser.add_argument("--note", default="", help="Optional reviewer note.")
-    review_script_parser.add_argument("--reviewer", default="", help="Optional reviewer id.")
+    review_script_parser.add_argument("--note", default="", help="可选：审核备注。")
+    review_script_parser.add_argument("--reviewer", default="", help="可选：审核人 ID。")
     review_script_parser.add_argument("--approve", action="store_true", help="确认写入 code_artifacts.json 审核状态。")
 
-    demo_parser = subparsers.add_parser("demo", help="Run the full MVP pipeline on sample data.")
-    demo_parser.add_argument("--task", default="给当前项目生成测试修复 skill", help="Task used for recommendation.")
-    demo_parser.add_argument("--cluster-id", default="", help="Cluster to generate; defaults to highest coverage gap.")
+    adapt_parser = subparsers.add_parser("adapt-skill", help="将外部 skill 或 demo 项目适配为 DiaEvo 候选技能。")
+    adapt_parser.add_argument("--source", default=None, help="本地源目录或受支持的 GitHub URL。")
+    adapt_parser.add_argument("--fixture", choices=["garden-web-design-website"], default=None, help="要适配的已知外部 fixture。")
+    adapt_parser.add_argument("--source-commit", default=None, help="受支持 GitHub fixture 的固定来源 commit。")
+    adapt_parser.add_argument("--source-subdir", default=None, help="来源子目录。")
+    adapt_parser.add_argument("--output-dir", default=None, help="候选技能输出目录。")
+    adapt_parser.add_argument("--refresh-cache", action="store_true", help="适配前刷新外部 fixture 缓存。")
+    adapt_parser.add_argument("--offline", action="store_true", help="只使用已有本地来源/缓存，不访问网络。")
+    adapt_parser.add_argument("--with-gepa", action="store_true", help="记录 GEPA 增强请求；确定性适配仍会在无 GEPA 时运行。")
+    adapt_parser.add_argument("--dry-run", action="store_true", help="预览适配结果，不写入候选技能。")
+    adapt_parser.add_argument(
+        "--mode",
+        choices=["auto", "skill-package", "project-summary"],
+        default="auto",
+        help="适配模式；auto 会保留源 SKILL.md 包并总结 demo 项目。",
+    )
 
-    subparsers.add_parser("home", help="Open the dashboard and interactive shell.")
+    demo_parser = subparsers.add_parser("demo", help="用样例数据运行完整 MVP 流程。")
+    demo_parser.add_argument("--task", default="给当前项目生成测试修复 skill", help="推荐阶段使用的任务。")
+    demo_parser.add_argument("--cluster-id", default="", help="要生成的簇；默认选择最高覆盖缺口。")
 
-    subparsers.add_parser("tools", help="List local tool schemas and approval requirements.")
+    subparsers.add_parser("home", help="打开仪表盘和交互式终端。")
 
-    feedback_parser = subparsers.add_parser("feedback", help="Fold tool event logs into processed traces.")
-    feedback_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
-    feedback_parser.add_argument("--output", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed JSONL output path.")
-    feedback_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
+    subparsers.add_parser("tools", help="列出本地工具说明和审批要求。")
+
+    feedback_parser = subparsers.add_parser("feedback", help="将工具事件日志回灌到处理后的轨迹。")
+    feedback_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="基础 JSONL 轨迹文件。")
+    feedback_parser.add_argument("--output", default=str(DATA_DIR / "processed_traces.jsonl"), help="处理后 JSONL 输出路径。")
+    feedback_parser.add_argument("--tool-events", default=None, help="可选：工具事件 JSONL 路径。")
 
     kg_delta_parser = add_hidden_parser(
         "build-kg-delta",
@@ -270,73 +461,73 @@ def build_parser() -> argparse.ArgumentParser:
     kg_answer_parser.add_argument("--embedding-model", default=None, help="dense 后端使用的 sentence-transformers/HF 模型名。")
     kg_answer_parser.add_argument("--hf-endpoint", default=None, help="HF 下载镜像；默认 https://hf-mirror.com。")
 
-    eval_parser = subparsers.add_parser("evaluate", help="Run baseline metrics for the current engineering algorithms.")
-    eval_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
-    eval_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
-    eval_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
-    eval_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .diaevo/tool_events.jsonl.")
-    eval_parser.add_argument("--top-k", type=int, default=5, help="Top-K cutoff for recommendation metrics.")
+    eval_parser = subparsers.add_parser("evaluate", help="运行当前工程算法的基线指标。")
+    eval_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="基础 JSONL 轨迹文件。")
+    eval_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="处理后的轨迹 JSONL 路径。")
+    eval_parser.add_argument("--tool-events", default=None, help="可选：工具事件 JSONL 路径。")
+    eval_parser.add_argument("--no-tool-events", action="store_true", help="不合并 .diaevo/tool_events.jsonl。")
+    eval_parser.add_argument("--top-k", type=int, default=5, help="推荐指标使用的 Top-K 截断值。")
     eval_parser.add_argument(
         "--duplicate-threshold",
         type=float,
         default=0.92,
-        help="Cosine similarity threshold for candidate duplicate pairs.",
+        help="候选重复对的余弦相似度阈值。",
     )
-    eval_parser.add_argument("--variant", choices=["baseline", "evolved"], default="baseline", help="Evaluation variant.")
+    eval_parser.add_argument("--variant", choices=["baseline", "evolved"], default="baseline", help="评估变体。")
 
-    gepa_parser = subparsers.add_parser("evaluate-gepa", help="Run optional GEPA skill-section optimization for one cluster.")
-    gepa_parser.add_argument("--cluster-id", required=True, help="Cluster id such as C03.")
-    gepa_parser.add_argument("--budget", type=int, default=50, help="Maximum GEPA metric calls.")
-    gepa_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
-    gepa_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
-    gepa_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
-    gepa_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .diaevo/tool_events.jsonl.")
-    gepa_parser.add_argument("--top-k", type=int, default=3, help="Top-K cutoff for selected-cluster held-out metrics.")
-    gepa_parser.add_argument("--env", default=None, help="Path to .env; defaults to project .env.")
-    gepa_parser.add_argument("--model", default=None, help="Override DEEPSEEK_MODEL.")
-    gepa_parser.add_argument("--base-url", default=None, help="Override DEEPSEEK_BASE_URL.")
-    gepa_parser.add_argument("--max-tokens", type=int, default=None, help="Override DEEPSEEK_MAX_TOKENS.")
-    gepa_parser.add_argument("--temperature", type=float, default=None, help="Override DEEPSEEK_TEMPERATURE.")
-    gepa_parser.add_argument("--no-thinking", action="store_true", help="Disable DeepSeek thinking config for this run.")
-    gepa_parser.add_argument("--dry-run", action="store_true", help="Exercise seed/local comparison and safety gates without importing or calling GEPA.")
-    gepa_parser.add_argument("--output-dir", default=None, help="Optional target directory for the GEPA candidate.")
-    gepa_parser.add_argument("--condition", default="single_run", help="Experiment condition label recorded in the report.")
+    gepa_parser = subparsers.add_parser("evaluate-gepa", help="对单个簇运行可选 GEPA 技能章节优化。")
+    gepa_parser.add_argument("--cluster-id", required=True, help="簇 ID，例如 C03。")
+    gepa_parser.add_argument("--budget", type=int, default=50, help="最大 GEPA 指标调用次数。")
+    gepa_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="基础 JSONL 轨迹文件。")
+    gepa_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="处理后的轨迹 JSONL 路径。")
+    gepa_parser.add_argument("--tool-events", default=None, help="可选：工具事件 JSONL 路径。")
+    gepa_parser.add_argument("--no-tool-events", action="store_true", help="不合并 .diaevo/tool_events.jsonl。")
+    gepa_parser.add_argument("--top-k", type=int, default=3, help="所选簇 held-out 指标的 Top-K 截断值。")
+    gepa_parser.add_argument("--env", default=None, help=".env 路径；默认使用项目 .env。")
+    gepa_parser.add_argument("--model", default=None, help="覆盖 DEEPSEEK_MODEL。")
+    gepa_parser.add_argument("--base-url", default=None, help="覆盖 DEEPSEEK_BASE_URL。")
+    gepa_parser.add_argument("--max-tokens", type=int, default=None, help="覆盖 DEEPSEEK_MAX_TOKENS。")
+    gepa_parser.add_argument("--temperature", type=float, default=None, help="覆盖 DEEPSEEK_TEMPERATURE。")
+    gepa_parser.add_argument("--no-thinking", action="store_true", help="本次运行禁用 DeepSeek thinking 配置。")
+    gepa_parser.add_argument("--dry-run", action="store_true", help="不导入或调用 GEPA，只演练 seed/local 对比和安全门。")
+    gepa_parser.add_argument("--output-dir", default=None, help="可选：GEPA 候选输出目录。")
+    gepa_parser.add_argument("--condition", default="single_run", help="写入报告的实验条件标签。")
     gepa_parser.add_argument(
         "--memory-policy",
         choices=["current", "none", "ctm", "epm", "ctm_epm"],
         default="current",
-        help="Memory context policy for seed/background construction.",
+        help="seed/background 构造使用的记忆上下文策略。",
     )
     gepa_parser.add_argument(
         "--racing-policy",
         choices=["off", "cheap_gates"],
         default="off",
-        help="Cheap local gate policy for GEPA candidate evaluation.",
+        help="GEPA 候选评估使用的低成本本地门控策略。",
     )
     gepa_parser.add_argument(
         "--judge-policy",
         choices=["none", "uncertainty_only"],
         default="none",
-        help="Sparse judge policy for uncertain candidates.",
+        help="不确定候选使用的稀疏 judge 策略。",
     )
 
-    phase4_parser = subparsers.add_parser("evaluate-gepa-phase4", help="Run Phase 4 GEPA/APO experiment matrix.")
-    phase4_parser.add_argument("--cluster-id", required=True, help="Cluster id such as C03.")
-    phase4_parser.add_argument("--budgets", default="5,10,25,50", help="Comma-separated GEPA budgets.")
-    phase4_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="Base JSONL trace file.")
-    phase4_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="Processed trace JSONL path.")
-    phase4_parser.add_argument("--tool-events", default=None, help="Optional tool event JSONL path.")
-    phase4_parser.add_argument("--no-tool-events", action="store_true", help="Do not merge .diaevo/tool_events.jsonl.")
-    phase4_parser.add_argument("--top-k", type=int, default=3, help="Top-K cutoff for selected-cluster held-out metrics.")
-    phase4_parser.add_argument("--env", default=None, help="Path to .env; defaults to project .env.")
-    phase4_parser.add_argument("--model", default=None, help="Override DEEPSEEK_MODEL.")
-    phase4_parser.add_argument("--base-url", default=None, help="Override DEEPSEEK_BASE_URL.")
-    phase4_parser.add_argument("--max-tokens", type=int, default=None, help="Override DEEPSEEK_MAX_TOKENS.")
-    phase4_parser.add_argument("--temperature", type=float, default=None, help="Override DEEPSEEK_TEMPERATURE.")
-    phase4_parser.add_argument("--no-thinking", action="store_true", help="Disable DeepSeek thinking config for this run.")
-    phase4_parser.add_argument("--dry-run", action="store_true", help="Run the full matrix without importing or calling GEPA.")
-    phase4_parser.add_argument("--output-dir", default=None, help="Optional root directory for GEPA candidates.")
-    phase4_parser.add_argument("--no-resume", action="store_true", help="Ignore any existing Phase 4 report and rerun all rows.")
+    phase4_parser = subparsers.add_parser("evaluate-gepa-phase4", help="运行 Phase 4 GEPA/APO 实验矩阵。")
+    phase4_parser.add_argument("--cluster-id", required=True, help="簇 ID，例如 C03。")
+    phase4_parser.add_argument("--budgets", default="5,10,25,50", help="逗号分隔的 GEPA budget 列表。")
+    phase4_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="基础 JSONL 轨迹文件。")
+    phase4_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="处理后的轨迹 JSONL 路径。")
+    phase4_parser.add_argument("--tool-events", default=None, help="可选：工具事件 JSONL 路径。")
+    phase4_parser.add_argument("--no-tool-events", action="store_true", help="不合并 .diaevo/tool_events.jsonl。")
+    phase4_parser.add_argument("--top-k", type=int, default=3, help="所选簇 held-out 指标的 Top-K 截断值。")
+    phase4_parser.add_argument("--env", default=None, help=".env 路径；默认使用项目 .env。")
+    phase4_parser.add_argument("--model", default=None, help="覆盖 DEEPSEEK_MODEL。")
+    phase4_parser.add_argument("--base-url", default=None, help="覆盖 DEEPSEEK_BASE_URL。")
+    phase4_parser.add_argument("--max-tokens", type=int, default=None, help="覆盖 DEEPSEEK_MAX_TOKENS。")
+    phase4_parser.add_argument("--temperature", type=float, default=None, help="覆盖 DEEPSEEK_TEMPERATURE。")
+    phase4_parser.add_argument("--no-thinking", action="store_true", help="本次运行禁用 DeepSeek thinking 配置。")
+    phase4_parser.add_argument("--dry-run", action="store_true", help="不导入或调用 GEPA，运行完整实验矩阵。")
+    phase4_parser.add_argument("--output-dir", default=None, help="可选：GEPA 候选根目录。")
+    phase4_parser.add_argument("--no-resume", action="store_true", help="忽略已有 Phase 4 报告并重跑全部行。")
 
     code_evolution_parser = subparsers.add_parser(
         "evaluate-code-evolution",
@@ -366,23 +557,23 @@ def build_parser() -> argparse.ArgumentParser:
         help="未提供 patch 时，在 disposable sandbox 中运行验证命令并收集 baseline 证据。",
     )
 
-    tool_parser = subparsers.add_parser("tool", help="Execute one local tool with JSON arguments.")
-    tool_parser.add_argument("name", help="Tool name such as list_files or read_file.")
-    tool_parser.add_argument("--args", default="{}", help="JSON object passed to the tool.")
-    tool_parser.add_argument("--arg", action="append", default=[], help="Tool argument in key=value form; can be repeated.")
-    tool_parser.add_argument("--approve", action="store_true", help="Execute tools that require approval.")
+    tool_parser = subparsers.add_parser("tool", help="用 JSON 或 key=value 参数执行一个本地工具。")
+    tool_parser.add_argument("name", help="工具名，例如 list_files 或 read_file。")
+    tool_parser.add_argument("--args", default="{}", help="传给工具的 JSON 对象。")
+    tool_parser.add_argument("--arg", action="append", default=[], help="key=value 形式的工具参数，可重复。")
+    tool_parser.add_argument("--approve", action="store_true", help="执行需要审批的工具。")
 
-    chat_parser = subparsers.add_parser("chat-test", help="Run a simple DeepSeek chat completion test using .env.")
+    chat_parser = subparsers.add_parser("chat-test", help="使用 .env 运行一次简单的 DeepSeek 聊天测试。")
     chat_parser.add_argument("--prompt", default="用一句话说明 DiaEvo MVP 可以做什么。", help="User prompt.")
     chat_parser.add_argument("--system", default="你是用于测试 Agent 技能挖掘 MVP 的简洁中文助手。", help="System prompt.")
-    chat_parser.add_argument("--env", default=None, help="Path to .env; defaults to project .env.")
-    chat_parser.add_argument("--model", default=None, help="Override DEEPSEEK_MODEL.")
-    chat_parser.add_argument("--base-url", default=None, help="Override DEEPSEEK_BASE_URL.")
-    chat_parser.add_argument("--max-tokens", type=int, default=None, help="Override DEEPSEEK_MAX_TOKENS.")
-    chat_parser.add_argument("--temperature", type=float, default=None, help="Override DEEPSEEK_TEMPERATURE.")
-    chat_parser.add_argument("--no-thinking", action="store_true", help="Disable DeepSeek thinking field for this test.")
-    chat_parser.add_argument("--image", action="append", default=[], help="Attach an image path or URL and use GLM vision config.")
-    chat_parser.add_argument("--interactive", action="store_true", help="Keep conversation history locally and chat until /exit.")
+    chat_parser.add_argument("--env", default=None, help=".env 路径；默认使用项目 .env。")
+    chat_parser.add_argument("--model", default=None, help="覆盖 DEEPSEEK_MODEL。")
+    chat_parser.add_argument("--base-url", default=None, help="覆盖 DEEPSEEK_BASE_URL。")
+    chat_parser.add_argument("--max-tokens", type=int, default=None, help="覆盖 DEEPSEEK_MAX_TOKENS。")
+    chat_parser.add_argument("--temperature", type=float, default=None, help="覆盖 DEEPSEEK_TEMPERATURE。")
+    chat_parser.add_argument("--no-thinking", action="store_true", help="本次测试禁用 DeepSeek thinking 字段。")
+    chat_parser.add_argument("--image", action="append", default=[], help="附加图片路径或 URL，并使用 GLM 视觉配置。")
+    chat_parser.add_argument("--interactive", action="store_true", help="本地保留对话历史，持续聊天直到 /exit。")
 
     return parser
 
@@ -483,6 +674,19 @@ def main(argv: list[str] | None = None) -> int:
                 note=args.note,
                 reviewer=args.reviewer,
                 approve=args.approve,
+            )
+        elif args.command == "adapt-skill":
+            result = adapt_external_skill(
+                source=args.source,
+                output_dir=args.output_dir,
+                source_commit=args.source_commit,
+                source_subdir=args.source_subdir,
+                fixture=args.fixture,
+                refresh_cache=args.refresh_cache,
+                offline=args.offline,
+                with_gepa=args.with_gepa,
+                dry_run=args.dry_run,
+                mode=args.mode,
             )
         elif args.command == "demo":
             result = run_demo(args.task, args.cluster_id)
@@ -626,7 +830,7 @@ def main(argv: list[str] | None = None) -> int:
     except Exception as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 1
-    print_json(result)
+    print_result(args.command, result, args)
     return 0
 
 

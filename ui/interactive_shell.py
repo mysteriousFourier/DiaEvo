@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import getpass
+import multiprocessing
 import queue
 import shlex
 import sys
@@ -19,7 +20,9 @@ from diaevo.deepseek_chat import (
     vision_config_from_env,
 )
 from diaevo.env import write_env_value
+from diaevo.skill_context import load_skill_context, recommend_skill_contexts, render_skill_context_message
 from diaevo.tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
+from diaevo.tool_layer import REPEAT_FAILURE_HINT
 from diaevo.tool_chat import (
     RequestedToolCall,
     assistant_message_for_history,
@@ -29,18 +32,15 @@ from diaevo.tool_chat import (
     tool_result_message_for_call,
 )
 
-from .cli_style import DIM, GLYPHS, RESET, maybe_show_trust_dialog
+from .action_report import active_skill_names, build_turn_report, short_value, tool_reason
+from .cli_style import DIM, RESET, maybe_show_trust_dialog
+from .flow_input import FlowInputController, FlowInputEvent, msvcrt
 from .output_policy import print_assistant, print_status
 from .prompt_bar import is_command_input, read_prompt
 from .progress import status
 from .terminal_home import render_plain
 from .tool_render import render_tool_result
 from .window_title import set_title_state, start_title_monitor, stop_title_monitor, title_activity
-
-try:
-    import msvcrt
-except ImportError:  # pragma: no cover - Windows is the primary target.
-    msvcrt = None
 
 DEFAULT_RECOMMEND_TASK = "给当前项目生成测试修复 skill"
 HOME_PROMPT_GAP = "\n\n"
@@ -77,13 +77,15 @@ APPROVAL_ALLOW_ONCE = "allow_once"
 APPROVAL_ALLOW_SESSION = "allow_session"
 APPROVAL_DENY = "deny"
 APPROVAL_PROPOSE = "propose"
-FLOW_INPUT_QUEUE: "queue.Queue[FlowInputEvent]" = queue.Queue()
-FLOW_INPUT_ACTIVE = threading.Event()
-FLOW_INPUT_PAUSED = threading.Event()
-FLOW_INPUT_THREAD: threading.Thread | None = None
-FLOW_INPUT_LOCK = threading.Lock()
-FLOW_INTERRUPT_EVENT = threading.Event()
-FLOW_PROMPT_VISIBLE = threading.Event()
+FLOW_INPUT = FlowInputController()
+FLOW_INPUT_QUEUE = FLOW_INPUT.queue
+FLOW_INPUT_ACTIVE = FLOW_INPUT.active
+FLOW_INPUT_PAUSED = FLOW_INPUT.paused
+FLOW_INTERRUPT_EVENT = FLOW_INPUT.interrupt_event
+FLOW_FORCE_TERMINATE_EVENT = FLOW_INPUT.force_terminate_event
+FLOW_PROMPT_VISIBLE = FLOW_INPUT.prompt_visible
+_TALK_THREADS: set[threading.Thread] = set()
+_TALK_THREADS_LOCK = threading.Lock()
 
 
 @dataclass(frozen=True)
@@ -92,11 +94,8 @@ class ApprovalDecision:
     feedback: str = ""
 
 
-@dataclass(frozen=True)
-class FlowInputEvent:
-    text: str
-    interrupt: bool = False
-    talk: bool = False
+class ModelTurnInterrupted(RuntimeError):
+    pass
 
 
 class ChatConfigState:
@@ -104,6 +103,7 @@ class ChatConfigState:
         self.value = None
         self.vision_value = None
         self.approved_tools: set[str] = set()
+        self.last_failed_shell_command: str = ""
 
     def reset(self) -> None:
         self.value = None
@@ -136,7 +136,7 @@ def _ensure_vision_config(chat_state: ChatConfigState, *, max_tokens: int = 4096
     return chat_state.vision_value
 
 
-def _talk_once(prompt: str, chat_state: ChatConfigState) -> str:
+def _talk_once(prompt: str, chat_state: ChatConfigState, *, show_status: bool = True) -> str:
     config = _ensure_chat_config(chat_state, max_tokens=2048, no_thinking=True)
     messages = [
         {
@@ -148,15 +148,45 @@ def _talk_once(prompt: str, chat_state: ChatConfigState) -> str:
         },
         {"role": "user", "content": prompt},
     ]
-    with title_activity("running"):
-        with status("正在旁路提问"):
-            response = chat_completion(messages, config)
+    if show_status:
+        with title_activity("running"):
+            with _flow_status("正在旁路提问"):
+                response = chat_completion(messages, config)
+    else:
+        response = chat_completion(messages, config)
     return extract_assistant_text(response)
 
 
+def _start_talk_thread(prompt: str, chat_state: ChatConfigState) -> threading.Thread | None:
+    prompt = prompt.strip()
+    if not prompt:
+        return None
+
+    thread = threading.Thread(target=_talk_thread_worker, args=(prompt, chat_state), daemon=True)
+    with _TALK_THREADS_LOCK:
+        _TALK_THREADS.add(thread)
+    thread.start()
+    return thread
+
+
+def _talk_thread_worker(prompt: str, chat_state: ChatConfigState) -> None:
+    try:
+        answer = _talk_once(prompt, chat_state, show_status=False)
+    except Exception as exc:
+        answer = f"旁路提问失败：{exc}"
+    try:
+        _print_talk_answer(answer)
+    finally:
+        thread = threading.current_thread()
+        with _TALK_THREADS_LOCK:
+            _TALK_THREADS.discard(thread)
+
+
 def _print_talk_answer(answer: str) -> None:
+    _begin_flow_output()
     print("\ntalk>")
     print_assistant(answer)
+    _show_flow_prompt(force=True)
 
 
 def _image_once(image_path: str, prompt: str, chat_state: ChatConfigState) -> str:
@@ -166,185 +196,218 @@ def _image_once(image_path: str, prompt: str, chat_state: ChatConfigState) -> st
         "如果无法确定，明确说明不确定。不要调用工具，不要编造图片外的信息。"
     )
     with title_activity("running"):
-        with status("正在理解图片"):
+        with _flow_status("正在理解图片"):
             answer, _response = vision_chat_once(prompt, [image_path], system, config)
     return answer
 
 
 def _print_image_answer(answer: str) -> None:
+    _begin_flow_output()
     print("\nimage>")
     print_assistant(answer)
+    _show_flow_prompt(force=True)
 
 
-def _flow_input_worker() -> None:
-    buffer = ""
-    interrupt = False
-    while True:
-        if not FLOW_INPUT_ACTIVE.is_set() or msvcrt is None:
-            time.sleep(0.05)
-            continue
-        if FLOW_INPUT_PAUSED.is_set():
-            time.sleep(0.05)
-            continue
-        if not msvcrt.kbhit():
-            time.sleep(0.05)
-            continue
-        char = msvcrt.getwch()
-        if char in {"\x00", "\xe0"}:
-            msvcrt.getwch()
-            continue
-        if char == "\003":
-            FLOW_INPUT_QUEUE.put(FlowInputEvent("", interrupt=True))
-            FLOW_INTERRUPT_EVENT.set()
-            continue
-        if char == "\x1b":
-            text = buffer.strip()
-            if text:
-                talk = text.lower().startswith("/talk ")
-                payload = text[6:].strip() if talk else text
-                FLOW_INPUT_QUEUE.put(FlowInputEvent(payload, interrupt=True, talk=talk))
-                FLOW_INTERRUPT_EVENT.set()
-                buffer = ""
-                interrupt = False
-                sys.stdout.write("\n")
-                sys.stdout.flush()
-                continue
-            interrupt = True
-            buffer = ""
-            FLOW_INTERRUPT_EVENT.set()
-            FLOW_PROMPT_VISIBLE.clear()
-            sys.stdout.write(f"\ninterrupt {GLYPHS['prompt']} ")
-            sys.stdout.flush()
-            continue
-        if char in {"\r", "\n"}:
-            text = buffer.strip()
-            buffer = ""
-            if not text:
-                interrupt = False
-                continue
-            talk = text.lower().startswith("/talk ")
-            payload = text[6:].strip() if talk else text
-            FLOW_INPUT_QUEUE.put(FlowInputEvent(payload, interrupt=interrupt, talk=talk))
-            sys.stdout.write("\n")
-            sys.stdout.flush()
-            FLOW_PROMPT_VISIBLE.clear()
-            interrupt = False
-            continue
-        if char == "\b":
-            buffer = buffer[:-1]
-            sys.stdout.write("\b \b")
-            sys.stdout.flush()
-            continue
-        if char.isprintable():
-            if not buffer:
-                if not FLOW_PROMPT_VISIBLE.is_set():
-                    label = "interrupt" if interrupt else "next"
-                    sys.stdout.write(f"\n{label} {GLYPHS['prompt']} ")
-                    FLOW_PROMPT_VISIBLE.set()
-            buffer += char
-            sys.stdout.write(char)
-            sys.stdout.flush()
+def _print_tool_result(result: dict[str, object]) -> None:
+    _begin_flow_output()
+    print(render_tool_result(result))
+    _show_flow_prompt(force=True)
+
+
+def _begin_flow_output() -> None:
+    FLOW_INPUT.begin_output()
+
+
+def _print_assistant_flow(text: str) -> None:
+    _begin_flow_output()
+    print_assistant(text)
+    _show_flow_prompt(force=True)
+
+
+def _print_status_flow(text: str) -> None:
+    _begin_flow_output()
+    print_status(text)
+    _show_flow_prompt(force=True)
+
+
+@contextmanager
+def _flow_status(message: str) -> object:
+    """动效刷新输入栏上一行，输入栏本身只由用户输入驱动。"""
+    frames = "-\\|/"
+    stopped = threading.Event()
+
+    def animate() -> None:
+        index = 0
+        while not stopped.is_set():
+            FLOW_INPUT.update_status_line(f"{frames[index % len(frames)]} {message}")
+            index += 1
+            time.sleep(0.12)
+
+    _show_flow_prompt(force=True)
+    thread = threading.Thread(target=animate, daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join(timeout=0.5)
+        FLOW_INPUT.clear_status_line()
 
 
 def _start_flow_input_listener() -> bool:
-    global FLOW_INPUT_THREAD
-    if msvcrt is None or not sys.stdin.isatty():
-        return False
-    with FLOW_INPUT_LOCK:
-        if FLOW_INPUT_THREAD is None or not FLOW_INPUT_THREAD.is_alive():
-            FLOW_INPUT_THREAD = threading.Thread(target=_flow_input_worker, daemon=True)
-            FLOW_INPUT_THREAD.start()
-    FLOW_INPUT_ACTIVE.set()
-    return True
+    return FLOW_INPUT.start()
 
 
 def _stop_flow_input_listener(enabled: bool) -> None:
-    if enabled:
-        FLOW_INPUT_ACTIVE.clear()
-        FLOW_INTERRUPT_EVENT.clear()
-        FLOW_PROMPT_VISIBLE.clear()
+    FLOW_INPUT.stop(enabled)
 
 
-def _show_flow_prompt(label: str = "next") -> None:
-    if msvcrt is None or not sys.stdin.isatty() or FLOW_INPUT_PAUSED.is_set():
-        return
-    if FLOW_PROMPT_VISIBLE.is_set():
-        return
-    sys.stdout.write(f"\n{DIM}{label} {GLYPHS['prompt']} {RESET}")
-    sys.stdout.flush()
-    FLOW_PROMPT_VISIBLE.set()
+@contextmanager
+def _flow_input_session() -> object:
+    with FLOW_INPUT.session():
+        yield
+
+
+def _show_flow_prompt(label: str = "next", *, force: bool = False) -> None:
+    shown_label = "" if label == "next" else label
+    FLOW_INPUT.show_prompt(shown_label, force=force)
 
 
 @contextmanager
 def _pause_flow_input() -> object:
-    FLOW_INPUT_PAUSED.set()
-    try:
+    with FLOW_INPUT.pause():
         yield
-    finally:
-        FLOW_INPUT_PAUSED.clear()
 
 
 def _drain_flow_inputs() -> list[FlowInputEvent]:
-    events: list[FlowInputEvent] = []
-    while True:
-        try:
-            events.append(FLOW_INPUT_QUEUE.get_nowait())
-        except queue.Empty:
-            return events
+    return FLOW_INPUT.drain()
 
 
 def _handle_flow_inputs(messages: list[dict[str, object]], chat_state: ChatConfigState) -> bool:
+    return FLOW_INPUT.handle_queued(messages, lambda text: _start_talk_thread(text, chat_state))
+
+
+def _interrupted_tool_result(call: RequestedToolCall) -> dict[str, object]:
+    return {
+        "status": "interrupted",
+        "tool": call.name,
+        "message": "Tool call skipped because the user supplied new input before it ran.",
+    }
+
+
+def _handle_flow_inputs_before_pending_tool_calls(
+    messages: list[dict[str, object]],
+    chat_state: ChatConfigState,
+    pending_calls: list[RequestedToolCall],
+) -> bool:
+    if not pending_calls:
+        return _handle_flow_inputs(messages, chat_state)
+
+    events = FLOW_INPUT.drain()
+    if not events:
+        return False
+
+    user_events: list[FlowInputEvent] = []
     interrupted = False
-    for event in _drain_flow_inputs():
+    for event in events:
         if event.talk:
-            _print_talk_answer(_talk_once(event.text, chat_state))
+            if event.text:
+                _start_talk_thread(event.text, chat_state)
+            continue
+        if event.hard_interrupt and not event.text:
+            interrupted = True
             continue
         if event.text:
-            messages.append({"role": "user", "content": event.text})
+            user_events.append(event)
+            interrupted = True
         if event.interrupt:
             interrupted = True
-    return interrupted
+
+    if not interrupted:
+        return False
+
+    for call in pending_calls:
+        messages.append(tool_result_message_for_call(call, _interrupted_tool_result(call)))
+    for event in user_events:
+        messages.append({"role": "user", "content": event.text})
+    return True
 
 
 def _short_value(value: object, limit: int = 80) -> str:
-    text = str(value).replace("\n", " ").strip()
-    return text if len(text) <= limit else text[: limit - 3] + "..."
+    return short_value(value, limit)
 
 
 def _tool_reason(call: RequestedToolCall) -> str:
-    args = call.args
-    if call.name == "list_files":
-        return f"查看目录结构，确认接下来该读哪些文件。path={_short_value(args.get('path', '.'))}"
-    if call.name == "read_file":
-        return f"读取相关文件内容，用现有代码和文档支撑下一步判断。path={_short_value(args.get('path', ''))}"
-    if call.name == "write_file":
-        return f"写入文件以落地当前修改。path={_short_value(args.get('path', ''))}"
-    if call.name == "edit_file":
-        return f"按定位到的片段做局部替换。path={_short_value(args.get('path', ''))}"
-    if call.name == "delete_file":
-        return f"删除不再需要的文件或目录。path={_short_value(args.get('path', ''))}"
-    if call.name == "apply_patch":
-        return "应用补丁，把已确定的代码改动写入工作区。"
-    if call.name == "run_shell":
-        return f"运行本地命令验证或获取结果。command={_short_value(args.get('command', ''))}"
-    if call.name == "web_fetch":
-        return f"获取指定网页内容作为外部证据。url={_short_value(args.get('url', ''))}"
-    if call.name == "web_search":
-        return f"搜索外部资料，找到可参考的信息来源。query={_short_value(args.get('query', ''))}"
-    return f"调用 {call.name} 获取完成任务所需的信息或执行结果。"
+    return tool_reason(call)
 
 
 def _print_tool_reason(call: RequestedToolCall) -> None:
-    print(f"{DIM}thinking> {_tool_reason(call)}{RESET}")
+    _print_status_flow(f"工具  {_tool_reason(call)}")
 
 
 def _run(argv: list[str]) -> None:
     label = argv[0] if argv else "command"
-    with title_activity("running"):
-        with status(f"正在运行 {label}"):
-            code = cli_main(argv)
+    with _flow_input_session():
+        _show_flow_prompt()
+        with title_activity("running"):
+            with _flow_status(f"正在运行 {label}"):
+                code = cli_main(argv)
     if code:
-        print_status(f"命令退出，状态码：{code}")
+        _print_status_flow(f"命令退出，状态码：{code}")
+
+
+def _model_request_worker(
+    output: "multiprocessing.Queue[dict[str, object]]",
+    messages: list[dict[str, object]],
+    config,
+    tools: list[dict[str, object]],
+) -> None:
+    try:
+        response = chat_completion(messages, config, tools=tools)
+    except BaseException as exc:
+        output.put({"status": "error", "error": repr(exc)})
+        return
+    output.put({"status": "ok", "response": response})
+
+
+def _chat_completion_interruptible(
+    messages: list[dict[str, object]],
+    chat_state: ChatConfigState,
+    *,
+    tools: list[dict[str, object]],
+):
+    if msvcrt is None or not sys.stdin.isatty():
+        return chat_completion(messages, chat_state.value, tools=tools)
+
+    FLOW_FORCE_TERMINATE_EVENT.clear()
+    output: "multiprocessing.Queue[dict[str, object]]" = multiprocessing.Queue(maxsize=1)
+    process = multiprocessing.Process(target=_model_request_worker, args=(output, messages, chat_state.value, tools))
+    process.start()
+    try:
+        while process.is_alive():
+            FLOW_INPUT.handle_talk_queued(lambda text: _start_talk_thread(text, chat_state))
+            if FLOW_FORCE_TERMINATE_EVENT.is_set():
+                process.terminate()
+                process.join(timeout=2)
+                if process.is_alive():
+                    process.kill()
+                    process.join(timeout=2)
+                FLOW_FORCE_TERMINATE_EVENT.clear()
+                raise ModelTurnInterrupted("model request terminated")
+            time.sleep(0.05)
+        process.join()
+        try:
+            payload = output.get_nowait()
+        except queue.Empty as exc:
+            raise RuntimeError("model request process exited without a response") from exc
+        if payload.get("status") == "error":
+            raise RuntimeError(str(payload.get("error") or "model request failed"))
+        return payload["response"]
+    finally:
+        if process.is_alive():
+            process.terminate()
+            process.join(timeout=2)
+        output.close()
 
 
 def _set_env_command(
@@ -428,10 +491,12 @@ def _dispatch_command(
         except Exception as exc:
             print(f"tool args error: {exc}")
             return True
-        with title_activity("running"):
-            with status(f"正在执行 {tool_name}"):
-                result = execute_tool(tool_name, tool_args, approve=approve)
-        print(render_tool_result(result))
+        with _flow_input_session():
+            _show_flow_prompt()
+            with title_activity("running"):
+                with _flow_status(f"正在执行 {tool_name}"):
+                    result = execute_tool(tool_name, tool_args, approve=approve)
+        _print_tool_result(result)
         return True
     if name in {"kg_answer", "kg-answer", "kganswer"}:
         if kg_mode is None:
@@ -457,8 +522,7 @@ def _dispatch_command(
         if not prompt:
             print("usage: /talk <问题>")
             return True
-        answer = _talk_once(prompt, chat_state)
-        _print_talk_answer(answer)
+        _start_talk_thread(prompt, chat_state)
         return True
     if name == "image":
         if len(rest) < 2:
@@ -566,11 +630,11 @@ def _denied_tool_result(call, decision: ApprovalDecision) -> dict[str, object]:
 def _execute_model_tool_call(call, *, turn_id: str, chat_state: ChatConfigState) -> dict[str, object]:
     if "__parse_error__" in call.args:
         result = {"status": "error", "tool": call.name, "error": call.args["__parse_error__"]}
-        print(render_tool_result(result))
+        _print_tool_result(result)
         return result
 
     if chat_state.is_tool_approved_for_session(call.name):
-        with status(f"正在执行 {call.name}"):
+        with _flow_status(f"正在执行 {call.name}"):
             approved = execute_tool(
                 call.name,
                 call.args,
@@ -578,12 +642,20 @@ def _execute_model_tool_call(call, *, turn_id: str, chat_state: ChatConfigState)
                 turn_id=turn_id,
                 cancel_event=FLOW_INTERRUPT_EVENT,
             )
-        print(render_tool_result(approved))
+        _print_tool_result(approved)
         return approved
 
-    with status(f"正在执行 {call.name}"):
+    with _flow_status(f"正在执行 {call.name}"):
         result = execute_tool(call.name, call.args, turn_id=turn_id, cancel_event=FLOW_INTERRUPT_EVENT)
-    print(render_tool_result(result))
+    if call.name == "run_shell":
+        command = str(call.args.get("command") or "").strip()
+        if result.get("status") in {"error", "timeout", "interrupted"}:
+            if chat_state.last_failed_shell_command == command and command:
+                result["note"] = REPEAT_FAILURE_HINT
+            chat_state.last_failed_shell_command = command
+        elif result.get("status") == "ok":
+            chat_state.last_failed_shell_command = ""
+    _print_tool_result(result)
     if result.get("status") != "requires_approval":
         return result
 
@@ -591,12 +663,12 @@ def _execute_model_tool_call(call, *, turn_id: str, chat_state: ChatConfigState)
     if decision.action in {APPROVAL_DENY, APPROVAL_PROPOSE}:
         denied = _denied_tool_result(call, decision)
         denied["preview"] = result.get("preview", {})
-        print(render_tool_result(denied))
+        _print_tool_result(denied)
         return denied
     if decision.action == APPROVAL_ALLOW_SESSION:
         chat_state.approve_tool_for_session(call.name)
 
-    with status(f"正在执行 {call.name}"):
+    with _flow_status(f"正在执行 {call.name}"):
         approved = execute_tool(
             call.name,
             call.args,
@@ -604,8 +676,17 @@ def _execute_model_tool_call(call, *, turn_id: str, chat_state: ChatConfigState)
             turn_id=turn_id,
             cancel_event=FLOW_INTERRUPT_EVENT,
         )
-    print(render_tool_result(approved))
+    _print_tool_result(approved)
     return approved
+
+
+def _active_skill_names(messages: list[dict[str, object]]) -> list[str]:
+    return active_skill_names(messages)
+
+
+def _print_turn_preamble(messages: list[dict[str, object]], round_index: int) -> None:
+    report = build_turn_report(messages, round_index, queued_inputs=FLOW_INPUT_QUEUE.qsize())
+    _print_status_flow(report.render())
 
 
 def _chat_turn_with_tools(messages: list[dict[str, object]], chat_state: ChatConfigState) -> str:
@@ -619,8 +700,9 @@ def _chat_turn_with_tools(messages: list[dict[str, object]], chat_state: ChatCon
         while True:
             _show_flow_prompt()
             _handle_flow_inputs(messages, chat_state)
-            with status("正在请求模型"):
-                response = chat_completion(messages, chat_state.value, tools=tools)
+            _print_turn_preamble(messages, round_index)
+            with _flow_status("正在请求模型"):
+                response = _chat_completion_interruptible(messages, chat_state, tools=tools)
             message = extract_assistant_message(response)
             calls = requested_tool_calls(message)
             if not calls:
@@ -629,18 +711,25 @@ def _chat_turn_with_tools(messages: list[dict[str, object]], chat_state: ChatCon
                 return answer
 
             messages.append(assistant_message_for_history(message))
-            if _handle_flow_inputs(messages, chat_state):
+            content = str(message.get("content") or "").strip()
+            if content:
+                _print_assistant_flow(content)
+            if _handle_flow_inputs_before_pending_tool_calls(messages, chat_state, calls):
                 round_index += 1
                 continue
             turn_id = str(response.get("id") or f"chat-turn-{round_index}")
             interrupted = False
-            for call in calls:
+            for call_index, call in enumerate(calls):
                 FLOW_INTERRUPT_EVENT.clear()
                 _print_tool_reason(call)
                 _show_flow_prompt()
                 result = _execute_model_tool_call(call, turn_id=turn_id, chat_state=chat_state)
                 messages.append(tool_result_message_for_call(call, result))
-                interrupted = _handle_flow_inputs(messages, chat_state)
+                interrupted = _handle_flow_inputs_before_pending_tool_calls(
+                    messages,
+                    chat_state,
+                    calls[call_index + 1 :],
+                )
                 if interrupted:
                     break
             round_index += 1
@@ -656,11 +745,51 @@ def _kg_answer_turn(prompt: str, kg_mode: KGAnswerMode) -> str:
         "max_paths": kg_mode.max_paths,
         "vector_backend": kg_mode.vector_backend,
     }
-    with title_activity("running"):
-        with status("正在执行 kg_answer"):
-            result = execute_tool("kg_answer", args)
-    print(render_tool_result(result))
+    with _flow_input_session():
+        _show_flow_prompt()
+        with title_activity("running"):
+            with _flow_status("正在执行 kg_answer"):
+                result = execute_tool("kg_answer", args)
+    _print_tool_result(result)
     return str(result.get("answer") or "")
+
+
+def _select_skill_contexts_for_prompt(prompt: str) -> list[dict[str, object]]:
+    recommendations = recommend_skill_contexts(prompt, top_k=5)
+    if not recommendations:
+        return []
+    print(f"{DIM}thinking> 已为普通 prompt 找到可选 skill；选择编号注入，直接回车跳过。{RESET}")
+    for index, item in enumerate(recommendations, start=1):
+        description = _short_value(item.get("description", ""), 110)
+        print(f"  {index}. {item.get('name')}  {DIM}{description}{RESET}")
+    raw = input("选择 skill 编号（可用逗号分隔，回车跳过）：").strip()
+    if not raw:
+        return []
+    selected: list[dict[str, object]] = []
+    for part in raw.replace("，", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            index = int(part)
+        except ValueError:
+            continue
+        if 1 <= index <= len(recommendations):
+            selected.append(recommendations[index - 1])
+    return selected
+
+
+def _append_skill_context_messages(messages: list[dict[str, object]], prompt: str, selected: list[dict[str, object]]) -> None:
+    for item in selected:
+        name = str(item.get("name") or "").strip()
+        if not name:
+            continue
+        context = load_skill_context(name, task=prompt)
+        if context.get("status") != "ok":
+            print(f"skill load error: {context.get('error')}")
+            continue
+        messages.append({"role": "system", "content": render_skill_context_message(context)})
+        print(f"{DIM}thinking> 已注入 skill：{context.get('name')}。{RESET}")
 
 
 def main() -> int:
@@ -680,10 +809,12 @@ def main() -> int:
                 "请优先使用中文回答；如果用户明确使用其他语言，再切换到用户语言。"
                 "回答要简洁、可执行，不要编造不存在的命令。"
                 "不要在任何对话、代码、注释、列表或工具说明中使用 emoji。"
+                "如果任务可能受益于专门工作流，先调用 recommend_skills；需要使用某个 skill 时调用 load_skill_context 并遵循其 SKILL.md。"
+                "调用任何写入、删除、补丁、shell 执行或网络工具前，必须先用一句话说明为什么做、将影响什么。"
                 "当前交互式斜杠命令包括：/ingest、/mine、/kg、/recommend <task>、"
                 "/kg_answer on|off、/generate <cluster-id>、/verify <cluster-id/path>、/demo、/tools、/tool、/model <name>、"
                 "/talk <问题>、/image <path> <问题>、/baseurl <url>、/key <api-key>、/home、/help、/exit。"
-                "你可以通过工具调用请求 list_files、read_file、write_file、edit_file、delete_file、apply_patch、run_shell、web_search 或 web_fetch。"
+                "你可以通过工具调用请求 list_files、read_file、write_file、edit_file、delete_file、apply_patch、run_shell、web_search、web_fetch、arxiv_search、recommend_skills 或 load_skill_context。"
                 "不要自行选择知识图谱约束回答；严格 KG 回答是用户手动模式，只有用户运行 answer-kg --strict 或明确要求 KG 严格回答时才使用。"
                 "需要审批的工具会先显示预览，只有用户同意后才会执行。"
                 "脚本式入口是 diaevo，例如 diaevo demo "
@@ -693,10 +824,12 @@ def main() -> int:
     ]
     chat_state = ChatConfigState()
     kg_mode = KGAnswerMode()
+    pending_command: str | None = None
 
     while True:
         try:
-            command = read_prompt()
+            command = pending_command if pending_command is not None else read_prompt()
+            pending_command = None
         except (EOFError, KeyboardInterrupt):
             print()
             stop_title_monitor()
@@ -714,11 +847,24 @@ def main() -> int:
             continue
 
         history_len = len(messages)
+        selected_skills = _select_skill_contexts_for_prompt(command)
+        _append_skill_context_messages(messages, command, selected_skills)
         messages.append({"role": "user", "content": command})
         try:
             answer = _chat_turn_with_tools(messages, chat_state)
+        except ModelTurnInterrupted:
+            _print_status_flow("当前任务已中断")
+            del messages[history_len:]
+            drained = _drain_flow_inputs()
+            for event in drained:
+                if event.talk and event.text:
+                    _start_talk_thread(event.text, chat_state)
+                    continue
+                if event.text and pending_command is None:
+                    pending_command = event.text
+            continue
         except Exception as exc:
             print(f"chat error: {exc}")
             del messages[history_len:]
             continue
-        print_assistant(answer)
+        _print_assistant_flow(answer)

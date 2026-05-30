@@ -2,6 +2,7 @@
 
 import difflib
 import fnmatch
+import hashlib
 import html
 import json
 import os
@@ -11,20 +12,29 @@ import subprocess
 import threading
 import time
 import uuid
+import xml.etree.ElementTree as ET
+from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus, urlencode, urlparse
 from urllib.request import Request, urlopen
 
 from .knowledge_graph import answer_kg
 from .paths import DIAEVO_DIR, WORKSPACE_ROOT
+from .skill_context import load_skill_context as load_skill_context_data
+from .skill_context import recommend_skill_contexts
 
 DEFAULT_EVENT_LOG = DIAEVO_DIR / "tool_events.jsonl"
 MAX_TEXT_BYTES = 240_000
 MAX_LOG_STRING = 2_000
+REPEAT_FAILURE_HINT = (
+    "同一 run_shell 命令连续失败；请先查看 stderr/stdout，调整命令或验证思路，"
+    "不要机械重复执行。"
+)
+_LAST_FAILED_SHELL_COMMAND = ""
 
 
 class ToolError(ValueError):
@@ -246,7 +256,7 @@ def _list_files(args: dict[str, Any], approved: bool) -> dict[str, Any]:
 
 
 def _read_file(args: dict[str, Any], approved: bool) -> dict[str, Any]:
-    target = resolve_workspace_path(args.get("path"), must_exist=True)
+    target = resolve_workspace_path(_required_text(args, "path", "read_file"), must_exist=True)
     if not target.is_file():
         raise ToolError(f"path is not a file: {workspace_relative(target)}")
     offset = max(0, int(args.get("offset") or 0))
@@ -267,7 +277,10 @@ def _read_file(args: dict[str, Any], approved: bool) -> dict[str, Any]:
 
 
 def _write_file(args: dict[str, Any], approved: bool) -> dict[str, Any]:
+    _required_text(args, "path", "write_file")
     if "content" not in args:
+        raise ToolError("write_file requires content")
+    if args.get("content") is None or not str(args.get("content")).strip():
         raise ToolError("write_file requires content")
     target = resolve_workspace_path(args.get("path"))
     before = target.read_text(encoding="utf-8") if target.exists() else ""
@@ -292,7 +305,7 @@ def _write_file(args: dict[str, Any], approved: bool) -> dict[str, Any]:
 
 
 def _edit_file(args: dict[str, Any], approved: bool) -> dict[str, Any]:
-    target = resolve_workspace_path(args.get("path"), must_exist=True)
+    target = resolve_workspace_path(_required_text(args, "path", "edit_file"), must_exist=True)
     if not target.is_file():
         raise ToolError(f"path is not a file: {workspace_relative(target)}")
     old_string = str(args.get("old_string", ""))
@@ -323,7 +336,7 @@ def _edit_file(args: dict[str, Any], approved: bool) -> dict[str, Any]:
 
 
 def _delete_file(args: dict[str, Any], approved: bool) -> dict[str, Any]:
-    target = resolve_workspace_path(args.get("path"), must_exist=True)
+    target = resolve_workspace_path(_required_text(args, "path", "delete_file"), must_exist=True)
     recursive = bool(args.get("recursive", False))
     if target.is_dir() and not recursive:
         raise ToolError("delete_file requires recursive=true for directories")
@@ -423,7 +436,7 @@ def _run_shell(args: dict[str, Any], approved: bool) -> dict[str, Any]:
             except subprocess.TimeoutExpired:
                 process.kill()
                 stdout, stderr = process.communicate()
-            return {
+            result = {
                 "status": "interrupted",
                 "tool": "run_shell",
                 "command": command,
@@ -431,10 +444,11 @@ def _run_shell(args: dict[str, Any], approved: bool) -> dict[str, Any]:
                 "stdout": _truncate(stdout, 20_000),
                 "stderr": _truncate(stderr, 20_000),
             }
+            return _annotate_shell_repeat_failure(result)
         if time.monotonic() - started >= timeout:
             process.kill()
             stdout, stderr = process.communicate()
-            return {
+            result = {
                 "status": "timeout",
                 "tool": "run_shell",
                 "command": command,
@@ -442,9 +456,10 @@ def _run_shell(args: dict[str, Any], approved: bool) -> dict[str, Any]:
                 "stdout": _truncate(stdout, 20_000),
                 "stderr": _truncate(stderr, 20_000),
             }
+            return _annotate_shell_repeat_failure(result)
         time.sleep(0.05)
     stdout, stderr = process.communicate()
-    return {
+    result = {
         "status": "ok" if process.returncode == 0 else "error",
         "tool": "run_shell",
         "command": command,
@@ -452,6 +467,19 @@ def _run_shell(args: dict[str, Any], approved: bool) -> dict[str, Any]:
         "stdout": _truncate(stdout, 20_000),
         "stderr": _truncate(stderr, 20_000),
     }
+    return _annotate_shell_repeat_failure(result)
+
+
+def _annotate_shell_repeat_failure(result: dict[str, Any]) -> dict[str, Any]:
+    global _LAST_FAILED_SHELL_COMMAND
+    command = str(result.get("command") or "").strip()
+    if result.get("status") in {"error", "timeout", "interrupted"}:
+        if command and command == _LAST_FAILED_SHELL_COMMAND:
+            result["note"] = REPEAT_FAILURE_HINT
+        _LAST_FAILED_SHELL_COMMAND = command
+    elif result.get("status") == "ok":
+        _LAST_FAILED_SHELL_COMMAND = ""
+    return result
 
 
 def _fetch_url(url: str, max_bytes: int) -> dict[str, Any]:
@@ -522,6 +550,274 @@ def _web_search(args: dict[str, Any], approved: bool) -> dict[str, Any]:
     }
 
 
+ARXIV_ATOM = "{http://www.w3.org/2005/Atom}"
+ARXIV_NS = "{http://arxiv.org/schemas/atom}"
+OPENSEARCH_NS = "{http://a9.com/-/spec/opensearch/1.1/}"
+ARXIV_REQUEST_LOCK = threading.Lock()
+ARXIV_LAST_REQUEST_AT = 0.0
+ARXIV_MIN_REQUEST_INTERVAL = 3.0
+ARXIV_CACHE_TTL_SECONDS = 6 * 60 * 60
+ARXIV_LOCK_TIMEOUT_SECONDS = 90.0
+ARXIV_LOCK_STALE_SECONDS = 10 * 60
+ARXIV_STATE_PATH = DIAEVO_DIR / "arxiv_api_state.json"
+ARXIV_CACHE_DIR = DIAEVO_DIR / "arxiv_cache"
+ARXIV_LOCK_DIR = DIAEVO_DIR / "arxiv_api.lock"
+ARXIV_FIELD_PREFIXES = {
+    "all": "all",
+    "title": "ti",
+    "author": "au",
+    "abstract": "abs",
+    "category": "cat",
+}
+
+
+@contextmanager
+def _arxiv_api_file_lock() -> Any:
+    ARXIV_LOCK_DIR.parent.mkdir(parents=True, exist_ok=True)
+    started = time.monotonic()
+    while True:
+        try:
+            ARXIV_LOCK_DIR.mkdir()
+            (ARXIV_LOCK_DIR / "owner.json").write_text(
+                json.dumps({"pid": os.getpid(), "created_at": time.time()}, sort_keys=True),
+                encoding="utf-8",
+            )
+            break
+        except FileExistsError:
+            try:
+                age = time.time() - ARXIV_LOCK_DIR.stat().st_mtime
+                if age > ARXIV_LOCK_STALE_SECONDS:
+                    shutil.rmtree(ARXIV_LOCK_DIR, ignore_errors=True)
+                    continue
+            except OSError:
+                pass
+            if time.monotonic() - started >= ARXIV_LOCK_TIMEOUT_SECONDS:
+                raise ToolError("arxiv_search timed out waiting for shared API rate-limit lock")
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        shutil.rmtree(ARXIV_LOCK_DIR, ignore_errors=True)
+
+
+def _read_arxiv_state_last_request_at() -> float:
+    try:
+        state = json.loads(ARXIV_STATE_PATH.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0.0
+    try:
+        return float(state.get("last_request_at") or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
+
+
+def _write_arxiv_state_last_request_at(value: float) -> None:
+    ARXIV_STATE_PATH.parent.mkdir(parents=True, exist_ok=True)
+    tmp = ARXIV_STATE_PATH.with_name(f"{ARXIV_STATE_PATH.name}.{uuid.uuid4().hex}.tmp")
+    tmp.write_text(json.dumps({"last_request_at": value}, sort_keys=True), encoding="utf-8")
+    tmp.replace(ARXIV_STATE_PATH)
+
+
+def _arxiv_cache_path(url: str) -> Path:
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return ARXIV_CACHE_DIR / f"{digest}.json"
+
+
+def _read_arxiv_cache(url: str) -> dict[str, Any] | None:
+    path = _arxiv_cache_path(url)
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    try:
+        fetched_at = float(payload.get("fetched_at") or 0.0)
+    except (TypeError, ValueError):
+        return None
+    if time.time() - fetched_at > ARXIV_CACHE_TTL_SECONDS:
+        return None
+    content = payload.get("content")
+    if not isinstance(content, str):
+        return None
+    return {
+        "url": str(payload.get("url") or url),
+        "status_code": int(payload.get("status_code") or 200),
+        "content_type": str(payload.get("content_type") or "application/atom+xml"),
+        "truncated": bool(payload.get("truncated", False)),
+        "content": content,
+        "cache_hit": True,
+    }
+
+
+def _write_arxiv_cache(url: str, fetched: dict[str, Any]) -> None:
+    ARXIV_CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    path = _arxiv_cache_path(url)
+    tmp = path.with_name(f"{path.name}.{uuid.uuid4().hex}.tmp")
+    payload = {
+        "url": fetched.get("url") or url,
+        "status_code": fetched.get("status_code"),
+        "content_type": fetched.get("content_type"),
+        "truncated": fetched.get("truncated", False),
+        "content": fetched.get("content") or "",
+        "fetched_at": time.time(),
+    }
+    tmp.write_text(json.dumps(payload, ensure_ascii=False, sort_keys=True), encoding="utf-8")
+    tmp.replace(path)
+
+
+def _fetch_arxiv_url(url: str, max_bytes: int) -> dict[str, Any]:
+    cached = _read_arxiv_cache(url)
+    if cached is not None:
+        return cached
+
+    global ARXIV_LAST_REQUEST_AT
+    with ARXIV_REQUEST_LOCK:
+        with _arxiv_api_file_lock():
+            cached = _read_arxiv_cache(url)
+            if cached is not None:
+                return cached
+            now = time.time()
+            last_request_at = max(ARXIV_LAST_REQUEST_AT, _read_arxiv_state_last_request_at())
+            elapsed = now - last_request_at
+            if last_request_at > 0 and elapsed < ARXIV_MIN_REQUEST_INTERVAL:
+                time.sleep(ARXIV_MIN_REQUEST_INTERVAL - elapsed)
+            fetched = _fetch_url(url, max_bytes)
+            request_at = time.time()
+            ARXIV_LAST_REQUEST_AT = request_at
+            _write_arxiv_state_last_request_at(request_at)
+            _write_arxiv_cache(url, fetched)
+            return fetched
+
+
+def _clean_xml_text(value: str | None) -> str:
+    return re.sub(r"\s+", " ", value or "").strip()
+
+
+def _arxiv_atom_text(node: ET.Element, tag: str) -> str:
+    child = node.find(tag)
+    return _clean_xml_text(child.text if child is not None else "")
+
+
+def _arxiv_term(prefix: str, value: str) -> str:
+    text = value.strip()
+    if not text:
+        return ""
+    if prefix == "cat":
+        return f"cat:{text}"
+    escaped = text.replace('"', '\\"')
+    return f'{prefix}:"{escaped}"'
+
+
+def _looks_like_arxiv_query(value: str) -> bool:
+    if re.search(r"\b(all|ti|au|abs|cat|id|doi|jr|co):", value, flags=re.IGNORECASE):
+        return True
+    return bool(re.search(r"\b(AND|OR|ANDNOT)\b", value))
+
+
+def _build_arxiv_query(args: dict[str, Any]) -> str:
+    query = _required_text(args, "query", "arxiv_search")
+    search_field = str(args.get("search_field") or "all").strip().lower()
+    if search_field not in {*ARXIV_FIELD_PREFIXES, "advanced"}:
+        raise ToolError("arxiv_search search_field must be one of all, title, author, abstract, category, advanced")
+    if search_field == "advanced" or _looks_like_arxiv_query(query):
+        pieces = [query]
+    else:
+        pieces = [_arxiv_term(ARXIV_FIELD_PREFIXES[search_field], query)]
+    category = str(args.get("category") or "").strip()
+    if category:
+        pieces.append(_arxiv_term("cat", category))
+    author = str(args.get("author") or "").strip()
+    if author:
+        pieces.append(_arxiv_term("au", author))
+    return " AND ".join(piece for piece in pieces if piece)
+
+
+def _parse_arxiv_feed(text: str) -> tuple[int | None, list[dict[str, Any]]]:
+    root = ET.fromstring(text)
+    total_text = root.findtext(f"{OPENSEARCH_NS}totalResults")
+    try:
+        total_results = int(str(total_text).strip()) if total_text else None
+    except ValueError:
+        total_results = None
+    papers: list[dict[str, Any]] = []
+    for entry in root.findall(f"{ARXIV_ATOM}entry"):
+        entry_id = _arxiv_atom_text(entry, f"{ARXIV_ATOM}id")
+        links: dict[str, str] = {}
+        for link in entry.findall(f"{ARXIV_ATOM}link"):
+            href = str(link.attrib.get("href") or "")
+            title = str(link.attrib.get("title") or "")
+            rel = str(link.attrib.get("rel") or "")
+            link_type = str(link.attrib.get("type") or "")
+            if title == "pdf" or link_type == "application/pdf":
+                links["pdf_url"] = href
+            elif rel == "alternate":
+                links["abs_url"] = href
+        authors = [
+            _clean_xml_text(author.findtext(f"{ARXIV_ATOM}name"))
+            for author in entry.findall(f"{ARXIV_ATOM}author")
+        ]
+        categories = [str(item.attrib.get("term") or "") for item in entry.findall(f"{ARXIV_ATOM}category")]
+        primary = entry.find(f"{ARXIV_NS}primary_category")
+        arxiv_id = entry_id.rsplit("/abs/", 1)[-1] if "/abs/" in entry_id else entry_id
+        papers.append(
+            {
+                "arxiv_id": arxiv_id,
+                "title": _arxiv_atom_text(entry, f"{ARXIV_ATOM}title"),
+                "authors": [author for author in authors if author],
+                "published": _arxiv_atom_text(entry, f"{ARXIV_ATOM}published"),
+                "updated": _arxiv_atom_text(entry, f"{ARXIV_ATOM}updated"),
+                "summary": _arxiv_atom_text(entry, f"{ARXIV_ATOM}summary"),
+                "primary_category": str(primary.attrib.get("term") or "") if primary is not None else "",
+                "categories": [category for category in categories if category],
+                "doi": _arxiv_atom_text(entry, f"{ARXIV_NS}doi"),
+                "journal_ref": _arxiv_atom_text(entry, f"{ARXIV_NS}journal_ref"),
+                "comment": _arxiv_atom_text(entry, f"{ARXIV_NS}comment"),
+                "abs_url": links.get("abs_url") or entry_id,
+                "pdf_url": links.get("pdf_url") or (entry_id.replace("/abs/", "/pdf/") if "/abs/" in entry_id else ""),
+            }
+        )
+    return total_results, papers
+
+
+def _arxiv_search(args: dict[str, Any], approved: bool) -> dict[str, Any]:
+    search_query = _build_arxiv_query(args)
+    max_results = max(1, min(int(args.get("max_results") or 5), 25))
+    start = max(0, int(args.get("start") or 0))
+    sort_by = str(args.get("sort_by") or "relevance").strip()
+    sort_order = str(args.get("sort_order") or "descending").strip()
+    if sort_by not in {"relevance", "lastUpdatedDate", "submittedDate"}:
+        raise ToolError("arxiv_search sort_by must be relevance, lastUpdatedDate, or submittedDate")
+    if sort_order not in {"ascending", "descending"}:
+        raise ToolError("arxiv_search sort_order must be ascending or descending")
+    params = urlencode(
+        {
+            "search_query": search_query,
+            "start": start,
+            "max_results": max_results,
+            "sortBy": sort_by,
+            "sortOrder": sort_order,
+        }
+    )
+    url = f"https://export.arxiv.org/api/query?{params}"
+    fetched = _fetch_arxiv_url(url, 500_000)
+    total_results, papers = _parse_arxiv_feed(fetched["content"])
+    return {
+        "status": "ok",
+        "tool": "arxiv_search",
+        "query": args.get("query"),
+        "search_query": search_query,
+        "source": "arxiv_api",
+        "url": url,
+        "total_results": total_results,
+        "start": start,
+        "max_results": max_results,
+        "sort_by": sort_by,
+        "sort_order": sort_order,
+        "cache_hit": bool(fetched.get("cache_hit", False)),
+        "rate_limit_interval_seconds": ARXIV_MIN_REQUEST_INTERVAL,
+        "results": papers,
+    }
+
+
 def _kg_answer(args: dict[str, Any], approved: bool) -> dict[str, Any]:
     query = str(args.get("query") or "").strip()
     if not query:
@@ -548,8 +844,46 @@ def _kg_answer(args: dict[str, Any], approved: bool) -> dict[str, Any]:
     return {"status": "ok", "tool": "kg_answer", **result}
 
 
+def _recommend_skills(args: dict[str, Any], approved: bool) -> dict[str, Any]:
+    task = _required_text(args, "task", "recommend_skills")
+    top_k = max(1, min(int(args.get("top_k") or 5), 10))
+    return {"status": "ok", "tool": "recommend_skills", "recommendations": recommend_skill_contexts(task, top_k=top_k)}
+
+
+def _load_skill_context(args: dict[str, Any], approved: bool) -> dict[str, Any]:
+    name = _required_text(args, "name", "load_skill_context")
+    task = str(args.get("task") or "")
+    result = load_skill_context_data(name, task=task)
+    return {"tool": "load_skill_context", **result}
+
+
 def _schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
     return {"type": "object", "properties": properties, "required": required or [], "additionalProperties": False}
+
+
+def _required_text(args: dict[str, Any], key: str, tool_name: str) -> str:
+    value = args.get(key)
+    if value is None:
+        raise ToolError(f"{tool_name} requires {key}")
+    text = str(value)
+    if not text.strip():
+        raise ToolError(f"{tool_name} requires non-empty {key}")
+    return text
+
+
+def _validate_required_args(spec: ToolSpec, args: dict[str, Any]) -> None:
+    required = spec.input_schema.get("required") or []
+    properties = spec.input_schema.get("properties") or {}
+    for key in required:
+        if key not in args or args.get(key) is None:
+            raise ToolError(f"{spec.name} requires {key}")
+        schema = properties.get(key) if isinstance(properties, dict) else {}
+        if isinstance(schema, dict) and schema.get("type") == "string":
+            text = str(args.get(key))
+            if not text.strip():
+                if key == "content":
+                    raise ToolError(f"{spec.name} requires content")
+                raise ToolError(f"{spec.name} requires non-empty {key}")
 
 
 TOOLS: dict[str, ToolSpec] = {}
@@ -584,7 +918,7 @@ _register(
         description="Read a bounded UTF-8 view of a workspace file.",
         input_schema=_schema(
             {
-                "path": {"type": "string"},
+                "path": {"type": "string", "minLength": 1},
                 "offset": {"type": "integer", "default": 0},
                 "limit": {"type": ["integer", "null"], "default": 400},
             },
@@ -600,7 +934,10 @@ _register(
     ToolSpec(
         name="write_file",
         description="Create or overwrite a workspace file after showing a diff preview.",
-        input_schema=_schema({"path": {"type": "string"}, "content": {"type": "string"}}, ["path", "content"]),
+        input_schema=_schema(
+            {"path": {"type": "string", "minLength": 1}, "content": {"type": "string"}},
+            ["path", "content"],
+        ),
         read_only=False,
         approval_required=True,
         destructive=False,
@@ -614,8 +951,8 @@ _register(
         description="Replace an exact string in a workspace file after showing a diff preview.",
         input_schema=_schema(
             {
-                "path": {"type": "string"},
-                "old_string": {"type": "string"},
+                "path": {"type": "string", "minLength": 1},
+                "old_string": {"type": "string", "minLength": 1},
                 "new_string": {"type": "string"},
                 "replace_all": {"type": "boolean", "default": False},
             },
@@ -632,7 +969,10 @@ _register(
     ToolSpec(
         name="delete_file",
         description="Delete a workspace file or directory after approval.",
-        input_schema=_schema({"path": {"type": "string"}, "recursive": {"type": "boolean", "default": False}}, ["path"]),
+        input_schema=_schema(
+            {"path": {"type": "string", "minLength": 1}, "recursive": {"type": "boolean", "default": False}},
+            ["path"],
+        ),
         read_only=False,
         approval_required=True,
         destructive=True,
@@ -644,7 +984,7 @@ _register(
     ToolSpec(
         name="apply_patch",
         description="Apply a unified diff to workspace files after approval.",
-        input_schema=_schema({"patch": {"type": "string"}}, ["patch"]),
+        input_schema=_schema({"patch": {"type": "string", "minLength": 1}}, ["patch"]),
         read_only=False,
         approval_required=True,
         destructive=False,
@@ -656,7 +996,10 @@ _register(
     ToolSpec(
         name="run_shell",
         description="Run a local shell command in the workspace after approval.",
-        input_schema=_schema({"command": {"type": "string"}, "timeout": {"type": "integer", "default": 30}}, ["command"]),
+        input_schema=_schema(
+            {"command": {"type": "string", "minLength": 1}, "timeout": {"type": "integer", "default": 30}},
+            ["command"],
+        ),
         read_only=False,
         approval_required=True,
         destructive=False,
@@ -690,6 +1033,41 @@ _register(
 )
 _register(
     ToolSpec(
+        name="arxiv_search",
+        description=(
+            "Search arXiv papers via the official Atom API and return structured academic metadata, "
+            "including title, authors, abstract, categories, dates, abs URL, and PDF URL."
+        ),
+        input_schema=_schema(
+            {
+                "query": {"type": "string", "minLength": 1},
+                "search_field": {
+                    "type": "string",
+                    "enum": ["all", "title", "author", "abstract", "category", "advanced"],
+                    "default": "all",
+                },
+                "category": {"type": "string", "default": ""},
+                "author": {"type": "string", "default": ""},
+                "max_results": {"type": "integer", "default": 5},
+                "start": {"type": "integer", "default": 0},
+                "sort_by": {
+                    "type": "string",
+                    "enum": ["relevance", "lastUpdatedDate", "submittedDate"],
+                    "default": "relevance",
+                },
+                "sort_order": {"type": "string", "enum": ["ascending", "descending"], "default": "descending"},
+            },
+            ["query"],
+        ),
+        read_only=True,
+        approval_required=False,
+        destructive=False,
+        handler=_arxiv_search,
+        risk="network",
+    )
+)
+_register(
+    ToolSpec(
         name="kg_answer",
         description="Answer from the reviewed graph-vector KG. strict=true uses only accepted graph-vector evidence subgraphs.",
         input_schema=_schema(
@@ -711,6 +1089,40 @@ _register(
         destructive=False,
         handler=_kg_answer,
         risk="low",
+    )
+)
+_register(
+    ToolSpec(
+        name="recommend_skills",
+        description="Recommend installed or generated skills for the current user task.",
+        input_schema=_schema(
+            {
+                "task": {"type": "string", "minLength": 1},
+                "top_k": {"type": "integer", "default": 5},
+            },
+            ["task"],
+        ),
+        read_only=True,
+        approval_required=False,
+        destructive=False,
+        handler=_recommend_skills,
+    )
+)
+_register(
+    ToolSpec(
+        name="load_skill_context",
+        description="Load an installed or generated skill's SKILL.md plus task-relevant reference routing.",
+        input_schema=_schema(
+            {
+                "name": {"type": "string", "minLength": 1},
+                "task": {"type": "string", "default": ""},
+            },
+            ["name"],
+        ),
+        read_only=True,
+        approval_required=False,
+        destructive=False,
+        handler=_load_skill_context,
     )
 )
 
@@ -736,18 +1148,21 @@ def execute_tool(
     started_at = now_iso()
     event_id = uuid.uuid4().hex
     try:
+        _validate_required_args(spec, args)
         if cancel_event is not None:
             args["__cancel_event__"] = cancel_event
         result = spec.handler(args, approve)
     except Exception as exc:
         result = {"status": "error", "tool": spec.name, "error": str(exc)}
     ended_at = now_iso()
+    preview_only = result.get("status") == "requires_approval" and not approve
     event = {
         "id": event_id,
         "turn_id": turn_id or event_id,
         "tool": spec.name,
         "args": _safe_for_log(args),
         "status": result.get("status", "ok"),
+        "preview_only": preview_only,
         "approval_required": spec.approval_required,
         "approved": bool(approve),
         "read_only": spec.read_only,
@@ -758,6 +1173,8 @@ def execute_tool(
         "result": _safe_for_log(result),
     }
     _append_event(event, event_log_path)
+    if preview_only:
+        result["preview_only"] = True
     result["event_id"] = event_id
     result["event_log"] = str(Path(event_log_path) if event_log_path else DEFAULT_EVENT_LOG)
     return result

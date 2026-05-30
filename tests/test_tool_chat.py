@@ -176,6 +176,7 @@ def test_vision_config_defaults_to_glm_flash(monkeypatch) -> None:
     monkeypatch.setenv("GLM_VISION_API_KEY", "glm-test")
     monkeypatch.delenv("GLM_VISION_MODEL", raising=False)
     monkeypatch.delenv("GLM_VISION_BASE_URL", raising=False)
+    monkeypatch.setattr("diaevo.deepseek_chat.load_env", lambda *args, **kwargs: {})
 
     config = vision_config_from_env()
 

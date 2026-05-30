@@ -141,7 +141,8 @@ def load_tool_event_traces(path: str | Path | None = None) -> list[TraceRecord]:
     target = Path(path) if path else DEFAULT_TOOL_EVENTS_PATH
     if not target.exists():
         return []
-    return tool_events_to_traces(read_jsonl(target))
+    events = [event for event in read_jsonl(target) if not bool(event.get("preview_only"))]
+    return tool_events_to_traces(events)
 
 
 def load_skill_registry(path: str | Path | None = None) -> list[SkillRecord]:

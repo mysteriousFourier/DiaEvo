@@ -19,7 +19,7 @@ COMMANDS = [
     ("/verify", "验证候选技能"),
     ("/demo", "运行完整 MVP 演示"),
     ("/feedback", "将工具事件回灌为轨迹"),
-    ("/tools", "列出本地工具 schema"),
+    ("/tools", "列出本地工具说明"),
     ("/tool", "用 JSON 参数运行本地工具"),
     ("/talk", "不中断主会话快速提问"),
     ("/model", "设置本项目的 DEEPSEEK_MODEL"),
