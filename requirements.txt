@@ -1,16 +1,22 @@
-# MVP runtime is standard-library only.
-# Optional terminal UI enhancement:
+# Core algorithms are standard-library first.
+# Default terminal UI runtime:
 rich>=13.7
 
 # Test runner:
 pytest>=8.0
 
-# Future extension points from the project plan:
+# Optional dense KG retrieval backend:
+sentence-transformers  # required for answer-kg --vector-backend dense
+
+# Optional GEPA/LiteLLM stack for non-dry-run evaluate-gepa:
+# gepa
+# litellm
+
+# Future extension points from the project plan / pyproject full extra:
 # numpy
 # pandas
 # scikit-learn
 # networkx
 # mlxtend
-sentence-transformers  # required for answer-kg --vector-backend dense
 # textual
 # pyyaml
