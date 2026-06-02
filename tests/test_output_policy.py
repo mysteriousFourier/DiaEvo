@@ -151,6 +151,27 @@ def test_flow_input_prompt_can_stay_visible(monkeypatch) -> None:
     assert not any("next" in item for item in writes)
 
 
+def test_flow_input_stop_erases_visible_prompt(monkeypatch) -> None:
+    controller = FlowInputController()
+    writes = []
+
+    monkeypatch.setattr("ui.flow_input.msvcrt", object())
+    monkeypatch.setattr("ui.flow_input.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("ui.flow_input.sys.stdout.write", lambda text: writes.append(text))
+    monkeypatch.setattr("ui.flow_input.sys.stdout.flush", lambda: None)
+    monkeypatch.setattr("ui.prompt_bar._term_width", lambda: 80)
+
+    controller.show_prompt()
+    rendered_lines = controller._rendered_lines
+    controller.stop(enabled=True)
+
+    assert rendered_lines > 1
+    assert "\r\033[2K" in writes
+    assert not controller.prompt_visible.is_set()
+    assert not controller.status_visible.is_set()
+    assert controller._rendered_lines == 0
+
+
 def test_flow_input_output_clears_prompt_and_status(monkeypatch) -> None:
     controller = FlowInputController()
     writes = []
@@ -199,6 +220,28 @@ def test_flow_input_enter_selects_current_command_menu_item() -> None:
     events = controller.drain()
 
     assert events == [FlowInputEvent("/exit", interrupt=True)]
+
+
+def test_flow_input_talk_enter_keeps_prompt_editable(monkeypatch) -> None:
+    controller = FlowInputController()
+    writes = []
+
+    monkeypatch.setattr("ui.flow_input.msvcrt", object())
+    monkeypatch.setattr("ui.flow_input.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("ui.flow_input.sys.stdout.write", lambda text: writes.append(text))
+    monkeypatch.setattr("ui.flow_input.sys.stdout.flush", lambda: None)
+    monkeypatch.setattr("ui.prompt_bar._term_width", lambda: 80)
+
+    controller.show_prompt()
+    controller.draft = "/talk 解释当前状态"
+    controller._queue_enter()
+    events = controller.drain()
+
+    assert events == [FlowInputEvent("解释当前状态", interrupt=False, talk=True)]
+    assert controller.draft == ""
+    assert controller.prompt_visible.is_set()
+    assert controller._rendered_lines > 0
+    assert "".join(writes).count("❯ ") >= 2
 
 
 def test_flow_input_tab_completes_current_command_menu_item(monkeypatch) -> None:

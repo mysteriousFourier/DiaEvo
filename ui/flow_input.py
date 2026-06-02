@@ -68,15 +68,17 @@ class FlowInputController:
     def stop(self, enabled: bool) -> None:
         if not enabled:
             return
-        self.active.clear()
-        self.interrupt_event.clear()
-        self.force_terminate_event.clear()
-        self.prompt_visible.clear()
-        self.status_visible.clear()
-        self.draft = ""
-        self.selected_index = 0
-        self._rendered_lines = 0
-        self._rendered_value = ""
+        with self._render_lock:
+            self.active.clear()
+            self.begin_output()
+            self.interrupt_event.clear()
+            self.force_terminate_event.clear()
+            self.prompt_visible.clear()
+            self.status_visible.clear()
+            self.draft = ""
+            self.selected_index = 0
+            self._rendered_lines = 0
+            self._rendered_value = ""
 
     @contextmanager
     def session(self) -> Iterator[None]:
@@ -250,11 +252,14 @@ class FlowInputController:
         text = _submit_value(self.draft, self.selected_index).strip()
         if not text:
             return
-        self.queue.put(_event_from_text(text, interrupt=True))
+        event = _event_from_text(text, interrupt=True)
+        self.queue.put(event)
         with self._render_lock:
             self.draft = ""
             self.selected_index = 0
             self.begin_output()
+            if event.talk:
+                self.show_prompt(force=True)
 
     def _queue_interrupt(self, *, hard: bool) -> None:
         payload = self.draft.strip()
@@ -316,4 +321,4 @@ class FlowInputController:
 def _event_from_text(text: str, *, interrupt: bool, hard_interrupt: bool = False) -> FlowInputEvent:
     talk = text.lower().startswith("/talk ")
     payload = text[6:].strip() if talk else text
-    return FlowInputEvent(payload, interrupt=interrupt, talk=talk, hard_interrupt=hard_interrupt)
+    return FlowInputEvent(payload, interrupt=False if talk else interrupt, talk=talk, hard_interrupt=hard_interrupt)
