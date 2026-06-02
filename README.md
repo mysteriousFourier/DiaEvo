@@ -1,6 +1,6 @@
 # DiaEvo
 
-DiaEvo 是一个本地 CLI 工作台，用于从 Agent 的真实任务轨迹中挖掘、推荐、生成、验证和演化可复用技能。
+DiaEvo 是一个本地 CLI 工作台，用于从 Agent 的真实任务轨迹中挖掘、推荐、生成、验证和演化可复用技能。skill进化参考了[Hermes-agent](https://github.com/NousResearch/hermes-agent)，工作流与外观参考了[codex](https://github.com/openai/codex)，提高缓存命中率参考了[reasonix](https://github.com/esengine/deepseek-reasonix)
 
 它不是单独的 GEPA 实验脚本，也不是单纯的 `SKILL.md` 生成器。当前产品形态是 `diaevo`：一个同时支持交互式终端和脚本化命令的工具，包含仪表盘、斜杠命令、DeepSeek 聊天、OpenAI 兼容工具调用、需审批的本地工具、轨迹捕获、技能挖掘、候选生成、验证、晋升审核、评估和安全沙盒。
 
