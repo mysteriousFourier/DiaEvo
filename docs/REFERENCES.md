@@ -1,4 +1,4 @@
-# 参考文献
+# 参考
 
 [1] HAN Jiawei, PEI Jian, TONG Hanghang. Data Mining: Concepts and Techniques[M]. 4th ed. Cambridge: Morgan Kaufmann/Elsevier, 2022.
 
