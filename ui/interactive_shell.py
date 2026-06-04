@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import getpass
+import asyncio
 import multiprocessing
 import queue
 import shlex
@@ -23,6 +24,13 @@ from diaevo.env import write_env_value
 from diaevo.skill_context import load_skill_context, recommend_skill_contexts, render_skill_context_message
 from diaevo.tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
 from diaevo.tool_layer import REPEAT_FAILURE_HINT
+from diaevo.qq_bridge import (
+    QQBridgeConfig,
+    QQBridgeError,
+    QQInteractiveBridge,
+    config_from_env_vars as qq_config_from_env,
+    run_interactive_bridge,
+)
 from diaevo.tool_chat import (
     RequestedToolCall,
     assistant_message_for_history,
@@ -36,7 +44,7 @@ from .action_report import active_skill_names, build_turn_report, short_value, t
 from .cli_style import DIM, RESET, maybe_show_trust_dialog
 from .flow_input import FlowInputController, FlowInputEvent, msvcrt
 from .output_policy import print_assistant, print_status
-from .prompt_bar import is_command_input, read_prompt
+from .prompt_bar import _erase_lines, is_command_input, read_prompt
 from .progress import status
 from .terminal_home import render_plain
 from .tool_render import render_tool_result
@@ -51,9 +59,11 @@ HELP_TEXT = """
   /mine                    运行挖掘流程
   /kg                      打开可编辑知识图谱工作台
   /kg_answer on|off        开关严格 KG 图向量检索回答模式
+  /skill                   选择并加载 skill，菜单显示 name 和简述
   /recommend <任务>        按任务推荐技能
   /generate <cluster-id>   生成候选 SKILL.md
   /verify <cluster-id/path> 验证候选技能
+  /self-evolve [cluster]    直接运行本地自进化；默认选择最高优先级簇
   /demo                    运行完整 MVP 演示
   /feedback                将工具事件回灌为处理后的轨迹
   /tools                   列出本地工具 schema
@@ -86,6 +96,8 @@ FLOW_FORCE_TERMINATE_EVENT = FLOW_INPUT.force_terminate_event
 FLOW_PROMPT_VISIBLE = FLOW_INPUT.prompt_visible
 _TALK_THREADS: set[threading.Thread] = set()
 _TALK_THREADS_LOCK = threading.Lock()
+QQ_INTERACTIVE_BRIDGE: QQInteractiveBridge | None = None
+QQ_INTERACTIVE_THREAD: threading.Thread | None = None
 
 
 @dataclass(frozen=True)
@@ -136,18 +148,46 @@ def _ensure_vision_config(chat_state: ChatConfigState, *, max_tokens: int = 4096
     return chat_state.vision_value
 
 
-def _talk_once(prompt: str, chat_state: ChatConfigState, *, show_status: bool = True) -> str:
+def _message_text_for_talk(message: dict[str, object]) -> str:
+    role = str(message.get("role") or "message")
+    content = message.get("content")
+    if content is None:
+        content = "[tool call or empty content]"
+    text = " ".join(str(content).split())
+    if len(text) > 600:
+        text = text[:600].rstrip() + "... <truncated>"
+    return f"{role}: {text}"
+
+
+def _talk_context_snapshot(messages: list[dict[str, object]] | None, *, max_messages: int = 8) -> str:
+    if not messages:
+        return ""
+    items = [_message_text_for_talk(item) for item in messages[-max_messages:] if isinstance(item, dict)]
+    return "\n".join(item for item in items if item).strip()
+
+
+def _talk_once(
+    prompt: str,
+    chat_state: ChatConfigState,
+    *,
+    show_status: bool = True,
+    context: str = "",
+) -> str:
     config = _ensure_chat_config(chat_state, max_tokens=2048, no_thinking=True)
+    context_text = context.strip()
     messages = [
         {
             "role": "system",
             "content": (
                 "你是 DiaEvo 的旁路问答助手。回答当前问题，不要调用工具，不要改变主会话计划；"
-                "如果问题需要主会话上下文缺失，直接说明缺少哪些信息。"
+                "你可以使用随请求提供的主会话上下文快照，但不要把旁路回答写入主会话；"
+                "如果问题需要的上下文仍缺失，直接说明缺少哪些信息。"
             ),
         },
-        {"role": "user", "content": prompt},
     ]
+    if context_text:
+        messages.append({"role": "system", "content": f"主会话上下文快照：\n{context_text}"})
+    messages.append({"role": "user", "content": prompt})
     if show_status:
         with title_activity("running"):
             with _flow_status("正在旁路提问"):
@@ -157,21 +197,26 @@ def _talk_once(prompt: str, chat_state: ChatConfigState, *, show_status: bool = 
     return extract_assistant_text(response)
 
 
-def _start_talk_thread(prompt: str, chat_state: ChatConfigState) -> threading.Thread | None:
+def _start_talk_thread(
+    prompt: str,
+    chat_state: ChatConfigState,
+    *,
+    context: str = "",
+) -> threading.Thread | None:
     prompt = prompt.strip()
     if not prompt:
         return None
 
-    thread = threading.Thread(target=_talk_thread_worker, args=(prompt, chat_state), daemon=True)
+    thread = threading.Thread(target=_talk_thread_worker, args=(prompt, chat_state, context), daemon=True)
     with _TALK_THREADS_LOCK:
         _TALK_THREADS.add(thread)
     thread.start()
     return thread
 
 
-def _talk_thread_worker(prompt: str, chat_state: ChatConfigState) -> None:
+def _talk_thread_worker(prompt: str, chat_state: ChatConfigState, context: str = "") -> None:
     try:
-        answer = _talk_once(prompt, chat_state, show_status=False)
+        answer = _talk_once(prompt, chat_state, show_status=False, context=context)
     except Exception as exc:
         answer = f"旁路提问失败：{exc}"
     try:
@@ -210,7 +255,9 @@ def _print_image_answer(answer: str) -> None:
 
 def _print_tool_result(result: dict[str, object]) -> None:
     _begin_flow_output()
-    print(render_tool_result(result))
+    rendered = render_tool_result(result)
+    print(rendered)
+    _qq_send(rendered)
     _show_flow_prompt(force=True)
 
 
@@ -221,13 +268,83 @@ def _begin_flow_output() -> None:
 def _print_assistant_flow(text: str) -> None:
     _begin_flow_output()
     print_assistant(text)
+    _qq_send(text)
     _show_flow_prompt(force=True)
 
 
 def _print_status_flow(text: str) -> None:
     _begin_flow_output()
     print_status(text)
+    _qq_send(text)
     _show_flow_prompt(force=True)
+
+
+def _qq_send(text: str) -> None:
+    bridge = QQ_INTERACTIVE_BRIDGE
+    if bridge is None:
+        return
+    try:
+        bridge.send_to_last_user(text)
+    except Exception:
+        return
+
+
+def _enqueue_qq_text(text: str) -> None:
+    FLOW_INPUT.queue_external_text(text, source="QQ")
+
+
+def _start_qq_interactive_bridge() -> None:
+    global QQ_INTERACTIVE_BRIDGE, QQ_INTERACTIVE_THREAD
+    if QQ_INTERACTIVE_THREAD is not None and QQ_INTERACTIVE_THREAD.is_alive():
+        return
+    try:
+        config = qq_config_from_env()
+    except Exception as exc:
+        print(f"{DIM}QQ 远程配置读取失败：{exc}{RESET}")
+        return
+    if not config.enabled:
+        return
+    QQ_INTERACTIVE_BRIDGE = QQInteractiveBridge(config, enqueue_text=_enqueue_qq_text)
+
+    def worker() -> None:
+        try:
+            asyncio.run(run_interactive_bridge(config, QQ_INTERACTIVE_BRIDGE))
+        except QQBridgeError as exc:
+            _print_status_flow(f"QQ 远程入口启动失败：{exc}")
+        except Exception as exc:
+            _print_status_flow(f"QQ 远程入口退出：{exc}")
+
+    QQ_INTERACTIVE_THREAD = threading.Thread(target=worker, name="diaevo-qq-bridge", daemon=True)
+    QQ_INTERACTIVE_THREAD.start()
+    print(f"{DIM}QQ 远程入口已启用：{', '.join(sorted(config.allowed_users))}{RESET}")
+
+
+def _event_to_command(event: FlowInputEvent, chat_state: ChatConfigState) -> str:
+    if event.talk:
+        if event.text:
+            _start_talk_thread(event.text, chat_state)
+        return ""
+    return event.text.strip()
+
+
+def _read_next_command(chat_state: ChatConfigState) -> str:
+    listener_enabled = _start_flow_input_listener()
+    if listener_enabled:
+        _show_flow_prompt(force=True)
+        while True:
+            try:
+                event = FLOW_INPUT_QUEUE.get(timeout=0.1)
+            except queue.Empty:
+                continue
+            with FLOW_INPUT._render_lock:
+                if FLOW_INPUT.queued_preview:
+                    FLOW_INPUT.queued_preview = FLOW_INPUT.queued_preview[1:]
+            command = _event_to_command(event, chat_state)
+            if command:
+                _begin_flow_output()
+                return command
+        # unreachable
+    return read_prompt()
 
 
 @contextmanager
@@ -269,6 +386,8 @@ def _flow_input_session() -> object:
 
 
 def _show_flow_prompt(label: str = "next", *, force: bool = False) -> None:
+    if not FLOW_INPUT_ACTIVE.is_set():
+        return
     shown_label = "" if label == "next" else label
     FLOW_INPUT.show_prompt(shown_label, force=force)
 
@@ -283,8 +402,19 @@ def _drain_flow_inputs() -> list[FlowInputEvent]:
     return FLOW_INPUT.drain()
 
 
+def _start_contextual_talk_thread(
+    prompt: str,
+    chat_state: ChatConfigState,
+    messages: list[dict[str, object]] | None,
+) -> threading.Thread | None:
+    context = _talk_context_snapshot(messages)
+    if context:
+        return _start_talk_thread(prompt, chat_state, context=context)
+    return _start_talk_thread(prompt, chat_state)
+
+
 def _handle_flow_inputs(messages: list[dict[str, object]], chat_state: ChatConfigState) -> bool:
-    return FLOW_INPUT.handle_queued(messages, lambda text: _start_talk_thread(text, chat_state))
+    return FLOW_INPUT.handle_queued(messages, lambda text: _start_contextual_talk_thread(text, chat_state, messages))
 
 
 def _interrupted_tool_result(call: RequestedToolCall) -> dict[str, object]:
@@ -312,7 +442,7 @@ def _handle_flow_inputs_before_pending_tool_calls(
     for event in events:
         if event.talk:
             if event.text:
-                _start_talk_thread(event.text, chat_state)
+                _start_contextual_talk_thread(event.text, chat_state, messages)
             continue
         if event.hard_interrupt and not event.text:
             interrupted = True
@@ -342,16 +472,35 @@ def _tool_reason(call: RequestedToolCall) -> str:
 
 
 def _print_tool_reason(call: RequestedToolCall) -> None:
-    _print_status_flow(f"工具  {_tool_reason(call)}")
+    _print_status_flow(f"行动  调用 {call.name}：{_tool_reason(call)}")
 
 
 def _run(argv: list[str]) -> None:
     label = argv[0] if argv else "command"
+    cli_argv = ["--plain", *argv] if argv and argv[0] not in {"--plain", "--json"} else argv
+    output = ""
+    error_output = ""
     with _flow_input_session():
         _show_flow_prompt()
         with title_activity("running"):
             with _flow_status(f"正在运行 {label}"):
-                code = cli_main(argv)
+                import contextlib
+                import io
+
+                stdout = io.StringIO()
+                stderr = io.StringIO()
+                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                    code = cli_main(cli_argv)
+                output = stdout.getvalue().strip()
+                error_output = stderr.getvalue().strip()
+    if output:
+        _begin_flow_output()
+        print(output)
+        _qq_send(output)
+    if error_output:
+        _begin_flow_output()
+        print(error_output, file=sys.stderr)
+        _qq_send(error_output)
     if code:
         _print_status_flow(f"命令退出，状态码：{code}")
 
@@ -385,7 +534,7 @@ def _chat_completion_interruptible(
     process.start()
     try:
         while process.is_alive():
-            FLOW_INPUT.handle_talk_queued(lambda text: _start_talk_thread(text, chat_state))
+            FLOW_INPUT.handle_talk_queued(lambda text: _start_contextual_talk_thread(text, chat_state, messages))
             if FLOW_FORCE_TERMINATE_EVENT.is_set():
                 process.terminate()
                 process.join(timeout=2)
@@ -455,6 +604,8 @@ def _dispatch_command(
         "recommend": lambda args: ["recommend", "--task", " ".join(args) if args else DEFAULT_RECOMMEND_TASK],
         "generate": lambda args: ["generate", "--cluster-id", args[0] if args else "C03"],
         "verify": lambda args: ["verify", "--skill", args[0] if args else "outputs/candidate_skills/C03"],
+        "self-evolve": lambda args: ["self-evolve", *args],
+        "self_evolve": lambda args: ["self-evolve", *args],
         "demo": lambda args: ["demo", *args],
         "feedback": lambda args: ["feedback", *args],
         "chat": lambda args: ["chat-test", "--interactive", *args],
@@ -517,12 +668,29 @@ def _dispatch_command(
             return True
         print("usage: /kg_answer on|off|status")
         return True
+    if name == "skill":
+        skill_name = " ".join(rest).strip()
+        if not skill_name:
+            print("usage: /skill <skill-name>")
+            return True
+        context = load_skill_context(skill_name)
+        if context.get("status") != "ok":
+            print(f"skill load error: {context.get('error')}")
+            return True
+        if messages is not None:
+            messages.append({"role": "system", "content": render_skill_context_message(context)})
+            message = f"{DIM}思考  已选择 skill：{context.get('name')}。{RESET}"
+            print(message)
+            _qq_send(f"已选择 skill：{context.get('name')}")
+            return True
+        print(f"{context.get('name')}\n{context.get('description')}\n{context.get('skill_file')}")
+        return True
     if name == "talk":
         prompt = " ".join(rest).strip()
         if not prompt:
             print("usage: /talk <问题>")
             return True
-        _start_talk_thread(prompt, chat_state)
+        _start_contextual_talk_thread(prompt, chat_state, messages)
         return True
     if name == "image":
         if len(rest) < 2:
@@ -565,40 +733,162 @@ def _dispatch_command(
     return True
 
 
-def _read_approval_choice() -> str:
-    prompt = "选择 [1 Yes / 2 Yes, don't ask again / 3 No / Tab propose different]: "
+def _read_transient_choice(
+    prompt: str,
+    *,
+    valid_chars: set[str],
+    default_on_enter: str = "",
+    send_to_qq: bool = True,
+) -> str:
+    if send_to_qq:
+        _qq_send(_plain_transient_prompt(prompt))
     if msvcrt is None or not sys.stdin.isatty():
         return input(prompt)
 
     with _pause_flow_input():
         sys.stdout.write(prompt)
         sys.stdout.flush()
+        rendered_lines = prompt.count("\n") + 1
         while True:
+            queued = _read_qq_transient_text()
+            if queued:
+                char = _transient_choice_from_text(queued, default_on_enter=default_on_enter)
+                if char in valid_chars:
+                    _erase_lines(rendered_lines)
+                    sys.stdout.flush()
+                    return char
+            if not msvcrt.kbhit():
+                time.sleep(0.05)
+                continue
             char = msvcrt.getwch()
             if char == "\003":
                 raise KeyboardInterrupt
             if char in {"\x00", "\xe0"}:
                 msvcrt.getwch()
                 continue
-            if char == "\r":
-                char = "3"
-            if char in {"\t", "1", "2", "3", "4", "y", "Y", "a", "A", "n", "N", "p", "P"}:
-                shown = "Tab" if char == "\t" else char
-                sys.stdout.write(f"{shown}\n")
+            if char in {"\r", "\n"} and default_on_enter:
+                char = default_on_enter
+            if char in valid_chars:
+                _erase_lines(rendered_lines)
                 sys.stdout.flush()
                 return char
 
 
+def _read_transient_text(prompt: str, *, send_to_qq: bool = True) -> str:
+    if send_to_qq:
+        _qq_send(_plain_transient_prompt(prompt))
+    if msvcrt is None or not sys.stdin.isatty():
+        return input(prompt)
+
+    with _pause_flow_input():
+        sys.stdout.write(prompt)
+        sys.stdout.flush()
+        rendered_lines = prompt.count("\n") + 1
+        value = ""
+        while True:
+            queued = _read_qq_transient_text()
+            if queued:
+                _erase_lines(rendered_lines)
+                sys.stdout.flush()
+                return queued
+            if not msvcrt.kbhit():
+                time.sleep(0.05)
+                continue
+            char = msvcrt.getwch()
+            if char == "\003":
+                raise KeyboardInterrupt
+            if char in {"\x00", "\xe0"}:
+                msvcrt.getwch()
+                continue
+            if char in {"\r", "\n"}:
+                _erase_lines(rendered_lines)
+                sys.stdout.flush()
+                return value
+            if char == "\b":
+                if value:
+                    value = value[:-1]
+                    sys.stdout.write("\b \b")
+                    sys.stdout.flush()
+                continue
+            if char.isprintable():
+                value += char
+                sys.stdout.write(char)
+                sys.stdout.flush()
+
+
+def _read_qq_transient_text() -> str:
+    with FLOW_INPUT_QUEUE.mutex:
+        if not FLOW_INPUT_QUEUE.queue:
+            return ""
+        event = FLOW_INPUT_QUEUE.queue.popleft()
+        if FLOW_INPUT.queued_preview:
+            FLOW_INPUT.queued_preview = FLOW_INPUT.queued_preview[1:]
+    if event.talk:
+        if event.text:
+            _start_talk_thread(event.text, ChatConfigState())
+        return ""
+    return event.text.strip()
+
+
+def _transient_choice_from_text(text: str, *, default_on_enter: str) -> str:
+    normalized = text.strip().lower()
+    if not normalized:
+        return default_on_enter
+    if normalized.startswith("/approve"):
+        return "1"
+    if normalized.startswith("/deny"):
+        return "3"
+    if normalized in {"approve", "allow", "yes", "y", "确认", "同意", "允许"}:
+        return "1"
+    if normalized in {"session", "always", "本轮", "一直允许"}:
+        return "2"
+    if normalized in {"deny", "no", "n", "拒绝"}:
+        return "3"
+    return normalized[0]
+
+
+def _plain_transient_prompt(prompt: str) -> str:
+    clean = prompt.replace(DIM, "").replace(RESET, "")
+    return "\n".join(line.rstrip() for line in clean.splitlines()).strip()
+
+
+def _read_approval_choice() -> str:
+    prompt = "选择  1 允许一次 / 2 本轮不再询问 / 3 拒绝 / Tab 换方案："
+    return _read_transient_choice(
+        prompt,
+        valid_chars={"\t", "1", "2", "3", "4", "y", "Y", "a", "A", "n", "N", "p", "P"},
+        default_on_enter="3",
+    )
+
+
 def _approval_prompt(tool_name: str) -> ApprovalDecision:
-    FLOW_PROMPT_VISIBLE.clear()
+    FLOW_INPUT.begin_output()
     set_title_state("confirmation")
     try:
-        print(f"批准执行 {tool_name}？")
-        print("  1. Yes")
-        print(f"  2. Yes, don't ask again for {tool_name} in this session")
-        print("  3. No")
-        print("  Tab. No, propose a different approach")
-        raw_answer = _read_approval_choice()
+        if msvcrt is not None and sys.stdin.isatty():
+            approval_text = (
+                f"确认  {tool_name} 需要授权\n"
+                "1 允许一次\n"
+                "2 本轮不再询问这个工具\n"
+                "3 拒绝\n"
+                "回复数字即可；也可回复 /approve 或 /deny。"
+            )
+            raw_answer = _read_transient_choice(
+                approval_text + "\n选择：",
+                valid_chars={"\t", "1", "2", "3", "4", "y", "Y", "a", "A", "n", "N", "p", "P"},
+                default_on_enter="3",
+            )
+        else:
+            approval_text = (
+                f"确认  {tool_name} 需要授权\n"
+                "1 允许一次\n"
+                "2 本轮不再询问这个工具\n"
+                "3 拒绝\n"
+                "Tab 让模型换方案"
+            )
+            print(approval_text)
+            _qq_send(approval_text)
+            raw_answer = _read_approval_choice()
         answer = raw_answer.lower() if raw_answer == "\t" else raw_answer.strip().lower()
 
         if answer in {"1", "y", "yes"}:
@@ -606,7 +896,7 @@ def _approval_prompt(tool_name: str) -> ApprovalDecision:
         if answer in {"2", "a", "always", "session", "yes-session", "yes dont ask again", "yes,don't ask again"}:
             return ApprovalDecision(APPROVAL_ALLOW_SESSION)
         if answer in {"\t", "4", "p", "propose", "different", "tab"}:
-            feedback = input("告诉模型需要改成什么方案：").strip()
+            feedback = _read_transient_text("换成什么方案：", send_to_qq=True).strip()
             return ApprovalDecision(APPROVAL_PROPOSE, feedback=feedback)
         return ApprovalDecision(APPROVAL_DENY)
     finally:
@@ -614,9 +904,9 @@ def _approval_prompt(tool_name: str) -> ApprovalDecision:
 
 
 def _denied_tool_result(call, decision: ApprovalDecision) -> dict[str, object]:
-    message = "User denied approval for this tool call."
+    message = "用户拒绝了这次工具调用。"
     if decision.action == APPROVAL_PROPOSE and decision.feedback:
-        message = f"User denied approval and proposed a different approach: {decision.feedback}"
+        message = f"用户拒绝了这次工具调用，并要求换方案：{decision.feedback}"
     result: dict[str, object] = {
         "status": "denied",
         "tool": call.name,
@@ -758,11 +1048,17 @@ def _select_skill_contexts_for_prompt(prompt: str) -> list[dict[str, object]]:
     recommendations = recommend_skill_contexts(prompt, top_k=5)
     if not recommendations:
         return []
-    print(f"{DIM}thinking> 已为普通 prompt 找到可选 skill；选择编号注入，直接回车跳过。{RESET}")
+    lines = [f"{DIM}思考  找到可选 skill；输入编号注入，直接回车跳过。{RESET}"]
     for index, item in enumerate(recommendations, start=1):
         description = _short_value(item.get("description", ""), 110)
-        print(f"  {index}. {item.get('name')}  {DIM}{description}{RESET}")
-    raw = input("选择 skill 编号（可用逗号分隔，回车跳过）：").strip()
+        lines.append(f"  {index}. {item.get('name')}  {DIM}{description}{RESET}")
+    lines.append("选择 skill 编号（可用逗号分隔，回车跳过）：")
+    rendered = "\n".join(lines)
+    if msvcrt is not None and sys.stdin.isatty():
+        raw = _read_transient_text(rendered).strip()
+    else:
+        print("\n".join(lines[:-1]))
+        raw = input(lines[-1]).strip()
     if not raw:
         return []
     selected: list[dict[str, object]] = []
@@ -789,7 +1085,7 @@ def _append_skill_context_messages(messages: list[dict[str, object]], prompt: st
             print(f"skill load error: {context.get('error')}")
             continue
         messages.append({"role": "system", "content": render_skill_context_message(context)})
-        print(f"{DIM}thinking> 已注入 skill：{context.get('name')}。{RESET}")
+        print(f"{DIM}思考  已注入 skill：{context.get('name')}。{RESET}")
 
 
 def main() -> int:
@@ -800,6 +1096,7 @@ def main() -> int:
 
     print(render_plain())
     print(HOME_PROMPT_GAP, end="")
+    _start_qq_interactive_bridge()
     messages = [
         {
             "role": "system",
@@ -811,7 +1108,7 @@ def main() -> int:
                 "不要在任何对话、代码、注释、列表或工具说明中使用 emoji。"
                 "如果任务可能受益于专门工作流，先调用 recommend_skills；需要使用某个 skill 时调用 load_skill_context 并遵循其 SKILL.md。"
                 "调用任何写入、删除、补丁、shell 执行或网络工具前，必须先用一句话说明为什么做、将影响什么。"
-                "当前交互式斜杠命令包括：/ingest、/mine、/kg、/recommend <task>、"
+                "当前交互式斜杠命令包括：/ingest、/mine、/kg、/skill、/recommend <task>、"
                 "/kg_answer on|off、/generate <cluster-id>、/verify <cluster-id/path>、/demo、/tools、/tool、/model <name>、"
                 "/talk <问题>、/image <path> <问题>、/baseurl <url>、/key <api-key>、/home、/help、/exit。"
                 "你可以通过工具调用请求 list_files、read_file、write_file、edit_file、delete_file、apply_patch、run_shell、web_search、web_fetch、arxiv_search、recommend_skills 或 load_skill_context。"
@@ -854,11 +1151,12 @@ def main() -> int:
             answer = _chat_turn_with_tools(messages, chat_state)
         except ModelTurnInterrupted:
             _print_status_flow("当前任务已中断")
+            interrupted_talk_context = _talk_context_snapshot(messages)
             del messages[history_len:]
             drained = _drain_flow_inputs()
             for event in drained:
                 if event.talk and event.text:
-                    _start_talk_thread(event.text, chat_state)
+                    _start_talk_thread(event.text, chat_state, context=interrupted_talk_context)
                     continue
                 if event.text and pending_command is None:
                     pending_command = event.text

@@ -57,6 +57,67 @@ def _numbered(values: list[str], start: int = 1) -> list[str]:
     return [f"{index}. {value}" for index, value in enumerate(values, start=start)]
 
 
+def generation_diagnostic(cluster: dict[str, Any]) -> dict[str, Any]:
+    source_counts = cluster.get("source_counts", {})
+    if not isinstance(source_counts, dict):
+        source_counts = {}
+    trace_count = int(cluster.get("size") or 0)
+    tool_event_count = int(source_counts.get("tool_event") or 0)
+    representative = str(cluster.get("representative_task") or "")
+    commands = _as_strings(cluster.get("commands"))
+    files = _as_strings(cluster.get("file_extensions"))
+    top_tools = _as_strings(cluster.get("top_tools"))
+    top_terms = _as_strings(cluster.get("top_terms"))
+    is_tool_event_only = bool(trace_count) and tool_event_count >= trace_count
+    looks_like_tool_event = representative.lower().startswith("tool event ")
+    has_task_context = bool(files or commands) or not looks_like_tool_event
+    noisy_terms = {
+        "event",
+        "feedback",
+        "tool",
+        "tool-event",
+        "tool_event",
+    }
+    meaningful_terms = [
+        term
+        for term in top_terms
+        if term.lower() not in noisy_terms and not term.startswith("#")
+    ]
+    if is_tool_event_only and looks_like_tool_event and not has_task_context:
+        return {
+            "eligible": False,
+            "reason": "tool_event_only_cluster",
+            "message": (
+                "该簇只包含工具事件日志，代表任务不是用户任务；"
+                "直接生成 skill 会得到空泛的工具调用说明。请先运行 /mine 处理真实任务轨迹，"
+                "或选择包含用户任务、文件/命令上下文的簇。"
+            ),
+            "source_counts": source_counts,
+            "representative_task": representative,
+            "top_tools": top_tools,
+            "meaningful_terms": meaningful_terms,
+        }
+    if len(meaningful_terms) < 2 and not files:
+        return {
+            "eligible": False,
+            "reason": "insufficient_task_signals",
+            "message": "该簇缺少足够的任务关键词和文件上下文，暂不适合生成可复用 skill。",
+            "source_counts": source_counts,
+            "representative_task": representative,
+            "top_tools": top_tools,
+            "meaningful_terms": meaningful_terms,
+        }
+    return {
+        "eligible": True,
+        "reason": "ok",
+        "message": "cluster has enough task context for candidate skill generation",
+        "source_counts": source_counts,
+        "representative_task": representative,
+        "top_tools": top_tools,
+        "meaningful_terms": meaningful_terms,
+    }
+
+
 def _explanation_text(cluster: dict[str, Any]) -> list[str]:
     lines: list[str] = []
     explanations = cluster.get("explanations", [])
@@ -284,6 +345,16 @@ def generate_skill(cluster_id: str, output_dir: str | Path | None = None, *, wit
     ensure_project_dirs()
     report = read_json(REPORTS_DIR / "mining_report.json", default={}) or {}
     cluster = _find_cluster(cluster_id, report)
+    diagnostic = generation_diagnostic(cluster)
+    if not diagnostic.get("eligible"):
+        return {
+            "status": "skipped",
+            "cluster_id": cluster_id.upper(),
+            "reason": diagnostic.get("reason"),
+            "message": diagnostic.get("message"),
+            "diagnostic": diagnostic,
+            "workspace": str(CANDIDATE_SKILLS_DIR.parent.parent),
+        }
     markdown = build_skill_markdown(cluster)
     if with_code:
         markdown = markdown.rstrip() + "\n\n" + _code_backed_section()
@@ -302,6 +373,8 @@ def generate_skill(cluster_id: str, output_dir: str | Path | None = None, *, wit
         "name_hint": first_name,
         "status": "candidate",
         "code_backed": bool(with_code),
+        "workspace": str(CANDIDATE_SKILLS_DIR.parent.parent),
+        "diagnostic": diagnostic,
         **code_metadata,
     }
     write_json(target_root / "metadata.json", metadata)

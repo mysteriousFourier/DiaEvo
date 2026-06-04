@@ -13,10 +13,14 @@ from .prompt_bar import (
     _cursor_to_input,
     _erase_lines,
     _matching_commands,
+    _menu_match_count,
+    _menu_completion_value,
     _move_menu_selection,
+    _should_complete_menu_selection,
     _submit_value,
     render_prompt_state,
 )
+from .cli_style import DIM, RESET
 
 try:
     import msvcrt
@@ -44,9 +48,13 @@ class FlowInputController:
         self.prompt_visible = threading.Event()
         self.status_visible = threading.Event()
         self.draft = ""
+        self.cursor_index = 0
         self.selected_index = 0
+        self.queued_preview: list[str] = []
         self._rendered_lines = 0
+        self._rendered_lines_above_input = 0
         self._rendered_value = ""
+        self._rendered_cursor_index = 0
         self._lock = threading.Lock()
         self._render_lock = threading.RLock()
         self._thread: threading.Thread | None = None
@@ -76,9 +84,13 @@ class FlowInputController:
             self.prompt_visible.clear()
             self.status_visible.clear()
             self.draft = ""
+            self.cursor_index = 0
             self.selected_index = 0
+            self.queued_preview.clear()
             self._rendered_lines = 0
+            self._rendered_lines_above_input = 0
             self._rendered_value = ""
+            self._rendered_cursor_index = 0
 
     @contextmanager
     def session(self) -> Iterator[None]:
@@ -99,7 +111,14 @@ class FlowInputController:
     def begin_output(self) -> None:
         with self._render_lock:
             if self.prompt_visible.is_set() and self._rendered_lines:
-                sys.stdout.write(_cursor_to_bottom(self._rendered_lines, self._rendered_value))
+                sys.stdout.write(
+                    _cursor_to_bottom(
+                        self._rendered_lines,
+                        self._rendered_value,
+                        self._rendered_lines_above_input,
+                        self._rendered_cursor_index,
+                    )
+                )
                 _erase_lines(self._rendered_lines)
             if self.status_visible.is_set():
                 sys.stdout.write("\033[1A\r\033[2K")
@@ -107,7 +126,9 @@ class FlowInputController:
             sys.stdout.flush()
             self.prompt_visible.clear()
             self._rendered_lines = 0
+            self._rendered_lines_above_input = 0
             self._rendered_value = ""
+            self._rendered_cursor_index = 0
 
     def show_prompt(self, label: str = "", *, force: bool = False) -> None:
         if not self.available or self.paused.is_set():
@@ -152,21 +173,44 @@ class FlowInputController:
         if self._rendered_lines:
             self._erase_rendered_prompt()
         rendered = render_prompt_state(self.draft, self.selected_index)
+        preview = self._render_queued_preview()
+        lines_above_input = 0
+        if preview:
+            rendered = f"{preview}\n{rendered}"
+            lines_above_input = preview.count("\n") + 1
         self._rendered_lines = rendered.count("\n") + 1
+        self._rendered_lines_above_input = lines_above_input
         self._rendered_value = self.draft
+        self._rendered_cursor_index = self.cursor_index
         if label:
             sys.stdout.write(f"{label} ")
         sys.stdout.write(rendered)
-        sys.stdout.write(_cursor_to_input(self._rendered_lines, self.draft))
+        sys.stdout.write(
+            _cursor_to_input(
+                self._rendered_lines,
+                self.draft,
+                self._rendered_lines_above_input,
+                self.cursor_index,
+            )
+        )
         sys.stdout.flush()
         self.prompt_visible.set()
 
     def _erase_rendered_prompt(self) -> None:
         if self._rendered_lines:
-            sys.stdout.write(_cursor_to_bottom(self._rendered_lines, self._rendered_value))
+            sys.stdout.write(
+                _cursor_to_bottom(
+                    self._rendered_lines,
+                    self._rendered_value,
+                    self._rendered_lines_above_input,
+                    self._rendered_cursor_index,
+                )
+            )
             _erase_lines(self._rendered_lines)
             self._rendered_lines = 0
+            self._rendered_lines_above_input = 0
             self._rendered_value = ""
+            self._rendered_cursor_index = 0
             return
         sys.stdout.write("\r\033[2K")
 
@@ -176,6 +220,9 @@ class FlowInputController:
             try:
                 events.append(self.queue.get_nowait())
             except queue.Empty:
+                if events:
+                    with self._render_lock:
+                        self.queued_preview = self.queued_preview[len(events) :]
                 return events
 
     def handle_queued(
@@ -211,7 +258,24 @@ class FlowInputController:
         for event in talk_events:
             if event.text:
                 talk_handler(event.text)
+        if talk_events:
+            with self._render_lock:
+                talk_texts = [event.text for event in talk_events]
+                self.queued_preview = [text for text in self.queued_preview if text not in talk_texts]
         return len(talk_events)
+
+    def queue_external_text(self, text: str, *, source: str = "") -> FlowInputEvent:
+        event = _event_from_text(text.strip(), interrupt=True)
+        self.queue.put(event)
+        self.force_terminate_event.set()
+        self.interrupt_event.set()
+        preview = _preview_text(event.text if event.talk else text.strip())
+        if source:
+            preview = f"{source} {preview}".strip()
+        with self._render_lock:
+            self.queued_preview.append(preview)
+            self.show_prompt(force=True)
+        return event
 
     def _worker(self) -> None:
         while True:
@@ -237,10 +301,7 @@ class FlowInputController:
                 self._queue_enter()
                 continue
             if char == "\b":
-                with self._render_lock:
-                    self.draft = self.draft[:-1]
-                    self.selected_index = 0
-                    self._render_prompt_line()
+                self._backspace()
                 continue
             if char == "\t":
                 self._complete_selected_command()
@@ -249,13 +310,22 @@ class FlowInputController:
                 self._append_printable(char)
 
     def _queue_enter(self) -> None:
+        if _should_complete_menu_selection(self.draft, self.selected_index):
+            with self._render_lock:
+                self.draft = _menu_completion_value(self.draft, self.selected_index)
+                self.cursor_index = len(self.draft)
+                self.selected_index = 0
+                self._render_prompt_line()
+            return
         text = _submit_value(self.draft, self.selected_index).strip()
         if not text:
             return
         event = _event_from_text(text, interrupt=True)
         self.queue.put(event)
         with self._render_lock:
+            self.queued_preview.append(_preview_text(event.text if event.talk else text))
             self.draft = ""
+            self.cursor_index = 0
             self.selected_index = 0
             self.begin_output()
             if event.talk:
@@ -268,6 +338,14 @@ class FlowInputController:
         self.interrupt_event.set()
 
     def _queue_escape_interrupt(self) -> None:
+        if _matching_commands(self.draft):
+            with self._render_lock:
+                self.draft = ""
+                self.cursor_index = 0
+                self.selected_index = 0
+                self._render_prompt_line()
+            return
+
         text = self.draft.strip()
         if text:
             self.queue.put(_event_from_text(text, interrupt=True, hard_interrupt=True))
@@ -275,6 +353,7 @@ class FlowInputController:
             self.interrupt_event.set()
             with self._render_lock:
                 self.draft = ""
+                self.cursor_index = 0
                 self.selected_index = 0
                 self.begin_output()
                 sys.stdout.write("已终止当前模型请求；新输入已排队。\n")
@@ -291,34 +370,80 @@ class FlowInputController:
 
     def _append_printable(self, char: str) -> None:
         with self._render_lock:
-            self.draft += char
+            self.cursor_index = max(0, min(self.cursor_index, len(self.draft)))
+            self.draft = self.draft[: self.cursor_index] + char + self.draft[self.cursor_index :]
+            self.cursor_index += len(char)
             self.selected_index = 0
             self._render_prompt_line()
 
     def _handle_extended_key(self, key: str) -> None:
         matches = _matching_commands(self.draft)
-        if not matches:
-            return
+        match_count = _menu_match_count(self.draft)
         with self._render_lock:
-            if key == "H":
-                self.selected_index = _move_menu_selection(self.selected_index, len(matches), -1)
+            if match_count and key == "H":
+                self.selected_index = _move_menu_selection(self.selected_index, match_count, -1)
                 self._render_prompt_line()
-            elif key == "P":
-                self.selected_index = _move_menu_selection(self.selected_index, len(matches), 1)
+            elif match_count and key == "P":
+                self.selected_index = _move_menu_selection(self.selected_index, match_count, 1)
+                self._render_prompt_line()
+            elif key == "K":
+                self.cursor_index = max(0, self.cursor_index - 1)
+                self.selected_index = 0
+                self._render_prompt_line()
+            elif key == "M":
+                self.cursor_index = min(len(self.draft), self.cursor_index + 1)
+                self.selected_index = 0
+                self._render_prompt_line()
+            elif key == "G":
+                self.cursor_index = 0
+                self.selected_index = 0
+                self._render_prompt_line()
+            elif key == "O":
+                self.cursor_index = len(self.draft)
+                self.selected_index = 0
+                self._render_prompt_line()
+            elif key == "S" and self.cursor_index < len(self.draft):
+                self.draft = self.draft[: self.cursor_index] + self.draft[self.cursor_index + 1 :]
+                self.selected_index = 0
                 self._render_prompt_line()
 
-    def _complete_selected_command(self) -> None:
-        matches = _matching_commands(self.draft)
-        if not matches:
-            return
+    def _backspace(self) -> None:
         with self._render_lock:
-            self.selected_index = max(0, min(self.selected_index, len(matches) - 1))
-            self.draft = matches[self.selected_index][0] + " "
+            if self.cursor_index <= 0:
+                return
+            self.cursor_index = max(0, min(self.cursor_index, len(self.draft)))
+            self.draft = self.draft[: self.cursor_index - 1] + self.draft[self.cursor_index :]
+            self.cursor_index -= 1
             self.selected_index = 0
             self._render_prompt_line()
+
+    def _complete_selected_command(self) -> None:
+        match_count = _menu_match_count(self.draft)
+        if not match_count:
+            return
+        with self._render_lock:
+            self.selected_index = max(0, min(self.selected_index, match_count - 1))
+            self.draft = _menu_completion_value(self.draft, self.selected_index)
+            self.cursor_index = len(self.draft)
+            self.selected_index = 0
+            self._render_prompt_line()
+
+    def _render_queued_preview(self) -> str:
+        if not self.queued_preview:
+            return ""
+        count = len(self.queued_preview)
+        latest = self.queued_preview[-1]
+        return f"{DIM}排队 {count}  {latest}{RESET}"
 
 
 def _event_from_text(text: str, *, interrupt: bool, hard_interrupt: bool = False) -> FlowInputEvent:
     talk = text.lower().startswith("/talk ")
     payload = text[6:].strip() if talk else text
     return FlowInputEvent(payload, interrupt=False if talk else interrupt, talk=talk, hard_interrupt=hard_interrupt)
+
+
+def _preview_text(text: str, limit: int = 72) -> str:
+    clean = " ".join(text.split())
+    if len(clean) <= limit:
+        return clean
+    return clean[: limit - 3].rstrip() + "..."

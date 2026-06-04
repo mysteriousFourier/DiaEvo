@@ -1,6 +1,0 @@
-{
-  "error": "DeepSeek API HTTP 429: {\"error\":{\"code\":\"1305\",\"message\":\"该模型当前访问量过大，请您稍后再试\"}}",
-  "label": "stage2",
-  "score": null,
-  "status": "failed"
-}

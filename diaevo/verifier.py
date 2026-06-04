@@ -96,6 +96,14 @@ def verify_skill(skill_dir: str | Path, write_report: bool = True) -> dict[str, 
         findings.append({"severity": "warning", "code": "parent_path", "message": "parent-directory paths require manual review"})
     if re.search(r"\binstall\b|\bpip\b|\bnpm\b|\buv\b", text, flags=re.IGNORECASE):
         findings.append({"severity": "info", "code": "dependency_hint", "message": "dependency-related instructions require user confirmation"})
+    if "## Preserved Source Skill" in body:
+        findings.append(
+            {
+                "severity": "error",
+                "code": "external_skill_body_copied",
+                "message": "external SKILL.md body must not be copied into DiaEvo candidate skills",
+            }
+        )
     executable_validation = _load_executable_validation(skill_file)
     if executable_validation:
         status = str(executable_validation.get("status") or "unknown").lower()
@@ -130,15 +138,52 @@ def _extend_migration_manifest_findings(skill_dir: Path, findings: list[dict[str
     if not isinstance(manifest, dict):
         findings.append({"severity": "error", "code": "invalid_migration_manifest", "message": "migration_manifest.json must be an object"})
         return
-    if manifest.get("schema") != "diaevo.skill_package_migration.v1":
+    schema = str(manifest.get("schema") or "")
+    if schema not in {"diaevo.skill_package_migration.v1", "diaevo.skill_package_migration.v2"}:
         findings.append({"severity": "error", "code": "invalid_migration_manifest_schema", "message": "migration_manifest.json schema is invalid"})
+    elif schema == "diaevo.skill_package_migration.v1":
+        findings.append(
+            {
+                "severity": "warning",
+                "code": "legacy_migration_manifest_schema",
+                "message": "legacy skill package migrations should be regenerated with v2 provenance-only policy",
+            }
+        )
     mode = str(manifest.get("mode") or "")
     if mode != "skill_package":
         findings.append({"severity": "warning", "code": "unknown_migration_mode", "message": f"migration mode is `{mode}`"})
+    if schema == "diaevo.skill_package_migration.v2":
+        copy_policy = str(manifest.get("copy_policy") or "")
+        if copy_policy != "provenance_only_no_external_skill_body_or_references":
+            findings.append(
+                {
+                    "severity": "error",
+                    "code": "invalid_migration_copy_policy",
+                    "message": "v2 skill package migrations must use the provenance-only no-copy policy",
+                }
+            )
+        if not isinstance(manifest.get("observed_headings", []), list):
+            findings.append({"severity": "error", "code": "invalid_observed_headings", "message": "observed_headings must be a list"})
+        if not isinstance(manifest.get("external_reference_candidates", []), list):
+            findings.append(
+                {
+                    "severity": "error",
+                    "code": "invalid_external_reference_candidates",
+                    "message": "external_reference_candidates must be a list",
+                }
+            )
     references = manifest.get("copied_references", [])
     if not isinstance(references, list):
         findings.append({"severity": "error", "code": "invalid_copied_references", "message": "copied_references must be a list"})
         return
+    if references:
+        findings.append(
+            {
+                "severity": "error",
+                "code": "external_skill_references_copied",
+                "message": "external skill reference documents must not be copied into DiaEvo candidate skills",
+            }
+        )
     root = skill_dir.resolve(strict=False)
     for item in references:
         if not isinstance(item, dict):

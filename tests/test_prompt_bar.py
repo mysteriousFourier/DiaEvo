@@ -1,5 +1,6 @@
 from ui import prompt_bar
 from ui import cli_style
+from diaevo import __version__
 
 
 def test_slash_menu_scrolls_past_first_page() -> None:
@@ -13,6 +14,42 @@ def test_slash_menu_scrolls_past_first_page() -> None:
 
 def test_submit_can_select_command_after_first_page() -> None:
     assert prompt_bar._submit_value("/", selected_index=len(prompt_bar.COMMANDS) - 1) == "/exit"
+
+
+def test_tool_menu_selection_requires_arguments_before_submit() -> None:
+    selected_index = next(index for index, command in enumerate(prompt_bar.COMMANDS) if command[0] == "/tool")
+
+    assert prompt_bar._should_complete_menu_selection("/", selected_index) is True
+    assert prompt_bar._menu_completion_value("/", selected_index) == "/tool "
+
+
+def test_skill_menu_lists_name_and_summary(monkeypatch) -> None:
+    prompt_bar._set_skill_menu_cache_for_tests(
+        [
+            ("alpha-skill", "Alpha model summary."),
+            ("beta-skill", "Beta model summary."),
+        ]
+    )
+    monkeypatch.setattr(prompt_bar, "_term_width", lambda: 80)
+
+    menu = prompt_bar.render_command_menu("/skill")
+
+    assert "alpha-skill" in menu
+    assert "beta-skill" in menu
+    assert "Alpha model summary." in menu
+    assert prompt_bar._menu_completion_value("/skill", 1) == "/skill beta-skill"
+
+    rendered = prompt_bar.render_prompt_state("/skill beta-skill")
+    assert "说明" not in rendered
+
+    prompt_bar._set_skill_menu_cache_for_tests(None)
+
+
+def test_exit_menu_selection_can_submit_directly() -> None:
+    selected_index = next(index for index, command in enumerate(prompt_bar.COMMANDS) if command[0] == "/exit")
+
+    assert prompt_bar._should_complete_menu_selection("/", selected_index) is False
+    assert prompt_bar._submit_value("/", selected_index) == "/exit"
 
 
 def test_kg_is_single_user_facing_command() -> None:
@@ -39,6 +76,14 @@ def test_prompt_line_has_no_horizontal_rules() -> None:
     assert rendered.startswith(cli_style.GLYPHS["prompt"])
 
 
+def test_prompt_footer_is_short_and_composer_like() -> None:
+    rendered = prompt_bar.render_footer()
+
+    assert "Enter 发送" in rendered
+    assert "Tab 补全" in rendered
+    assert "Enter 运行命令或当前菜单项" not in rendered
+
+
 def test_prompt_line_wraps_long_input_without_truncating(monkeypatch) -> None:
     monkeypatch.setattr(prompt_bar, "_term_width", lambda: 80)
     value = "x" * 160
@@ -61,6 +106,56 @@ def test_prompt_cursor_uses_wrapped_input_line_count(monkeypatch) -> None:
     assert cursor.startswith("\033[2A")
 
 
+def test_cursor_to_bottom_accounts_for_lines_above_input() -> None:
+    cursor = prompt_bar._cursor_to_bottom(rendered_lines=4, value="/", lines_above_input=1)
+
+    assert cursor == "\033[2B\r"
+
+
+def test_fit_preserves_ansi_accent_when_truncated() -> None:
+    rendered = cli_style._fit(f"{cli_style.PURPLE}重点词汇{cli_style.RESET} 后面很长", 8)
+
+    assert cli_style.PURPLE in rendered
+    assert cli_style.RESET in rendered
+    assert cli_style.ANSI_RE.sub("", rendered).endswith("...")
+
+
+def test_read_prompt_erases_menu_and_footer_on_submit(monkeypatch) -> None:
+    class FakeStdout:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+
+        def write(self, value: str) -> int:
+            self.writes.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+    class FakeStdin:
+        def isatty(self) -> bool:
+            return True
+
+    class FakeMsvcrt:
+        def __init__(self) -> None:
+            self.chars = iter(["/", "\r"])
+
+        def getwch(self) -> str:
+            return next(self.chars)
+
+    fake_stdout = FakeStdout()
+    monkeypatch.setattr(prompt_bar.sys, "stdout", fake_stdout)
+    monkeypatch.setattr(prompt_bar.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(prompt_bar, "msvcrt", FakeMsvcrt())
+
+    value = prompt_bar.read_prompt()
+
+    assert value == "/ingest"
+    writes = "".join(fake_stdout.writes)
+    assert "Enter 发送" in writes
+    assert writes.rstrip().endswith("\033[2K")
+
+
 def test_home_card_has_no_outer_border() -> None:
     rendered = cli_style.render_logo_card()
 
@@ -74,7 +169,7 @@ def test_home_workspace_and_title_stay_inside_card_content() -> None:
     rendered = cli_style.render_logo_card()
     lines = rendered.splitlines()
     workspace_index = next(index for index, line in enumerate(lines) if str(cli_style.WORKSPACE_ROOT) in line)
-    title_index = next(index for index, line in enumerate(lines) if "DiaEvo" in line and "v0.1.0" in line)
+    title_index = next(index for index, line in enumerate(lines) if "DiaEvo" in line and f"v{__version__}" in line)
 
     assert workspace_index > 0
     assert title_index == workspace_index + 1

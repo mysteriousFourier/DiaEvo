@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from ui import prompt_bar
-from ui.cli_style import ANSI_RE, GLYPHS, _plain_len
+from ui.cli_style import ANSI_RE
 from ui.interactive_shell import (
     FLOW_INPUT_QUEUE,
     ApprovalDecision,
@@ -60,13 +60,13 @@ def test_tool_result_rendering_removes_emoji() -> None:
     assert "hello" in rendered
 
 
-def test_tool_result_uses_separator_line_without_box_frame() -> None:
+def test_tool_result_uses_compact_lifecycle_header_without_frame() -> None:
     rendered = render_tool_result({"status": "ok", "tool": "read_file", "content": "hello"})
     lines = ANSI_RE.sub("", rendered).splitlines()
 
-    assert lines[0] == "read_file ok"
-    assert lines[-1] == GLYPHS["h"] * _plain_len(lines[-1])
-    assert _plain_len(lines[-1]) >= 72
+    assert lines[0] == "工具  read_file  完成"
+    assert "hello" in rendered
+    assert not any(line.startswith("─" * 8) for line in lines)
     assert not any(char in rendered for char in "╭╮╰╯│")
 
 
@@ -77,7 +77,7 @@ def test_tool_denial_can_include_proposed_alternative() -> None:
 
     assert result["status"] == "denied"
     assert result["feedback"] == "use read_file first"
-    assert "proposed a different approach" in result["message"]
+    assert "换方案" in result["message"]
 
 
 def test_tool_reason_explains_why_tool_is_used() -> None:
@@ -94,18 +94,32 @@ def test_tool_reason_omits_empty_path() -> None:
     assert "path=" not in reason
 
 
-def test_turn_report_includes_goal_files_tools_and_next_step() -> None:
+def test_web_fetch_reason_shows_host_instead_of_long_url() -> None:
+    reason = _tool_reason(
+        RequestedToolCall(
+            id="call",
+            name="web_fetch",
+            args={"url": "https://arxiv.org/search/?query=%22long+encoded+query%22&searchtype=all&start=0"},
+        )
+    )
+
+    assert "来源 arxiv.org" in reason
+    assert "query=" not in reason
+
+
+def test_turn_report_renders_natural_workflow_status() -> None:
     messages = [{"role": "user", "content": "重构终端交互"}]
 
     rendered = build_turn_report(messages, 0, queued_inputs=2, tools="list_files, read_file").render()
 
-    assert rendered.startswith("计划  ")
+    assert rendered.startswith("思考  ")
     assert "report>" not in rendered
-    assert "目标：重构终端交互" in rendered
-    assert "文件：" in rendered
-    assert "工具：list_files, read_file" in rendered
-    assert "下一步：请求模型理解任务并选择下一步" in rendered
-    assert "待处理输入：2" in rendered
+    assert "重构终端交互" not in rendered
+    assert "先判断是否需要工具" in rendered
+    assert "目标：" not in rendered
+    assert "文件：" not in rendered
+    assert "工具：" not in rendered
+    assert "另有 2 条输入排队" in rendered
 
 
 def test_flow_input_enter_queues_interrupting_next_input() -> None:
@@ -147,8 +161,38 @@ def test_flow_input_prompt_can_stay_visible(monkeypatch) -> None:
 
     rendered = "".join(writes)
     assert rendered.count("❯ ") == 2
-    assert "Enter 运行命令或当前菜单项" in rendered
+    assert "Enter 发送" in rendered
+    assert "Tab 补全" in rendered
     assert not any("next" in item for item in writes)
+
+
+def test_tool_result_status_labels_are_chinese() -> None:
+    rendered = ANSI_RE.sub("", render_tool_result({"status": "requires_approval", "tool": "web_search"}))
+
+    assert rendered.splitlines()[0] == "工具  web_search  待确认"
+    assert "requires_approval" not in rendered
+
+
+def test_flow_prompt_only_renders_while_listener_is_active(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    calls = []
+    was_active = interactive_shell.FLOW_INPUT_ACTIVE.is_set()
+    monkeypatch.setattr(interactive_shell.FLOW_INPUT, "show_prompt", lambda *args, **kwargs: calls.append((args, kwargs)))
+
+    try:
+        interactive_shell.FLOW_INPUT_ACTIVE.clear()
+        interactive_shell._show_flow_prompt(force=True)
+        assert calls == []
+
+        interactive_shell.FLOW_INPUT_ACTIVE.set()
+        interactive_shell._show_flow_prompt(force=True)
+        assert len(calls) == 1
+    finally:
+        if was_active:
+            interactive_shell.FLOW_INPUT_ACTIVE.set()
+        else:
+            interactive_shell.FLOW_INPUT_ACTIVE.clear()
 
 
 def test_flow_input_stop_erases_visible_prompt(monkeypatch) -> None:
@@ -208,7 +252,7 @@ def test_flow_input_shows_same_command_menu_as_prompt_bar(monkeypatch) -> None:
     rendered = "".join(writes)
     assert "/mine" in rendered
     assert "/model" in rendered
-    assert "Enter 运行命令或当前菜单项" in rendered
+    assert "Enter 发送" in rendered
 
 
 def test_flow_input_enter_selects_current_command_menu_item() -> None:
@@ -220,6 +264,28 @@ def test_flow_input_enter_selects_current_command_menu_item() -> None:
     events = controller.drain()
 
     assert events == [FlowInputEvent("/exit", interrupt=True)]
+
+
+def test_flow_input_command_enter_clears_prompt_until_command_output(monkeypatch) -> None:
+    controller = FlowInputController()
+    writes = []
+
+    monkeypatch.setattr("ui.flow_input.msvcrt", object())
+    monkeypatch.setattr("ui.flow_input.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("ui.flow_input.sys.stdout.write", lambda text: writes.append(text))
+    monkeypatch.setattr("ui.flow_input.sys.stdout.flush", lambda: None)
+    monkeypatch.setattr("ui.prompt_bar._term_width", lambda: 80)
+
+    controller.show_prompt()
+    controller.draft = "/generate C03"
+    controller.cursor_index = len(controller.draft)
+    controller._queue_enter()
+    events = controller.drain()
+
+    assert events == [FlowInputEvent("/generate C03", interrupt=True)]
+    assert not controller.prompt_visible.is_set()
+    assert controller._rendered_lines == 0
+    assert "".join(writes).count("❯ ") == 1
 
 
 def test_flow_input_talk_enter_keeps_prompt_editable(monkeypatch) -> None:
@@ -508,6 +574,30 @@ def test_skill_selection_appends_context_message(monkeypatch) -> None:
     assert "workflow body" in str(messages[0]["content"])
 
 
+def test_skill_command_appends_context_message(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    messages: list[dict[str, object]] = []
+    monkeypatch.setattr(
+        interactive_shell,
+        "load_skill_context",
+        lambda name, task="": {
+            "status": "ok",
+            "name": name,
+            "skill_file": f"skills/{name}/SKILL.md",
+            "skill_text": "selected workflow",
+            "references": [],
+        },
+    )
+
+    keep_running = interactive_shell._dispatch_command("/skill web-design-engineer", ChatConfigState(), messages=messages)
+
+    assert keep_running is True
+    assert len(messages) == 1
+    assert messages[0]["role"] == "system"
+    assert "[Loaded skill: web-design-engineer]" in str(messages[0]["content"])
+
+
 def test_run_shell_repeated_failure_marks_note(monkeypatch) -> None:
     from ui import interactive_shell
 
@@ -537,22 +627,25 @@ def test_web_search_result_renders_titles_links_and_source() -> None:
             "status": "ok",
             "tool": "web_search",
             "query": "DiaEvo",
-            "source": "duckduckgo_html",
+            "backend": "duckduckgo_html",
             "results": [
                 {
                     "title": "DiaEvo docs",
                     "url": "https://example.com/diaevo",
                     "snippet": "Project documentation",
+                    "source": "duckduckgo_html",
+                    "fetch_status": "not_fetched",
                 }
             ],
         }
     )
 
-    assert "query: DiaEvo" in rendered
-    assert "source: duckduckgo_html" in rendered
+    assert "查询  DiaEvo" in rendered
+    assert "来源  duckduckgo_html" in rendered
     assert "DiaEvo docs" in rendered
-    assert "https://example.com/diaevo" in rendered
+    assert "example.com/diaevo" in rendered
     assert "Project documentation" in rendered
+    assert "未抓取" in rendered
 
 
 def test_web_fetch_result_renders_url_metadata_and_content() -> None:
@@ -561,16 +654,18 @@ def test_web_fetch_result_renders_url_metadata_and_content() -> None:
             "status": "ok",
             "tool": "web_fetch",
             "url": "https://example.com/page",
+            "final_url": "https://example.com/final",
             "status_code": 200,
             "content_type": "text/html",
             "truncated": False,
-            "content": "<html><title>Example</title></html>",
+            "content": "Example",
         }
     )
 
-    assert "url: https://example.com/page" in rendered
-    assert "status: 200" in rendered
-    assert "type: text/html" in rendered
+    assert "来源  example.com/final" in rendered
+    assert "https://example.com/page" not in rendered
+    assert "HTTP 200" in rendered
+    assert "text/html" in rendered
     assert "Example" in rendered
 
 
@@ -622,6 +717,31 @@ def test_talk_command_does_not_append_to_main_history(monkeypatch) -> None:
     assert answer == "side answer"
     assert captured["tools"] is None
     assert captured["messages"][-1] == {"role": "user", "content": "quick question"}
+
+
+def test_talk_command_includes_main_context_without_appending(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    captured = {}
+
+    def fake_chat_completion(messages, config, *, tools=None, tool_choice=None):
+        captured["messages"] = messages
+        return {"choices": [{"message": {"content": "side answer"}}]}
+
+    monkeypatch.setattr(interactive_shell, "chat_completion", fake_chat_completion)
+
+    state = ChatConfigState()
+    state.value = object()
+    main_messages: list[dict[str, object]] = [{"role": "user", "content": "主线正在修 /talk 输入"}]
+    answer = interactive_shell._talk_once(
+        "当前在做什么",
+        state,
+        context=interactive_shell._talk_context_snapshot(main_messages),
+    )
+
+    assert answer == "side answer"
+    assert "主线正在修 /talk 输入" in str(captured["messages"][1]["content"])
+    assert main_messages == [{"role": "user", "content": "主线正在修 /talk 输入"}]
 
 
 def test_image_command_appends_vision_result_to_history(monkeypatch) -> None:

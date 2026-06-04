@@ -129,12 +129,44 @@ diaevo-home
 
 `diaevo` / `diaevo-home` 会通过 `%LOCALAPPDATA%\DiaEvo\bin` 下的命令 shim 设置 `PYTHONPATH`、`DIAEVO_WORKSPACE` 和 UTF-8 Python I/O，并使用安装目录本地 `.venv` Python。
 
+## QQ 远程入口
+
+普通 `diaevo` 启动时会读取 QQ 远程配置；当 `DIAEVO_QQ_ENABLED=true` 时，会在打开本地交互式终端的同时后台连接外置 OneBot 11 协议端，接收指定 QQ 号私聊。推荐协议端是 NapCatQQ；DiaEvo 不内嵌 QQ 登录逻辑，也不会默认启用远程控制。
+
+`.env` 示例：
+
+```env
+DIAEVO_QQ_ENABLED=true
+DIAEVO_QQ_ALLOWED_USERS=123456789
+DIAEVO_QQ_ONEBOT_WS_URL=ws://127.0.0.1:3001
+DIAEVO_QQ_ONEBOT_HTTP_URL=http://127.0.0.1:3000
+DIAEVO_QQ_ACCESS_TOKEN=
+DIAEVO_QQ_APPROVAL_TTL_SECONDS=300
+DIAEVO_QQ_MAX_MESSAGE_CHARS=1800
+```
+
+安装可选依赖后，正常启动 `diaevo` 即可同时使用电脑终端和手机 QQ：
+
+```powershell
+pip install -e ".[qq]"
+diaevo
+```
+
+首版只响应 `DIAEVO_QQ_ALLOWED_USERS` 中的私聊 QQ 号。电脑终端输入和 QQ 私聊输入进入同一个交互式会话历史：在电脑前可以直接输入，不在电脑前可用手机继续当前任务。模型回复、工具预览、状态和命令输出会同步发给最近发消息的白名单 QQ。
+
+远程普通文本会作为当前会话的新输入；远程斜杠命令会走同一套交互式命令。写入、删除、patch、shell 和网络工具仍会先生成预览并等待审批；手机可回复 `1`、`同意` 或 `/approve` 允许一次，回复 `2` 表示本轮不再询问该工具，回复 `3`、`拒绝` 或 `/deny` 拒绝。`/key` 和 `/vision-key` 在 QQ 入口禁用，请在本机终端设置密钥。
+
+`diaevo qq-bridge` 仍保留为独立调试入口：它不共享本地交互式终端会话，只适合验证 OneBot 收发、白名单和确认码审批是否工作。
+
+远程消息和审批审计写入 `.diaevo/qq_remote_events.jsonl`，本地工具事件仍写入 `.diaevo/tool_events.jsonl`。QQ 机器人登录和自动化使用可能受平台规则影响，请自行确认账号用途和合规边界。
+
 ## 主要能力
 
 | 能力 | 说明 |
 | --- | --- |
 | 交互式工作台 | 默认 `diaevo` 打开终端首页，包含可信工作区确认、仪表盘、斜杠菜单、多行输入、`/home`、`/tools` 和 `/tool`。 |
 | 模型聊天 | 通过 `.env` 和运行时 `/model`、`/baseurl`、`/key` 配置 DeepSeek 或 OpenAI 兼容接口；普通文本进入带工具调用的聊天循环。 |
+| QQ 远程入口 | 可选配置启用后，普通 `diaevo` 会通过 OneBot 11/NapCatQQ 接收白名单 QQ 私聊，与本地终端共享同一个交互式会话。 |
 | 图像理解 | `/image <path|url> <问题>` 使用 GLM 视觉模型理解图片，默认 `glm-4.6v-flash`，并发上限为 1，结果会写回主会话历史。 |
 | 本地工具层 | `list_files`、`read_file`、`write_file`、`edit_file`、`delete_file`、`apply_patch`、`run_shell`、`web_search`、`web_fetch`，带工作区边界、只读/写入分级和审批门。 |
 | 轨迹捕获与反馈 | 本地工具调用会写入 `.diaevo/tool_events.jsonl`；`ingest` 规范化样例/真实轨迹，`feedback` 将工具事件折叠回可挖掘轨迹。 |

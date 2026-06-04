@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any, Callable
 from urllib.error import HTTPError, URLError
-from urllib.parse import quote_plus, urlencode, urlparse
+from urllib.parse import parse_qs, quote_plus, urlencode, unquote, urlparse
 from urllib.request import Request, urlopen
 
 from .knowledge_graph import answer_kg
@@ -30,6 +30,7 @@ from .skill_context import recommend_skill_contexts
 DEFAULT_EVENT_LOG = DIAEVO_DIR / "tool_events.jsonl"
 MAX_TEXT_BYTES = 240_000
 MAX_LOG_STRING = 2_000
+MAX_WEB_EXCERPT_CHARS = 4_000
 REPEAT_FAILURE_HINT = (
     "同一 run_shell 命令连续失败；请先查看 stderr/stdout，调整命令或验证思路，"
     "不要机械重复执行。"
@@ -508,6 +509,109 @@ def _fetch_url(url: str, max_bytes: int) -> dict[str, Any]:
         raise ToolError(f"network error fetching {url}: {exc.reason}") from exc
 
 
+def _http_error_message(exc: HTTPError, url: str, *, body_limit: int = 600) -> str:
+    retry_after = exc.headers.get("Retry-After", "") if exc.headers is not None else ""
+    try:
+        body = exc.read(body_limit + 1).decode("utf-8", errors="replace")
+    except Exception:
+        body = ""
+    body = re.sub(r"\s+", " ", body).strip()
+    if len(body) > body_limit:
+        body = body[:body_limit].rstrip() + "..."
+    pieces = [f"HTTP {exc.code} fetching {url}"]
+    if retry_after:
+        pieces.append(f"Retry-After={retry_after}")
+    if body:
+        pieces.append(f"body={body}")
+    return "; ".join(pieces)
+
+
+def _fetch_arxiv_api_url(url: str, max_bytes: int) -> dict[str, Any]:
+    parsed = urlparse(url)
+    if parsed.scheme not in {"http", "https"}:
+        raise ToolError("arxiv_search only supports http and https URLs")
+    request = Request(url, headers={"User-Agent": "diaevo/0.1 (+https://github.com/local/diaevo; arxiv_search)"})
+    try:
+        with urlopen(request, timeout=20) as response:
+            data = response.read(max_bytes + 1)
+            truncated = len(data) > max_bytes
+            if truncated:
+                data = data[:max_bytes]
+            return {
+                "url": response.geturl(),
+                "status_code": response.status,
+                "content_type": response.headers.get("content-type", ""),
+                "truncated": truncated,
+                "content": data.decode("utf-8", errors="replace"),
+            }
+    except HTTPError as exc:
+        raise ToolError(_http_error_message(exc, url)) from exc
+    except URLError as exc:
+        raise ToolError(f"network error fetching {url}: {exc.reason}") from exc
+
+
+def _extract_web_text(content: str, *, limit: int = MAX_WEB_EXCERPT_CHARS) -> tuple[str, bool]:
+    text = re.sub(r"(?is)<(script|style|noscript|svg)[^>]*>.*?</\1>", " ", content)
+    text = re.sub(r"(?is)<br\s*/?>", "\n", text)
+    text = re.sub(r"(?is)</(p|div|li|h[1-6]|tr|section|article)>", "\n", text)
+    text = re.sub(r"(?s)<[^>]+>", " ", text)
+    text = html.unescape(text)
+    text = re.sub(r"[ \t\f\v]+", " ", text)
+    text = re.sub(r"\s+([,.;:!?])", r"\1", text)
+    text = re.sub(r"\s*\n\s*", "\n", text)
+    text = re.sub(r"\n{3,}", "\n\n", text).strip()
+    truncated = len(text) > limit
+    if truncated:
+        text = text[:limit].rstrip()
+    return text, truncated
+
+
+def _best_web_excerpt(text: str, *, limit: int = 1_200) -> tuple[str, bool]:
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    noise_patterns = (
+        "skip to main content",
+        "we gratefully acknowledge",
+        "search | arxiv",
+        "cookie",
+        "privacy policy",
+    )
+    kept = [
+        line
+        for line in lines
+        if not any(pattern in line.lower() for pattern in noise_patterns)
+    ]
+    excerpt = " ".join(kept or lines)
+    excerpt = re.sub(r"\s+", " ", excerpt).strip()
+    truncated = len(excerpt) > limit
+    if truncated:
+        excerpt = excerpt[:limit].rstrip()
+    return excerpt, truncated
+
+
+def _coerce_domains(value: Any) -> list[str]:
+    if value is None:
+        return []
+    if isinstance(value, str):
+        raw_items = re.split(r"[\s,]+", value)
+    elif isinstance(value, list):
+        raw_items = [str(item) for item in value]
+    else:
+        raw_items = [str(value)]
+    domains: list[str] = []
+    for item in raw_items:
+        domain = item.strip().removeprefix("http://").removeprefix("https://").strip("/")
+        if domain and domain not in domains:
+            domains.append(domain)
+    return domains
+
+
+def _query_with_domains(query: str, domains: list[str]) -> str:
+    if not domains:
+        return query
+    domain_filter = " OR ".join(f"site:{domain}" for domain in domains)
+    return f"({query}) ({domain_filter})"
+
+
 def _web_fetch(args: dict[str, Any], approved: bool) -> dict[str, Any]:
     url = str(args.get("url") or "").strip()
     if not url:
@@ -517,36 +621,234 @@ def _web_fetch(args: dict[str, Any], approved: bool) -> dict[str, Any]:
     if not approved:
         return _approval_result(TOOLS["web_fetch"], args, preview, "web_fetch needs approval because it uses the network")
     fetched = _fetch_url(url, max_bytes)
-    return {"status": "ok", "tool": "web_fetch", **fetched}
+    content, content_truncated = _extract_web_text(fetched.get("content", ""))
+    excerpt, excerpt_truncated = _best_web_excerpt(content)
+    return {
+        "status": "ok",
+        "tool": "web_fetch",
+        "url": url,
+        "final_url": fetched.get("url", url),
+        "status_code": fetched.get("status_code"),
+        "content_type": fetched.get("content_type", ""),
+        "truncated": bool(fetched.get("truncated")) or content_truncated or excerpt_truncated,
+        "content": excerpt,
+    }
 
 
 RESULT_LINK_RE = re.compile(
     r'<a[^>]+class="result__a"[^>]+href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>',
     flags=re.IGNORECASE | re.DOTALL,
 )
+RESULT_BLOCK_RE = re.compile(
+    r'<div[^>]+class="[^"]*\bresult\b[^"]*"[^>]*>(?P<body>.*?)</div>\s*</div>',
+    flags=re.IGNORECASE | re.DOTALL,
+)
+RESULT_SNIPPET_RE = re.compile(
+    r'<a[^>]+class="result__snippet"[^>]*>(?P<snippet>.*?)</a>|'
+    r'<div[^>]+class="result__snippet"[^>]*>(?P<snippet_div>.*?)</div>',
+    flags=re.IGNORECASE | re.DOTALL,
+)
+
+
+def _clean_html_fragment(value: str) -> str:
+    text = re.sub(r"<.*?>", " ", value, flags=re.DOTALL)
+    return re.sub(r"\s+", " ", html.unescape(text)).strip()
+
+
+def _normalize_duckduckgo_url(value: str) -> str:
+    url = html.unescape(value)
+    parsed = urlparse(url)
+    if parsed.path == "/l/":
+        target = parse_qs(parsed.query).get("uddg", [""])[0]
+        if target:
+            return unquote(target)
+    return url
+
+
+def _parse_duckduckgo_results(page_content: str, max_results: int) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    blocks = [match.group("body") for match in RESULT_BLOCK_RE.finditer(page_content)]
+    if not blocks:
+        blocks = [match.group(0) for match in RESULT_LINK_RE.finditer(page_content)]
+    for block in blocks:
+        link = RESULT_LINK_RE.search(block)
+        if not link:
+            continue
+        title = _clean_html_fragment(link.group("title"))
+        url = _normalize_duckduckgo_url(link.group("url"))
+        snippet = ""
+        snippet_match = RESULT_SNIPPET_RE.search(block)
+        if snippet_match:
+            snippet = _clean_html_fragment(snippet_match.group("snippet") or snippet_match.group("snippet_div") or "")
+        results.append(
+            {
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+                "source": "duckduckgo_html",
+                "fetch_status": "not_fetched",
+                "content_excerpt": "",
+                "content_truncated": False,
+            }
+        )
+        if len(results) >= max_results:
+            break
+    return results
+
+
+def _searxng_time_range(recency_days: int | None) -> str:
+    if not recency_days or recency_days <= 0:
+        return ""
+    if recency_days <= 1:
+        return "day"
+    if recency_days <= 31:
+        return "month"
+    return "year"
+
+
+def _searxng_search(query: str, *, max_results: int, domains: list[str], recency_days: int | None) -> list[dict[str, Any]]:
+    base_url = os.environ.get("DIAEVO_SEARXNG_URL", "").strip().rstrip("/")
+    if not base_url:
+        raise ToolError("DIAEVO_SEARXNG_URL is not configured")
+    params = {
+        "q": _query_with_domains(query, domains),
+        "format": "json",
+        "language": "auto",
+        "safesearch": "0",
+    }
+    time_range = _searxng_time_range(recency_days)
+    if time_range:
+        params["time_range"] = time_range
+    fetched = _fetch_url(f"{base_url}/search?{urlencode(params)}", 300_000)
+    try:
+        payload = json.loads(fetched.get("content", "{}"))
+    except json.JSONDecodeError as exc:
+        raise ToolError("SearXNG returned invalid JSON") from exc
+    raw_results = payload.get("results") if isinstance(payload, dict) else None
+    if not isinstance(raw_results, list):
+        return []
+    results: list[dict[str, Any]] = []
+    for item in raw_results:
+        if not isinstance(item, dict):
+            continue
+        url = str(item.get("url") or "").strip()
+        title = str(item.get("title") or url or "Untitled").strip()
+        if not url:
+            continue
+        engine = str(item.get("engine") or item.get("engines") or "searxng").strip()
+        results.append(
+            {
+                "title": title,
+                "url": url,
+                "snippet": str(item.get("content") or item.get("snippet") or "").strip(),
+                "source": engine or "searxng",
+                "fetch_status": "not_fetched",
+                "content_excerpt": "",
+                "content_truncated": False,
+            }
+        )
+        if len(results) >= max_results:
+            break
+    return results
+
+
+def _duckduckgo_search(query: str, *, max_results: int, domains: list[str]) -> list[dict[str, Any]]:
+    page = _fetch_url(f"https://duckduckgo.com/html/?q={quote_plus(_query_with_domains(query, domains))}", 200_000)
+    return _parse_duckduckgo_results(page["content"], max_results)
+
+
+def _fetch_search_result_excerpts(results: list[dict[str, Any]], fetch_top: int) -> None:
+    for item in results[:fetch_top]:
+        url = str(item.get("url") or "").strip()
+        if not url:
+            item["fetch_status"] = "skipped"
+            continue
+        try:
+            fetched = _fetch_url(url, 80_000)
+            content, content_truncated = _extract_web_text(fetched.get("content", ""), limit=2_400)
+            excerpt, excerpt_truncated = _best_web_excerpt(content, limit=900)
+        except Exception as exc:
+            item["fetch_status"] = f"error: {exc}"
+            continue
+        item["fetch_status"] = "ok"
+        item["final_url"] = fetched.get("url", url)
+        item["content_type"] = fetched.get("content_type", "")
+        item["status_code"] = fetched.get("status_code")
+        item["content_excerpt"] = excerpt
+        item["content_truncated"] = bool(fetched.get("truncated")) or content_truncated or excerpt_truncated
 
 
 def _web_search(args: dict[str, Any], approved: bool) -> dict[str, Any]:
     query = str(args.get("query") or "").strip()
     if not query:
         raise ToolError("web_search requires query")
-    max_results = max(1, min(int(args.get("max_results") or 5), 10))
-    preview = {"query": query, "max_results": max_results}
+    max_results = max(1, min(int(args.get("max_results") or 5), 20))
+    fetch_top = max(0, min(int(args.get("fetch_top", 3)), max_results))
+    backend = str(args.get("backend") or "auto").strip().lower()
+    domains = _coerce_domains(args.get("domains"))
+    recency_days = args.get("recency_days")
+    recency_value = int(recency_days) if recency_days not in {None, ""} else None
+    preview = {
+        "query": query,
+        "max_results": max_results,
+        "fetch_top": fetch_top,
+        "backend": backend,
+        "domains": domains,
+        "recency_days": recency_value,
+    }
     if not approved:
         return _approval_result(TOOLS["web_search"], args, preview, "web_search needs approval because it uses the network")
-    page = _fetch_url(f"https://duckduckgo.com/html/?q={quote_plus(query)}", 200_000)
-    results = []
-    for match in RESULT_LINK_RE.finditer(page["content"]):
-        title = re.sub(r"<.*?>", "", match.group("title"))
-        results.append({"title": html.unescape(title), "url": html.unescape(match.group("url"))})
-        if len(results) >= max_results:
-            break
+
+    attempted_backends: list[str] = []
+    fallback_reason = ""
+    if backend in {"auto", "searxng"}:
+        attempted_backends.append("searxng")
+        try:
+            results = _searxng_search(query, max_results=max_results, domains=domains, recency_days=recency_value)
+            used_backend = "searxng"
+        except Exception as exc:
+            if backend == "searxng":
+                raise
+            fallback_reason = str(exc)
+            results = []
+            used_backend = ""
+        if results:
+            _fetch_search_result_excerpts(results, fetch_top)
+            return {
+                "status": "ok",
+                "tool": "web_search",
+                "backend": used_backend,
+                "query": query,
+                "results": results,
+                "attempted_backends": attempted_backends,
+                "fallback_reason": fallback_reason,
+            }
+        if backend == "searxng":
+            return {
+                "status": "ok",
+                "tool": "web_search",
+                "backend": "searxng",
+                "query": query,
+                "results": [],
+                "attempted_backends": attempted_backends,
+                "fallback_reason": fallback_reason,
+            }
+
+    if backend in {"auto", "duckduckgo", "duckduckgo_html"}:
+        attempted_backends.append("duckduckgo_html")
+        results = _duckduckgo_search(query, max_results=max_results, domains=domains)
+        _fetch_search_result_excerpts(results, fetch_top)
+        used_backend = "duckduckgo_html"
+    else:
+        raise ToolError(f"unsupported web_search backend: {backend}")
     return {
         "status": "ok",
         "tool": "web_search",
+        "backend": used_backend,
         "query": query,
-        "source": "duckduckgo_html",
         "results": results,
+        "attempted_backends": attempted_backends,
+        "fallback_reason": fallback_reason,
     }
 
 
@@ -677,13 +979,24 @@ def _fetch_arxiv_url(url: str, max_bytes: int) -> dict[str, Any]:
                 return cached
             now = time.time()
             last_request_at = max(ARXIV_LAST_REQUEST_AT, _read_arxiv_state_last_request_at())
-            elapsed = now - last_request_at
-            if last_request_at > 0 and elapsed < ARXIV_MIN_REQUEST_INTERVAL:
-                time.sleep(ARXIV_MIN_REQUEST_INTERVAL - elapsed)
-            fetched = _fetch_url(url, max_bytes)
+            if last_request_at > now:
+                time.sleep(last_request_at - now)
+            elif last_request_at > 0:
+                elapsed = now - last_request_at
+                if elapsed < ARXIV_MIN_REQUEST_INTERVAL:
+                    time.sleep(ARXIV_MIN_REQUEST_INTERVAL - elapsed)
             request_at = time.time()
             ARXIV_LAST_REQUEST_AT = request_at
             _write_arxiv_state_last_request_at(request_at)
+            try:
+                fetched = _fetch_arxiv_api_url(url, max_bytes)
+            except ToolError as exc:
+                if "HTTP 429" in str(exc):
+                    retry_after = re.search(r"Retry-After=(\d+)", str(exc))
+                    cool_down = float(retry_after.group(1)) if retry_after else 30.0
+                    ARXIV_LAST_REQUEST_AT = time.time() + max(cool_down, ARXIV_MIN_REQUEST_INTERVAL)
+                    _write_arxiv_state_last_request_at(ARXIV_LAST_REQUEST_AT)
+                raise
             _write_arxiv_cache(url, fetched)
             return fetched
 
@@ -1011,7 +1324,10 @@ _register(
     ToolSpec(
         name="web_fetch",
         description="Fetch a URL after approval and return bounded page content with metadata.",
-        input_schema=_schema({"url": {"type": "string"}, "max_bytes": {"type": "integer", "default": 80000}}, ["url"]),
+        input_schema=_schema(
+            {"url": {"type": "string", "minLength": 1}, "max_bytes": {"type": "integer", "default": 80000}},
+            ["url"],
+        ),
         read_only=True,
         approval_required=True,
         destructive=False,
@@ -1022,8 +1338,29 @@ _register(
 _register(
     ToolSpec(
         name="web_search",
-        description="Run a basic web search after approval and return source URLs.",
-        input_schema=_schema({"query": {"type": "string"}, "max_results": {"type": "integer", "default": 5}}, ["query"]),
+        description=(
+            "Search the web after approval using SearXNG when configured, with DuckDuckGo HTML fallback, "
+            "and optionally fetch excerpts from top results."
+        ),
+        input_schema=_schema(
+            {
+                "query": {"type": "string", "minLength": 1},
+                "max_results": {"type": "integer", "default": 5},
+                "fetch_top": {"type": "integer", "default": 3},
+                "backend": {
+                    "type": "string",
+                    "enum": ["auto", "searxng", "duckduckgo", "duckduckgo_html"],
+                    "default": "auto",
+                },
+                "domains": {
+                    "type": "array",
+                    "items": {"type": "string"},
+                    "default": [],
+                },
+                "recency_days": {"type": "integer"},
+            },
+            ["query"],
+        ),
         read_only=True,
         approval_required=True,
         destructive=False,

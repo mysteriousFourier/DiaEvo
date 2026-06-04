@@ -2,7 +2,7 @@
 
 import shutil
 
-from diaevo.cli import build_parser
+from diaevo.cli import build_parser, render_cli_result
 from diaevo.generator import generate_skill
 from diaevo.ingest import ingest_traces
 from diaevo.miner import mine
@@ -14,8 +14,9 @@ from diaevo.verifier import verify_skill
 def test_generate_and_verify_candidate_skill():
     ingest_traces("data/sample_traces.jsonl")
     report = mine(k=4)
-    cluster_id = report["clusters"][0]["id"]
+    cluster_id = report["generation_entrypoints"][0]["cluster_id"]
     generated = generate_skill(cluster_id)
+    assert generated["status"] == "candidate"
     skill_path = Path(generated["skill_path"])
     assert skill_path.exists()
     text = skill_path.read_text(encoding="utf-8")
@@ -32,7 +33,7 @@ def test_generate_and_verify_candidate_skill():
 def test_generate_code_backed_skill_validates_in_sandbox(tmp_path):
     ingest_traces("data/sample_traces.jsonl")
     report = mine(k=4)
-    cluster_id = report["clusters"][0]["id"]
+    cluster_id = report["generation_entrypoints"][0]["cluster_id"]
     output_dir = Path(".tmp") / "tests" / tmp_path.name / "code-backed"
     shutil.rmtree(output_dir, ignore_errors=True)
     generated = generate_skill(cluster_id, output_dir=output_dir, with_code=True)
@@ -67,12 +68,129 @@ def test_generate_code_backed_skill_validates_in_sandbox(tmp_path):
     assert updated_artifacts["last_sandbox_report_path"]
 
 
+def test_generate_skips_tool_event_only_cluster(tmp_path, monkeypatch):
+    import diaevo.generator as generator
+
+    monkeypatch.setattr(generator, "REPORTS_DIR", tmp_path)
+    monkeypatch.setattr(generator, "CANDIDATE_SKILLS_DIR", tmp_path / "candidate_skills")
+    (tmp_path / "mining_report.json").write_text(
+        """
+{
+  "clusters": [
+    {
+      "id": "C03",
+      "size": 2,
+      "source_counts": {"tool_event": 2},
+      "representative_task": "Tool event recommend_skills #2",
+      "top_terms": ["recommend_skills", "event", "feedback", "tool"],
+      "top_tools": ["recommend_skills"],
+      "file_extensions": []
+    }
+  ]
+}
+""".strip(),
+        encoding="utf-8",
+    )
+
+    generated = generate_skill("C03")
+
+    assert generated["status"] == "skipped"
+    assert generated["reason"] == "tool_event_only_cluster"
+    assert "不适合生成" in generated["message"] or "工具事件日志" in generated["message"]
+    assert not (tmp_path / "candidate_skills" / "C03" / "SKILL.md").exists()
+
+
+def test_cli_renders_skipped_generate_as_plain_diagnostic():
+    rendered = render_cli_result(
+        "generate",
+        {
+            "status": "skipped",
+            "cluster_id": "C03",
+            "reason": "tool_event_only_cluster",
+            "message": "该簇只包含工具事件日志。",
+            "workspace": "D:\\codex\\diaevo",
+            "diagnostic": {
+                "representative_task": "Tool event recommend_skills #2",
+                "top_tools": ["recommend_skills"],
+            },
+        },
+    )
+
+    assert "生成候选 skill：跳过 C03" in rendered
+    assert "该簇只包含工具事件日志" in rendered
+    assert "recommend_skills" in rendered
+    assert "{" not in rendered
+
+
 def test_cli_accepts_generate_with_code():
     args = build_parser().parse_args(["generate", "--cluster-id", "C03", "--with-code"])
 
     assert args.command == "generate"
     assert args.cluster_id == "C03"
     assert args.with_code is True
+
+
+def test_cli_accepts_self_evolve_direct_command():
+    args = build_parser().parse_args(["self-evolve", "C03", "--budget", "7", "--no-validate"])
+
+    assert args.command == "self-evolve"
+    assert args.cluster_id == "C03"
+    assert args.budget == 7
+    assert args.no_validate is True
+
+
+def test_cli_accepts_skills_commands():
+    args = build_parser().parse_args(["skills", "--names", "--query", "web", "--limit", "3"])
+    alias_args = build_parser().parse_args(["list-skills", "--name", "web-design-engineer"])
+
+    assert args.command == "skills"
+    assert args.names is True
+    assert args.query == "web"
+    assert args.limit == 3
+    assert alias_args.command == "list-skills"
+    assert alias_args.name == "web-design-engineer"
+
+
+def test_cli_renders_skills_list_plain():
+    rendered = render_cli_result(
+        "skills",
+        {
+            "status": "ok",
+            "mode": "list",
+            "skill_count": 1,
+            "skills": [
+                {
+                    "name": "web-design-engineer",
+                    "description": "Build visual web artifacts.",
+                    "path": "skills/web-design-engineer",
+                    "source": "installed",
+                    "tags": ["web"],
+                }
+            ],
+        },
+    )
+
+    assert "现有 skills：1" in rendered
+    assert "web-design-engineer" in rendered
+    assert "skills/web-design-engineer" in rendered
+
+
+def test_cli_renders_skill_names_only():
+    rendered = render_cli_result(
+        "skills",
+        {
+            "status": "ok",
+            "mode": "list",
+            "names_only": True,
+            "skill_count": 2,
+            "skills": [
+                {"name": "alpha", "description": "A"},
+                {"name": "beta", "description": "B"},
+            ],
+        },
+    )
+
+    assert rendered == "alpha\nbeta"
 
 
 def test_verifier_blocks_code_artifact_forbidden_helper_capability(tmp_path):

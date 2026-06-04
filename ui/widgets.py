@@ -26,7 +26,7 @@ def table(headers: list[str], rows: list[list[Any]], max_width: int = 28) -> str
     def trim(text: str, width: int) -> str:
         return text if len(text) <= width else text[: max(0, width - 1)] + "…"
     header_line = " | ".join(trim(header, widths[index]).ljust(widths[index]) for index, header in enumerate(headers))
-    sep = "-+-".join("-" * width for width in widths)
+    sep = "─┼─".join("─" * width for width in widths)
     body = [
         " | ".join(trim(cell, widths[index]).ljust(widths[index]) for index, cell in enumerate(row))
         for row in values

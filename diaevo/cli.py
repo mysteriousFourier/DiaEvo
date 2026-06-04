@@ -25,11 +25,13 @@ from .knowledge_graph import (
 )
 from .miner import mine
 from .mining_snapshot import export_mining_snapshot
-from .paths import DATA_DIR, bootstrap_workspace
+from .paths import DATA_DIR, REPORTS_DIR, bootstrap_workspace
 from .promotion import PROMOTION_LABELS, label_promotion, promote, queue_promotion, rewrite_promotion
 from .recommender import recommend
 from .script_artifacts import SCRIPT_REVIEW_STATUSES, review_script
 from .skill_adapter import adapt_external_skill
+from .skill_context import discover_skill_sources, load_skill_context
+from .storage import write_json
 from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
 from .validation_runner import run_validation
 from .verifier import verify_skill
@@ -41,9 +43,12 @@ PUBLIC_COMMANDS = (
     "mine",
     "export-mining-snapshot",
     "recommend",
+    "skills",
+    "list-skills",
     "generate",
     "verify",
     "evolve",
+    "self-evolve",
     "validate",
     "queue-promotion",
     "promote",
@@ -63,6 +68,7 @@ PUBLIC_COMMANDS = (
     "evaluate-code-evolution",
     "tool",
     "chat-test",
+    "qq-bridge",
 )
 
 
@@ -198,6 +204,50 @@ def _render_answer_kg_result(result: dict[str, Any]) -> str:
     return "\n".join(line for line in lines if line is not None).strip()
 
 
+def _render_skills_result(result: dict[str, Any]) -> str:
+    if result.get("mode") == "detail":
+        if result.get("status") != "ok":
+            return str(result.get("error") or "skill not found")
+        lines = [
+            f"Skill：{result.get('name', '')}",
+            f"路径：{result.get('skill_file', '')}",
+        ]
+        description = str(result.get("description") or "").strip()
+        if description:
+            lines.extend(["", description])
+        skill_text = str(result.get("skill_text") or "").strip()
+        if skill_text:
+            lines.extend(["", skill_text[:4000]])
+            if len(skill_text) > 4000:
+                lines.append("... <truncated>")
+        return "\n".join(lines).rstrip()
+
+    skills = result.get("skills") if isinstance(result.get("skills"), list) else []
+    if result.get("names_only"):
+        return "\n".join(
+            str(item.get("name") or "")
+            for item in skills
+            if isinstance(item, dict) and item.get("name")
+        )
+    lines = [f"现有 skills：{result.get('skill_count', len(skills))}"]
+    if result.get("query"):
+        lines[0] += f"（过滤：{result.get('query')}）"
+    if not skills:
+        lines.append("没有找到 skill。")
+        return "\n".join(lines)
+    for index, item in enumerate(skills, start=1):
+        if not isinstance(item, dict):
+            continue
+        tags = item.get("tags") if isinstance(item.get("tags"), list) else []
+        tag_text = f"  tags={', '.join(str(tag) for tag in tags)}" if tags else ""
+        lines.append(f"{index}. {item.get('name', '')}  [{item.get('source', '')}]{tag_text}")
+        description = str(item.get("description") or "").strip()
+        if description:
+            lines.append(f"   {description}")
+        lines.append(f"   {item.get('path', '')}")
+    return "\n".join(lines).rstrip()
+
+
 def _render_tool_result_plain(result: dict[str, Any]) -> str:
     tool = result.get("tool", "tool")
     status = result.get("status", "")
@@ -229,15 +279,51 @@ def _render_tool_result_plain(result: dict[str, Any]) -> str:
     return "\n".join(lines).rstrip()
 
 
+def _render_generate_result(result: dict[str, Any]) -> str:
+    status = str(result.get("status") or "")
+    cluster_id = str(result.get("cluster_id") or "")
+    if status == "skipped":
+        lines = [
+            f"生成候选 skill：跳过 {cluster_id}".rstrip(),
+            str(result.get("message") or result.get("reason") or "该簇暂不适合生成 skill。"),
+        ]
+        diagnostic = result.get("diagnostic") if isinstance(result.get("diagnostic"), dict) else {}
+        representative = str(diagnostic.get("representative_task") or "").strip()
+        top_tools = diagnostic.get("top_tools") if isinstance(diagnostic.get("top_tools"), list) else []
+        if representative:
+            lines.append(f"代表任务：{representative}")
+        if top_tools:
+            lines.append("工具信号：" + ", ".join(str(item) for item in top_tools[:6]))
+        if result.get("workspace"):
+            lines.append(f"工作区：{result.get('workspace')}")
+        return "\n".join(lines).rstrip()
+    lines = [
+        f"生成候选 skill：{status or 'ok'}",
+        f"簇：{cluster_id}",
+        f"名称：{result.get('name_hint', '')}",
+        f"目录：{result.get('skill_dir', '')}",
+        f"文件：{result.get('skill_path', '')}",
+    ]
+    if result.get("workspace"):
+        lines.append(f"工作区：{result.get('workspace')}")
+    if result.get("code_backed"):
+        lines.append("包含 helper code：是")
+    return "\n".join(line for line in lines if line).rstrip()
+
+
 def render_cli_result(command: str | None, result: dict[str, Any]) -> str:
     if command == "tools":
         return _render_tools_result(result)
     if command == "recommend":
         return _render_recommend_result(result)
+    if command in {"skills", "list-skills"}:
+        return _render_skills_result(result)
     if command == "answer-kg":
         return _render_answer_kg_result(result)
     if command == "tool":
         return _render_tool_result_plain(result)
+    if command == "generate":
+        return _render_generate_result(result)
     return json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
 
 
@@ -303,6 +389,18 @@ def build_parser() -> argparse.ArgumentParser:
     recommend_parser.add_argument("--weights", default=None, help="可选：推荐器权重 JSON 路径。")
     recommend_parser.add_argument("--rerank", choices=["weighted", "pareto"], default="weighted", help="可选：重排策略。")
 
+    skills_parser = subparsers.add_parser("skills", help="列出现有 skill，或查看某个 skill 的上下文。")
+    skills_parser.add_argument("--name", default="", help="可选：查看指定 skill 名称或路径。")
+    skills_parser.add_argument("--names", action="store_true", help="只输出 skill name，每行一个。")
+    skills_parser.add_argument("--query", default="", help="可选：按名称、描述、标签或路径过滤列表。")
+    skills_parser.add_argument("--limit", type=int, default=50, help="最多显示多少个 skill。")
+
+    list_skills_parser = subparsers.add_parser("list-skills", help="兼容别名：列出现有 skill。")
+    list_skills_parser.add_argument("--name", default="", help="可选：查看指定 skill 名称或路径。")
+    list_skills_parser.add_argument("--names", action="store_true", help="只输出 skill name，每行一个。")
+    list_skills_parser.add_argument("--query", default="", help="可选：按名称、描述、标签或路径过滤列表。")
+    list_skills_parser.add_argument("--limit", type=int, default=50, help="最多显示多少个 skill。")
+
     generate_parser = subparsers.add_parser("generate", help="从挖掘簇生成候选 SKILL.md。")
     generate_parser.add_argument("--cluster-id", required=True, help="簇 ID，例如 C03。")
     generate_parser.add_argument("--output-dir", default=None, help="可选：目标输出目录。")
@@ -317,6 +415,23 @@ def build_parser() -> argparse.ArgumentParser:
     evolve_target.add_argument("--all-entrypoints", action="store_true", help="演化 mining report 中的全部生成入口。")
     evolve_parser.add_argument("--budget", type=int, default=50, help="每个簇最多评估的本地候选变体数。")
     evolve_parser.add_argument("--output-dir", default=None, help="可选：单个演化候选的目标目录。")
+
+    self_evolve_parser = subparsers.add_parser(
+        "self-evolve",
+        help="一键运行本地自进化：演化候选技能，并默认生成验证预览。",
+    )
+    self_evolve_parser.add_argument("cluster_id", nargs="?", default="", help="可选簇 ID，例如 C03；省略时选择最高优先级簇。")
+    self_evolve_parser.add_argument("--all-entrypoints", action="store_true", help="自进化 mining report 中的全部生成入口。")
+    self_evolve_parser.add_argument("--budget", type=int, default=20, help="每个簇最多评估的本地候选变体数。")
+    self_evolve_parser.add_argument("--output-dir", default=None, help="可选：单个演化候选的目标目录。")
+    self_evolve_parser.add_argument("--no-validate", action="store_true", help="只演化，不生成 validation.json 预览。")
+    self_evolve_parser.add_argument("--approve-validation", action="store_true", help="确认后在沙盒中执行 validation.json 命令。")
+    self_evolve_parser.add_argument("--evaluate", action="store_true", help="演化后运行 evolved 评估报告。")
+    self_evolve_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="评估使用的基础 JSONL 轨迹文件。")
+    self_evolve_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="评估使用的处理后轨迹路径。")
+    self_evolve_parser.add_argument("--tool-events", default=None, help="可选：评估时使用的工具事件 JSONL 路径。")
+    self_evolve_parser.add_argument("--no-tool-events", action="store_true", help="评估时不合并 .diaevo/tool_events.jsonl。")
+    self_evolve_parser.add_argument("--top-k", type=int, default=5, help="评估推荐指标使用的 Top-K 截断值。")
 
     validate_parser = subparsers.add_parser("validate", help="运行已审批的候选技能 validation.json 命令。")
     validate_parser.add_argument("--skill", required=True, help="候选技能目录或 SKILL.md 路径。")
@@ -575,6 +690,9 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser.add_argument("--image", action="append", default=[], help="附加图片路径或 URL，并使用 GLM 视觉配置。")
     chat_parser.add_argument("--interactive", action="store_true", help="本地保留对话历史，持续聊天直到 /exit。")
 
+    qq_parser = subparsers.add_parser("qq-bridge", help="通过 OneBot 11 QQ 私聊白名单远程控制 DiaEvo。")
+    qq_parser.add_argument("--env", default=None, help=".env 路径；默认使用当前 workspace 或安装目录 .env。")
+
     return parser
 
 
@@ -588,7 +706,11 @@ def run_demo(task: str, cluster_id: str = "") -> dict[str, Any]:
         selected_cluster = str(clusters[0]["id"]) if clusters else "C01"
     rec_result = recommend(task=task, top_k=5)
     gen_result = generate_skill(selected_cluster)
-    verify_result = verify_skill(gen_result["skill_dir"])
+    verify_result = (
+        verify_skill(gen_result["skill_dir"])
+        if gen_result.get("status") == "candidate" and gen_result.get("skill_dir")
+        else {"status": "skipped", "reason": gen_result.get("reason"), "message": gen_result.get("message")}
+    )
     return {
         "ingest": ingest_result,
         "mine": {
@@ -601,6 +723,116 @@ def run_demo(task: str, cluster_id: str = "") -> dict[str, Any]:
         "recommend": rec_result,
         "generate": gen_result,
         "verify": verify_result,
+    }
+
+
+def run_self_evolve(
+    cluster_id: str = "",
+    *,
+    all_entrypoints: bool = False,
+    budget: int = 20,
+    output_dir: str | None = None,
+    validate: bool = True,
+    approve_validation: bool = False,
+    evaluate: bool = False,
+    input_path: str = str(DATA_DIR / "sample_traces.jsonl"),
+    processed_path: str = str(DATA_DIR / "processed_traces.jsonl"),
+    tool_events_path: str | None = None,
+    include_tool_events: bool = True,
+    top_k: int = 5,
+) -> dict[str, Any]:
+    evolution_result = evolve_skill(
+        cluster_id or None,
+        all_entrypoints=all_entrypoints,
+        budget=budget,
+        output_dir=output_dir,
+    )
+    validation_results: list[dict[str, Any]] = []
+    if validate:
+        for run in evolution_result.get("runs", []):
+            if not isinstance(run, dict):
+                continue
+            output = run.get("output")
+            if not isinstance(output, dict) or not output.get("skill_dir"):
+                continue
+            validation_results.append(
+                run_validation(str(output["skill_dir"]), approve=approve_validation)
+            )
+    evaluation_result: dict[str, Any] = {}
+    if evaluate:
+        evaluation_result = baseline_report(
+            input_path=input_path,
+            processed_path=processed_path,
+            tool_events_path=tool_events_path,
+            include_tool_events=include_tool_events,
+            top_k=top_k,
+            variant="evolved",
+        )
+
+    result = {
+        "status": "ok",
+        "mode": "self_evolve",
+        "cluster_id": cluster_id or "",
+        "all_entrypoints": all_entrypoints,
+        "budget": budget,
+        "validation_mode": "executed" if approve_validation else "preview",
+        "evolution": evolution_result,
+        "validation": validation_results,
+        "evaluation": evaluation_result,
+    }
+    report_path = REPORTS_DIR / "self_evolution_report.json"
+    write_json(report_path, result)
+    result["report_path"] = str(report_path)
+    return result
+
+
+def list_skills(
+    *,
+    name: str = "",
+    names_only: bool = False,
+    query: str = "",
+    limit: int = 50,
+) -> dict[str, Any]:
+    if name.strip():
+        context = load_skill_context(name.strip())
+        return {"mode": "detail", **context}
+
+    normalized_query = query.strip().lower()
+    sources = discover_skill_sources()
+    if normalized_query:
+        filtered = []
+        for source in sources:
+            haystack = " ".join(
+                [
+                    source.name,
+                    source.description,
+                    source.source,
+                    str(source.path),
+                    " ".join(source.tags),
+                ]
+            ).lower()
+            if normalized_query in haystack:
+                filtered.append(source)
+        sources = filtered
+    limit = max(1, limit)
+    visible = sources[:limit]
+    return {
+        "status": "ok",
+        "mode": "list",
+        "names_only": names_only,
+        "query": query,
+        "skill_count": len(sources),
+        "shown": len(visible),
+        "skills": [
+            {
+                "name": source.name,
+                "description": source.description,
+                "path": str(source.path),
+                "source": source.source,
+                "tags": list(source.tags),
+            }
+            for source in visible
+        ],
     }
 
 
@@ -646,6 +878,8 @@ def main(argv: list[str] | None = None) -> int:
                 weights_path=args.weights,
                 rerank=args.rerank,
             )
+        elif args.command in {"skills", "list-skills"}:
+            result = list_skills(name=args.name, names_only=args.names, query=args.query, limit=args.limit)
         elif args.command == "generate":
             result = generate_skill(args.cluster_id, args.output_dir, with_code=args.with_code)
         elif args.command == "verify":
@@ -656,6 +890,23 @@ def main(argv: list[str] | None = None) -> int:
                 all_entrypoints=args.all_entrypoints,
                 budget=args.budget,
                 output_dir=args.output_dir,
+            )
+        elif args.command == "self-evolve":
+            if args.cluster_id and args.all_entrypoints:
+                parser.error("self-evolve 不能同时指定 cluster_id 和 --all-entrypoints")
+            result = run_self_evolve(
+                args.cluster_id,
+                all_entrypoints=args.all_entrypoints,
+                budget=args.budget,
+                output_dir=args.output_dir,
+                validate=not args.no_validate,
+                approve_validation=args.approve_validation,
+                evaluate=args.evaluate,
+                input_path=args.input,
+                processed_path=args.processed,
+                tool_events_path=args.tool_events,
+                include_tool_events=not args.no_tool_events,
+                top_k=args.top_k,
             )
         elif args.command == "validate":
             result = run_validation(args.skill, approve=args.approve)
@@ -824,6 +1075,10 @@ def main(argv: list[str] | None = None) -> int:
                 interactive=args.interactive,
                 image_paths=args.image,
             )
+        elif args.command == "qq-bridge":
+            from .qq_bridge import run_bridge_from_env
+
+            return run_bridge_from_env(args.env)
         else:
             parser.error(f"Unknown command: {args.command}")
             return 2

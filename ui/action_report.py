@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from urllib.parse import urlparse
 
 from diaevo.tool_chat import RequestedToolCall
 
@@ -15,11 +16,12 @@ class TurnReport:
     queued_inputs: int = 0
 
     def render(self) -> str:
-        queued = f"；待处理输入：{self.queued_inputs}" if self.queued_inputs else ""
-        return (
-            f"计划  目标：{self.purpose}；文件：{self.files}；工具：{self.tools}；"
-            f"skill：{self.skill_text}{queued}；下一步：{self.next_step}"
-        )
+        pieces = [f"思考  {self.next_step}"]
+        if self.skill_text != "未加载 skill":
+            pieces.append(f"已加载 skill：{self.skill_text}。")
+        if self.queued_inputs:
+            pieces.append(f"另有 {self.queued_inputs} 条输入排队。")
+        return " ".join(pieces)
 
 
 def short_value(value: object, limit: int = 80) -> str:
@@ -53,8 +55,12 @@ def build_turn_report(
         "",
     )
     skills = active_skill_names(messages)
-    purpose = short_value(last_user, 96) if last_user else "继续处理当前工具结果"
-    next_step = "请求模型决定回答或下一批工具调用" if round_index else "请求模型理解任务并选择下一步"
+    purpose = short_value(last_user, 48) if last_user else "继续处理当前工具结果"
+    next_step = (
+        "根据刚才的结果继续判断。"
+        if round_index
+        else "先判断是否需要工具。"
+    )
     return TurnReport(
         purpose=purpose,
         files="由模型按需声明并通过工具确认",
@@ -82,15 +88,14 @@ def tool_reason(call: RequestedToolCall) -> str:
         return "应用补丁，把已确定的代码改动写入工作区。"
     if call.name == "run_shell":
         return _arg_reason(
-            "运行本地命令验证或获取结果，通常用于代码检查、测试或环境诊断。"
-            "先看 stderr/stdout，再决定下一步。",
+            "运行本地命令验证。",
             "command",
             args,
         )
     if call.name == "web_fetch":
-        return _arg_reason("获取指定网页内容作为外部证据。", "url", args)
+        return f"获取网页证据。{_url_suffix(args.get('url'))}".strip()
     if call.name == "web_search":
-        return _arg_reason("搜索外部资料，找到可参考的信息来源。", "query", args)
+        return _arg_reason("搜索外部资料。", "query", args)
     if call.name == "arxiv_search":
         return _arg_reason("检索 arXiv 论文元数据，支持学术文献调研。", "query", args)
     if call.name == "recommend_skills":
@@ -108,5 +113,13 @@ def _file_reason(prefix: str, args: dict[str, object]) -> str:
 
 def _arg_reason(prefix: str, key: str, args: dict[str, object]) -> str:
     value = args.get(key)
-    suffix = f" {key}={short_value(value)}" if value else ""
+    suffix = f" {key}={short_value(value, 48)}" if value else ""
     return f"{prefix}{suffix}".strip()
+
+
+def _url_suffix(value: object) -> str:
+    if not value:
+        return ""
+    parsed = urlparse(str(value))
+    host = parsed.netloc or parsed.path.split("/", 1)[0]
+    return f"来源 {host}" if host else ""

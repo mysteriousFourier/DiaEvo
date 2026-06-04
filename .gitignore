@@ -14,6 +14,7 @@ __pycache__/
 .mypy_cache/
 .uv-cache/
 .venv/
+QQ.exe
 docs/FINAL_PROJECT_REPORT.md
 docs/HANDOFF*.md
 data/processed_traces.jsonl

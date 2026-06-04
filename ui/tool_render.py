@@ -2,8 +2,9 @@ from __future__ import annotations
 
 import json
 from typing import Any
+from urllib.parse import urlparse
 
-from .cli_style import BLUE, DIM, GLYPHS, PURPLE, RESET, _fit, _term_width
+from .cli_style import CYAN, DIM, PURPLE, RESET, _fit, _term_width
 from .output_policy import sanitize_no_emoji
 
 
@@ -28,25 +29,50 @@ def _truncate_text(value: Any, limit: int = 320) -> str:
     return text[: limit - 3].rstrip() + "..."
 
 
+def _compact_url(value: Any, limit: int = 96) -> str:
+    text = _clean_text(value)
+    if not text:
+        return ""
+    parsed = urlparse(text)
+    if not parsed.netloc:
+        return _truncate_text(text, limit)
+    path = parsed.path.strip("/")
+    shown_path = f"/{path}" if path else ""
+    if len(shown_path) > 36:
+        shown_path = shown_path[:18].rstrip("/") + "/..." + shown_path[-14:]
+    return _truncate_text(f"{parsed.netloc}{shown_path}", limit)
+
+
 def _result_url(item: dict[str, Any]) -> str:
     return _clean_text(item.get("url") or item.get("abs_url") or item.get("pdf_url") or "")
 
 
 def _render_web_search(result: dict[str, Any], content_width: int) -> list[str]:
-    lines = [_fit(f"query: {_clean_text(result.get('query', ''))}", content_width)]
-    source = _clean_text(result.get("source") or "")
-    if source:
-        lines.append(_fit(f"source: {source}", content_width))
+    lines = [_fit(f"查询  {_clean_text(result.get('query', ''))}", content_width)]
+    backend = _clean_text(result.get("backend") or result.get("source") or "")
+    if backend:
+        lines.append(_fit(f"来源  {backend}", content_width))
+    fallback_reason = _truncate_text(result.get("fallback_reason") or "", 180)
+    if fallback_reason:
+        lines.append(_fit(f"回退  {fallback_reason}", content_width))
     items = result.get("results") or []
     if not isinstance(items, list) or not items:
-        return lines + ["no results"]
+        return lines + ["未找到结果"]
     for index, item in enumerate(items, start=1):
         if not isinstance(item, dict):
             continue
         title = _clean_text(item.get("title") or f"Result {index}")
-        url = _result_url(item)
-        snippet = _truncate_text(item.get("snippet") or item.get("summary") or item.get("content") or "", 220)
+        url = _compact_url(_result_url(item))
+        source = _clean_text(item.get("source") or "")
+        fetch_status = _clean_text(item.get("fetch_status") or "")
+        detail_parts = [part for part in [source, _fetch_label(fetch_status) if fetch_status else ""] if part]
+        snippet = _truncate_text(
+            item.get("content_excerpt") or item.get("snippet") or item.get("summary") or item.get("content") or "",
+            220,
+        )
         lines.append(_fit(f"{index}. {title}", content_width))
+        if detail_parts:
+            lines.append(_fit(f"   {'  '.join(detail_parts)}", content_width))
         if url:
             lines.append(_fit(f"   {url}", content_width))
         if snippet:
@@ -56,31 +82,31 @@ def _render_web_search(result: dict[str, Any], content_width: int) -> list[str]:
 
 def _render_web_fetch(result: dict[str, Any], content_width: int) -> list[str]:
     lines = []
-    url = _clean_text(result.get("url") or "")
+    url = _compact_url(result.get("final_url") or result.get("url") or "")
     if url:
-        lines.append(_fit(f"url: {url}", content_width))
+        lines.append(_fit(f"来源  {url}", content_width))
     metadata = [
-        f"status: {result.get('status_code')}",
-        f"type: {_clean_text(result.get('content_type') or '')}",
-        f"truncated: {bool(result.get('truncated'))}",
+        f"HTTP {result.get('status_code')}",
+        _clean_text(result.get("content_type") or "").split(";", 1)[0],
+        "已截断" if result.get("truncated") else "",
     ]
-    lines.append(_fit("  ".join(item for item in metadata if not item.endswith(": ")), content_width))
-    content = _truncate_text(result.get("content") or "", 1_200)
+    lines.append(_fit("  ".join(item for item in metadata if item), content_width))
+    content = _truncate_text(result.get("content") or "", 360)
     if content:
-        lines.append(_fit("content:", content_width))
-        for line in _preview_lines(content, limit=8):
+        lines.append(_fit("摘录", content_width))
+        for line in _preview_lines(content, limit=4):
             lines.append(_fit(line, content_width))
     return lines
 
 
 def _render_arxiv_search(result: dict[str, Any], content_width: int) -> list[str]:
     lines = [
-        _fit(f"query: {_clean_text(result.get('query') or result.get('search_query') or '')}", content_width),
-        _fit(f"source: {_clean_text(result.get('source') or 'arxiv_api')}", content_width),
+        _fit(f"查询  {_clean_text(result.get('query') or result.get('search_query') or '')}", content_width),
+        _fit(f"来源  {_clean_text(result.get('source') or 'arxiv_api')}", content_width),
     ]
     total = result.get("total_results")
     if total is not None:
-        lines.append(_fit(f"total_results: {total}", content_width))
+        lines.append(_fit(f"结果数  {total}", content_width))
     items = result.get("results") or []
     if not isinstance(items, list) or not items:
         return lines + ["no papers"]
@@ -129,6 +155,28 @@ def _render_tool_body(result: dict[str, Any], status: str, content_width: int) -
     return _render_generic_body(result, content_width)
 
 
+def _fetch_label(status: str) -> str:
+    if status == "ok":
+        return "已抓取"
+    if status == "not_fetched":
+        return "未抓取"
+    if status.startswith("error:"):
+        return "抓取失败"
+    return status
+
+
+def _status_label(status: str) -> str:
+    labels = {
+        "ok": "完成",
+        "error": "失败",
+        "requires_approval": "待确认",
+        "denied": "已拒绝",
+        "interrupted": "已中断",
+        "timeout": "超时",
+    }
+    return labels.get(status, status)
+
+
 def _render_generic_body(result: dict[str, Any], content_width: int) -> list[str]:
     shown: Any
     if "entries" in result:
@@ -154,11 +202,10 @@ def render_tool_result(result: dict[str, Any]) -> str:
     status = sanitize_no_emoji(result.get("status", "ok"))
     tool = sanitize_no_emoji(result.get("tool", "tool"))
     content_width = width
-    lines = [f"{PURPLE}{tool}{RESET} {DIM}{status}{RESET}"]
+    lines = [f"{CYAN}工具{RESET}  {PURPLE}{tool}{RESET}  {DIM}{_status_label(status)}{RESET}"]
     lines.extend(_render_tool_body(result, status, content_width))
 
     if result.get("event_id"):
-        footer = f"event {result['event_id']} -> {result.get('event_log', '')}"
+        footer = f"记录 {str(result['event_id'])[:10]}"
         lines.append(DIM + _fit(footer, content_width) + RESET)
-    lines.append(f"{BLUE}{GLYPHS['h'] * width}{RESET}")
     return "\n".join(lines)

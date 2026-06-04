@@ -475,10 +475,10 @@ def _parse_skill_package(source_dir: Path, summary: dict[str, Any]) -> dict[str,
     return {
         "source_skill_path": str(skill_path),
         "source_frontmatter": meta,
-        "body": body.strip(),
         "headings": _heading_lines(body),
         "reference_candidates": refs,
         "source_skill_sha256": _sha256(skill_path),
+        "source_skill_bytes": skill_path.stat().st_size,
     }
 
 
@@ -530,7 +530,6 @@ def _render_skill_package(
     *,
     name: str,
     source_cluster: str,
-    copied_references: list[dict[str, Any]],
     skipped_references: list[dict[str, Any]],
 ) -> str:
     source = summary["source"]
@@ -538,7 +537,7 @@ def _render_skill_package(
     source_meta = package_info["source_frontmatter"]
     original_name = _frontmatter_value(source_meta, "name", package.get("name") or Path(summary["source_dir"]).name)
     original_description = _frontmatter_value(source_meta, "description", "")
-    description = original_description if len(original_description) >= 30 else f"保真迁移外部 skill package：{original_name}，保留原始工作流、参考资料路由和验证约束。"
+    description = original_description if len(original_description) >= 30 else f"基于外部 skill 元数据生成 DiaEvo 本地迁移策略：{original_name}。"
     source_label = _source_label(summary)
     commands = _validation_commands(summary)
     tags = ["external-skill", "adapted-skill", "skill-package"]
@@ -546,7 +545,7 @@ def _render_skill_package(
     if "frontend" in " ".join(summary.get("signals", [])).lower() or "web" in str(original_name).lower():
         tags.extend(["frontend", "web-design"])
     tag_text = "[" + ", ".join(f'"{tag}"' for tag in dict.fromkeys(tags)) + "]"
-    reference_paths = [str(item["path"]) for item in copied_references]
+    reference_paths = [str(item) for item in package_info.get("reference_candidates", [])]
     lines = [
         "---",
         f"name: {_yaml_scalar(name)}",
@@ -561,8 +560,8 @@ def _render_skill_package(
         "",
         "## When To Use",
         "",
-        f"Use this DiaEvo-adapted skill when the task matches the preserved external skill package `{original_name}`.",
-        "The migrated body below is intentionally preserved instead of summarized so workflow, guardrails, and reference routing remain available to the agent.",
+        f"Use this DiaEvo-adapted skill when the task is similar to the external skill package `{original_name}`.",
+        "This candidate records provenance and a local DiaEvo migration strategy only; it does not copy the external SKILL.md body or reference documents.",
         "",
         "## Trigger Signals",
         "",
@@ -572,9 +571,6 @@ def _render_skill_package(
         "原始 skill 元数据：",
         *_list([original_name, original_description, source_tags], "源 SKILL.md 未提供 frontmatter 元数据。"),
         "",
-        "保留章节：",
-        *_list([str(item) for item in package_info.get("headings", [])[:16]], "未检测到 Markdown heading。"),
-        "",
         "## 迁移证据",
         "",
         "- 迁移模式：`skill_package`",
@@ -582,54 +578,49 @@ def _render_skill_package(
         f"- 来源 commit：`{source.get('commit') or '未记录'}`",
         f"- 来源子目录：`{source.get('subdir') or '未记录'}`",
         f"- 源 SKILL 哈希：`{package_info.get('source_skill_sha256')}`",
+        f"- 源 SKILL 字节数：`{package_info.get('source_skill_bytes')}`",
+        f"- 源 SKILL 标题数量：`{len(package_info.get('headings', []))}`",
         f"- 文件数量：`{summary.get('file_count')}`",
         f"- Package 名称：`{package.get('name') or '未记录'}`",
-        f"- 复制 references：`{len(copied_references)}`",
-        f"- 跳过 references：`{len(skipped_references)}`",
+        f"- 外部 reference 候选：`{len(reference_paths)}`",
+        f"- 未复制外部文件：`{len(skipped_references)}`",
         "",
         "## Operating Steps",
         "",
-        "1. Read the preserved source workflow below before applying this skill.",
-        "2. Follow `## References Routing` when a task needs detailed templates, critique rubrics, or domain-specific reference material.",
-        "3. Apply DiaEvo safety and verification constraints after the preserved workflow, especially for dependency installation, browser automation, and network access.",
-        "4. Record use results through normal DiaEvo feedback so later evolution can specialize overlays without losing the preserved source behavior.",
+        "1. Treat the external skill as provenance evidence, not as project-owned instruction text.",
+        "2. Use the source frontmatter, headings, hashes, and package metadata to decide whether a local DiaEvo workflow is needed.",
+        "3. Write any future local workflow in original DiaEvo wording, grounded in project traces and validation results.",
+        "4. Apply DiaEvo safety and verification constraints, especially for dependency installation, browser automation, and network access.",
+        "5. Record use results through normal DiaEvo feedback so later evolution can specialize local overlays without copying external text.",
         "",
         "## Failure Fallbacks",
         "",
-        "- If a referenced file is missing, continue with the preserved `SKILL.md` body and record the missing file in the migration report.",
-        "- If the preserved source instruction conflicts with DiaEvo safety policy, follow DiaEvo safety policy and ask for explicit approval when required.",
-        "- If the task is narrower than the preserved skill, add a local overlay or specialization instead of deleting source workflow sections.",
+        "- If the external source is unavailable, keep only the recorded source metadata and ask for a fresh source review.",
+        "- If a task requires external reference details, ask the user to provide or approve reading that source instead of embedding it in the project.",
+        "- If the external instruction conflicts with DiaEvo safety policy, follow DiaEvo safety policy and ask for explicit approval when required.",
+        "- If the task is narrower than the external skill, generate a local overlay from DiaEvo traces rather than copying the external workflow.",
         "- If validation needs package install, build, browser, or network access, keep it as a separate approval-gated check.",
         "",
         "## Verification Suggestions",
         "",
         "- Run `diaevo verify --skill <candidate-dir>` before queueing promotion.",
-        "- Check `migration_manifest.json` to confirm source hashes, preserved headings, copied references, and skipped references.",
-        "- Compare the migrated package against the source `SKILL.md`; high-value workflow sections should be preserved rather than paraphrased away.",
+        "- Check `migration_manifest.json` to confirm source hashes, observed headings, and the no-copy migration policy.",
+        "- Compare the candidate against the source only for provenance review; do not paste external SKILL.md sections into this project.",
         "- If dependencies already exist and the source package defines validation commands, run `" + "`, `".join(commands or ["source-specific validation"]) + "` as an optional approval-gated check.",
         "",
         "## Safety Constraints",
         "",
-        "- Do not automatically install dependencies or execute copied reference material.",
-        "- Do not copy secrets, environment files, binary artifacts, build outputs, or unreviewed executable helper code from the external source.",
-        "- Treat copied references as documentation only; executable code still requires a separate reviewed code artifact.",
+        "- Do not automatically install dependencies.",
+        "- Do not copy external SKILL.md bodies, reference documents, secrets, environment files, binary artifacts, build outputs, or unreviewed executable helper code into DiaEvo candidates.",
+        "- Treat external sources as provenance only until a separately reviewed local workflow is authored.",
         "",
-        "## References Routing",
+        "## External Reference Metadata",
         "",
     ]
     if reference_paths:
-        lines.extend(f"- `{path}`" for path in reference_paths)
+        lines.extend(f"- `{path}`（未复制）" for path in reference_paths[:20])
     else:
-        lines.append("- No reference documents were copied.")
-    lines.extend(
-        [
-            "",
-            "## Preserved Source Skill",
-            "",
-            str(package_info["body"]).strip(),
-            "",
-        ]
-    )
+        lines.append("- No external reference documents were detected.")
     return "\n".join(lines)
 
 
@@ -742,7 +733,6 @@ def _write_candidate(
     skill_path = output_dir / "SKILL.md"
     skill_path.write_text(markdown, encoding="utf-8")
     if migration_manifest:
-        _copy_references(Path(str(summary["source_dir"])), output_dir, copied_references or [])
         write_json(output_dir / "migration_manifest.json", migration_manifest)
     validation = {
         "schema": "diaevo.validation.v1",
@@ -812,28 +802,39 @@ def adapt_external_skill(
     package_info: dict[str, Any] = {}
     if resolved_mode == "skill_package":
         package_info = _parse_skill_package(source_dir, summary)
-        copied_references, skipped_references = _reference_copy_plan(source_dir, summary)
+        _copyable_references, skipped_references = _reference_copy_plan(source_dir, summary)
+        skipped_references = [
+            {
+                "path": str(item.get("path") or ""),
+                "size": int(item.get("size") or 0),
+                "reason": "external_reference_not_copied",
+                "sha256": item.get("sha256"),
+            }
+            for item in _copyable_references
+        ] + skipped_references
         markdown = _render_skill_package(
             summary,
             package_info,
             name=name,
             source_cluster=source_cluster,
-            copied_references=copied_references,
             skipped_references=skipped_references,
         )
         migration_manifest = {
-            "schema": "diaevo.skill_package_migration.v1",
+            "schema": "diaevo.skill_package_migration.v2",
             "created_at": _now(),
             "mode": resolved_mode,
+            "copy_policy": "provenance_only_no_external_skill_body_or_references",
             "source": source_info,
             "source_dir": str(source_dir),
             "source_skill": {
                 "path": "SKILL.md",
                 "sha256": package_info.get("source_skill_sha256"),
+                "size": package_info.get("source_skill_bytes"),
                 "frontmatter": package_info.get("source_frontmatter", {}),
             },
-            "preserved_headings": package_info.get("headings", []),
-            "copied_references": copied_references,
+            "observed_headings": package_info.get("headings", []),
+            "external_reference_candidates": package_info.get("reference_candidates", []),
+            "copied_references": [],
             "skipped_references": skipped_references,
         }
     else:

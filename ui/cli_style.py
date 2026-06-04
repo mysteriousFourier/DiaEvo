@@ -9,6 +9,7 @@ from pathlib import Path
 from diaevo.paths import DIAEVO_DIR, WORKSPACE_ROOT, REPORTS_DIR
 from diaevo.env import load_env
 from diaevo.storage import read_json, write_json
+from diaevo import __version__
 
 ESC = "\033["
 DIM = f"{ESC}2m"
@@ -66,20 +67,43 @@ def _pad(text: str, width: int, *, align: str = "left") -> str:
     return f"{text}{' ' * missing}"
 
 
+def _is_reset_sequence(value: str) -> bool:
+    return value.endswith("[0m")
+
+
 def _truncate(text: str, width: int) -> str:
-    clean = ANSI_RE.sub("", str(text))
-    if _display_width(clean) <= width:
-        return clean
-    result = []
+    value = str(text)
+    if width <= 0:
+        return ""
+    if _display_width(value) <= width:
+        return value
+
+    suffix = "..." if width >= 3 else "." * width
+    suffix_width = _display_width(suffix)
+    target_width = max(0, width - suffix_width)
+    result: list[str] = []
     used = 0
-    suffix_width = 3
-    for char in clean:
+    position = 0
+    saw_ansi = False
+
+    for match in ANSI_RE.finditer(value):
+        for char in value[position : match.start()]:
+            char_width = _char_width(char)
+            if used + char_width > target_width:
+                return "".join(result) + suffix + (RESET if saw_ansi else "")
+            result.append(char)
+            used += char_width
+        result.append(match.group(0))
+        saw_ansi = True
+        position = match.end()
+
+    for char in value[position:]:
         char_width = _char_width(char)
-        if used + char_width + suffix_width > width:
-            break
+        if used + char_width > target_width:
+            return "".join(result) + suffix + (RESET if saw_ansi else "")
         result.append(char)
         used += char_width
-    return "".join(result) + "..."
+    return "".join(result) + suffix + (RESET if saw_ansi else "")
 
 
 def _fit(text: str, width: int) -> str:
@@ -93,14 +117,40 @@ def _wrap_display_line(text: str, width: int) -> list[str]:
         return [text]
     lines: list[str] = []
     current: list[str] = []
+    active_styles: list[str] = []
     used = 0
-    for char in text:
+
+    def add_style(sequence: str) -> None:
+        nonlocal active_styles
+        current.append(sequence)
+        if _is_reset_sequence(sequence):
+            active_styles = []
+        elif sequence not in active_styles:
+            active_styles.append(sequence)
+
+    position = 0
+    for match in ANSI_RE.finditer(str(text)):
+        for char in str(text)[position : match.start()]:
+            char_width = _char_width(char)
+            if current and used + char_width > width:
+                if active_styles:
+                    current.append(RESET)
+                lines.append("".join(current))
+                current = [*active_styles]
+                used = 0
+            current.append(char)
+            used += char_width
+        add_style(match.group(0))
+        position = match.end()
+
+    for char in str(text)[position:]:
         char_width = _char_width(char)
         if current and used + char_width > width:
+            if active_styles:
+                current.append(RESET)
             lines.append("".join(current))
-            current = [char]
-            used = char_width
-            continue
+            current = [*active_styles]
+            used = 0
         current.append(char)
         used += char_width
     return lines + (["".join(current)] if current else [])
@@ -202,7 +252,7 @@ def render_logo_card() -> str:
     left_width = 38
     column_gap = "   "
     right_width = width - left_width - len(column_gap)
-    title = f"{BLUE}{BOLD}DiaEvo{RESET} {DIM}v0.1.0{RESET}"
+    title = f"{BLUE}{BOLD}DiaEvo{RESET} {DIM}v{__version__}{RESET}"
     left = [
         "",
         f"{BOLD}欢迎回来{RESET}",

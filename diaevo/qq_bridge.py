@@ -1,0 +1,610 @@
+from __future__ import annotations
+
+import asyncio
+import hashlib
+import inspect
+import json
+import os
+import secrets
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
+import uuid
+from dataclasses import dataclass, field
+from pathlib import Path
+from typing import Any, Callable
+
+from .cli import main as cli_main
+from .deepseek_chat import chat_once, config_from_env
+from .env import load_env
+from .paths import DIAEVO_DIR
+from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args
+
+
+DEFAULT_APPROVAL_TTL_SECONDS = 300
+DEFAULT_MAX_MESSAGE_CHARS = 1800
+FORBIDDEN_REMOTE_COMMANDS = {"key", "vision-key", "vision_key", "visionkey"}
+
+
+@dataclass(frozen=True, slots=True)
+class QQBridgeConfig:
+    enabled: bool
+    allowed_users: set[str]
+    onebot_ws_url: str
+    onebot_http_url: str
+    access_token: str = ""
+    approval_ttl_seconds: int = DEFAULT_APPROVAL_TTL_SECONDS
+    max_message_chars: int = DEFAULT_MAX_MESSAGE_CHARS
+    event_log_path: Path = DIAEVO_DIR / "qq_remote_events.jsonl"
+
+
+@dataclass(frozen=True, slots=True)
+class RemoteMessage:
+    user_id: str
+    text: str
+    message_id: str = ""
+    raw: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(slots=True)
+class PendingApproval:
+    code: str
+    user_id: str
+    tool_name: str
+    args: dict[str, Any]
+    created_at: float
+    expires_at: float
+    preview_event_id: str = ""
+    used: bool = False
+
+
+class QQBridgeError(RuntimeError):
+    pass
+
+
+def _truthy(value: str | None) -> bool:
+    return (value or "").strip().lower() in {"1", "true", "yes", "on", "enabled"}
+
+
+def _split_csv(value: str | None) -> set[str]:
+    return {item.strip() for item in (value or "").replace(";", ",").split(",") if item.strip()}
+
+
+def config_from_env_vars(env_path: str | Path | None = None) -> QQBridgeConfig:
+    load_env(env_path)
+    return QQBridgeConfig(
+        enabled=_truthy(os.environ.get("DIAEVO_QQ_ENABLED")),
+        allowed_users=_split_csv(os.environ.get("DIAEVO_QQ_ALLOWED_USERS")),
+        onebot_ws_url=os.environ.get("DIAEVO_QQ_ONEBOT_WS_URL", "").strip(),
+        onebot_http_url=os.environ.get("DIAEVO_QQ_ONEBOT_HTTP_URL", "").strip().rstrip("/"),
+        access_token=os.environ.get("DIAEVO_QQ_ACCESS_TOKEN", "").strip(),
+        approval_ttl_seconds=int(os.environ.get("DIAEVO_QQ_APPROVAL_TTL_SECONDS", DEFAULT_APPROVAL_TTL_SECONDS)),
+        max_message_chars=int(os.environ.get("DIAEVO_QQ_MAX_MESSAGE_CHARS", DEFAULT_MAX_MESSAGE_CHARS)),
+    )
+
+
+def validate_config(config: QQBridgeConfig) -> None:
+    if not config.enabled:
+        raise QQBridgeError("DIAEVO_QQ_ENABLED is not enabled")
+    if not config.allowed_users:
+        raise QQBridgeError("DIAEVO_QQ_ALLOWED_USERS must include at least one QQ number")
+    if not config.onebot_ws_url:
+        raise QQBridgeError("DIAEVO_QQ_ONEBOT_WS_URL is required")
+    if not config.onebot_http_url:
+        raise QQBridgeError("DIAEVO_QQ_ONEBOT_HTTP_URL is required")
+    if config.approval_ttl_seconds <= 0:
+        raise QQBridgeError("DIAEVO_QQ_APPROVAL_TTL_SECONDS must be positive")
+
+
+def parse_onebot_private_message(event: dict[str, Any]) -> RemoteMessage | None:
+    if event.get("post_type") != "message":
+        return None
+    if event.get("message_type") != "private":
+        return None
+    user_id = str(event.get("user_id") or "").strip()
+    if not user_id:
+        return None
+    text = _message_to_text(event.get("message"))
+    if not text:
+        text = str(event.get("raw_message") or "").strip()
+    if not text:
+        return None
+    return RemoteMessage(user_id=user_id, text=text, message_id=str(event.get("message_id") or ""), raw=event)
+
+
+def _message_to_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value.strip()
+    if isinstance(value, list):
+        parts: list[str] = []
+        for item in value:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "text":
+                data = item.get("data")
+                if isinstance(data, dict):
+                    parts.append(str(data.get("text") or ""))
+        return "".join(parts).strip()
+    return ""
+
+
+def is_allowed_message(message: RemoteMessage, config: QQBridgeConfig) -> bool:
+    return message.user_id in config.allowed_users
+
+
+def redact_for_log(value: Any) -> Any:
+    if isinstance(value, dict):
+        output: dict[str, Any] = {}
+        for key, item in value.items():
+            lowered = str(key).lower()
+            if any(token in lowered for token in ("key", "token", "secret", "password")):
+                output[str(key)] = "***"
+            else:
+                output[str(key)] = redact_for_log(item)
+        return output
+    if isinstance(value, list):
+        return [redact_for_log(item) for item in value]
+    return value
+
+
+def sanitize_remote_text_for_log(text: str) -> str:
+    stripped = text.strip()
+    if not stripped.startswith("/"):
+        return stripped
+    command = stripped.split(maxsplit=1)[0].removeprefix("/").lower()
+    if command in FORBIDDEN_REMOTE_COMMANDS or any(token in command for token in ("key", "token", "secret")):
+        return f"/{command} ***"
+    return stripped
+
+
+def append_remote_event(action: str, payload: dict[str, Any], *, path: Path | None = None) -> None:
+    target = path or (DIAEVO_DIR / "qq_remote_events.jsonl")
+    target.parent.mkdir(parents=True, exist_ok=True)
+    event = {
+        "id": uuid.uuid4().hex,
+        "action": action,
+        "created_at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        **redact_for_log(payload),
+    }
+    with target.open("a", encoding="utf-8") as handle:
+        handle.write(json.dumps(event, ensure_ascii=False, sort_keys=True) + "\n")
+
+
+class QQRemoteSession:
+    def __init__(
+        self,
+        config: QQBridgeConfig,
+        *,
+        send_message: Callable[[str, str], None] | None = None,
+        now: Callable[[], float] | None = None,
+    ) -> None:
+        self.config = config
+        self.send_message = send_message or OneBotClient(config).send_private_msg
+        self.now = now or time.time
+        self.pending: dict[str, PendingApproval] = {}
+        self.busy = False
+
+    def handle_message(self, message: RemoteMessage) -> None:
+        if not is_allowed_message(message, self.config):
+            append_remote_event(
+                "ignored_unauthorized",
+                {"user_id": message.user_id, "message_id": message.message_id},
+                path=self.config.event_log_path,
+            )
+            return
+        text = message.text.strip()
+        append_remote_event(
+            "received",
+            {"user_id": message.user_id, "message_id": message.message_id, "text": sanitize_remote_text_for_log(text)},
+            path=self.config.event_log_path,
+        )
+        if not text:
+            return
+        if text.startswith("/approve"):
+            self._handle_approve(message.user_id, text)
+            return
+        if text.startswith("/deny"):
+            self._handle_deny(message.user_id, text)
+            return
+        if text in {"/status", "status"}:
+            self._send_status(message.user_id)
+            return
+        if text in {"/cancel", "cancel"}:
+            self.pending.clear()
+            self.busy = False
+            self._send(message.user_id, "已取消当前远程等待项。")
+            return
+        if self.busy:
+            self._send(message.user_id, "当前已有远程任务运行中，请稍后再试或发送 /status 查看。")
+            return
+        self.busy = True
+        try:
+            self._dispatch_text(message.user_id, text)
+        finally:
+            self.busy = False
+
+    def _dispatch_text(self, user_id: str, text: str) -> None:
+        if text.startswith("/tool "):
+            self._handle_tool_command(user_id, text)
+            return
+        if text.startswith("/"):
+            self._handle_cli_command(user_id, text)
+            return
+        self._handle_chat(user_id, text)
+
+    def _handle_tool_command(self, user_id: str, text: str) -> None:
+        try:
+            parts = _split_shell_like(text)
+            if len(parts) < 2:
+                raise ValueError("usage: /tool <name> <json|key=value...>")
+            tool_name = parts[1]
+            raw_args = parts[2:]
+            if raw_args and all("=" in item for item in raw_args):
+                args = parse_tool_arg_pairs(raw_args)
+            else:
+                args = parse_tool_args(" ".join(raw_args) if raw_args else "{}")
+        except Exception as exc:
+            self._send(user_id, f"工具参数解析失败：{exc}")
+            return
+        result = execute_tool(tool_name, args, event_log_path=DIAEVO_DIR / "tool_events.jsonl")
+        if result.get("status") == "requires_approval":
+            self._create_pending_approval(user_id, tool_name, args, result)
+            return
+        self._send(user_id, _format_tool_result(result, self.config.max_message_chars))
+
+    def _handle_cli_command(self, user_id: str, text: str) -> None:
+        try:
+            parts = _split_shell_like(text)
+        except ValueError as exc:
+            self._send(user_id, f"命令解析失败：{exc}")
+            return
+        if not parts:
+            return
+        command_name = parts[0].removeprefix("/").lower()
+        if command_name in FORBIDDEN_REMOTE_COMMANDS:
+            self._send(user_id, f"远程 QQ 入口禁用 /{command_name}。请在本机终端设置密钥。")
+            append_remote_event(
+                "forbidden_command",
+                {"user_id": user_id, "command": command_name},
+                path=self.config.event_log_path,
+            )
+            return
+        argv = _remote_command_to_cli_argv(command_name, parts[1:])
+        if argv is None:
+            self._send(user_id, f"未知远程命令：/{command_name}")
+            return
+        output = _capture_cli(argv)
+        self._send(user_id, _truncate(output.strip() or "命令已完成。", self.config.max_message_chars))
+
+    def _handle_chat(self, user_id: str, text: str) -> None:
+        try:
+            config = config_from_env(max_tokens=2048, no_thinking=True)
+            answer, _response = chat_once(
+                text,
+                "你是 DiaEvo 的 QQ 远程助手。用中文简洁回答；需要本地修改时提示用户使用 /tool 并按确认码审批。",
+                config,
+            )
+        except Exception as exc:
+            self._send(user_id, f"模型请求失败：{exc}")
+            return
+        self._send(user_id, _truncate(answer, self.config.max_message_chars))
+
+    def _create_pending_approval(
+        self,
+        user_id: str,
+        tool_name: str,
+        args: dict[str, Any],
+        preview: dict[str, Any],
+    ) -> None:
+        code = secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:8]
+        created_at = self.now()
+        pending = PendingApproval(
+            code=code,
+            user_id=user_id,
+            tool_name=tool_name,
+            args=dict(args),
+            created_at=created_at,
+            expires_at=created_at + self.config.approval_ttl_seconds,
+            preview_event_id=str(preview.get("event_id") or ""),
+        )
+        self.pending[code] = pending
+        append_remote_event(
+            "approval_requested",
+            {
+                "user_id": user_id,
+                "tool": tool_name,
+                "preview_event_id": pending.preview_event_id,
+                "approval_code_hash": _hash_code(code),
+            },
+            path=self.config.event_log_path,
+        )
+        body = _format_tool_result(preview, self.config.max_message_chars - 220)
+        self._send(
+            user_id,
+            (
+                f"{body}\n\n"
+                f"需要远程确认。{self.config.approval_ttl_seconds} 秒内回复：\n"
+                f"/approve {code}\n"
+                f"拒绝回复：/deny {code} 原因"
+            ),
+        )
+
+    def _handle_approve(self, user_id: str, text: str) -> None:
+        code = _command_arg(text)
+        pending = self.pending.get(code)
+        if pending is None or pending.user_id != user_id:
+            self._send(user_id, "确认码无效。")
+            return
+        if pending.used:
+            self._send(user_id, "确认码已使用。")
+            return
+        if self.now() > pending.expires_at:
+            self.pending.pop(code, None)
+            self._send(user_id, "确认码已过期。")
+            return
+        pending.used = True
+        result = execute_tool(
+            pending.tool_name,
+            dict(pending.args),
+            approve=True,
+            event_log_path=DIAEVO_DIR / "tool_events.jsonl",
+        )
+        self.pending.pop(code, None)
+        append_remote_event(
+            "approval_accepted",
+            {
+                "user_id": user_id,
+                "tool": pending.tool_name,
+                "approval_code_hash": _hash_code(code),
+                "result_event_id": result.get("event_id", ""),
+            },
+            path=self.config.event_log_path,
+        )
+        self._send(user_id, _format_tool_result(result, self.config.max_message_chars))
+
+    def _handle_deny(self, user_id: str, text: str) -> None:
+        parts = text.split(maxsplit=2)
+        code = parts[1] if len(parts) >= 2 else ""
+        reason = parts[2] if len(parts) >= 3 else ""
+        pending = self.pending.pop(code, None)
+        if pending is None or pending.user_id != user_id:
+            self._send(user_id, "确认码无效。")
+            return
+        append_remote_event(
+            "approval_denied",
+            {
+                "user_id": user_id,
+                "tool": pending.tool_name,
+                "approval_code_hash": _hash_code(code),
+                "reason": reason,
+            },
+            path=self.config.event_log_path,
+        )
+        self._send(user_id, "已拒绝这次工具调用。")
+
+    def _send_status(self, user_id: str) -> None:
+        active = [item for item in self.pending.values() if not item.used and self.now() <= item.expires_at]
+        if not active:
+            self._send(user_id, "状态：空闲；无待确认事项。")
+            return
+        lines = ["状态：等待远程确认。"]
+        for item in active:
+            remaining = max(0, int(item.expires_at - self.now()))
+            lines.append(f"- {item.tool_name}，剩余 {remaining} 秒，确认码 {item.code}")
+        self._send(user_id, "\n".join(lines))
+
+    def _send(self, user_id: str, text: str) -> None:
+        message = _truncate(text, self.config.max_message_chars)
+        self.send_message(user_id, message)
+        append_remote_event(
+            "sent",
+            {"user_id": user_id, "text": message},
+            path=self.config.event_log_path,
+        )
+
+
+class QQInteractiveBridge:
+    def __init__(
+        self,
+        config: QQBridgeConfig,
+        *,
+        enqueue_text: Callable[[str], None],
+        send_message: Callable[[str, str], None] | None = None,
+        now: Callable[[], float] | None = None,
+    ) -> None:
+        self.config = config
+        self.enqueue_text = enqueue_text
+        self.send_message = send_message or OneBotClient(config).send_private_msg
+        self.now = now or time.time
+        self.last_user_id = ""
+
+    def handle_message(self, message: RemoteMessage) -> None:
+        if not is_allowed_message(message, self.config):
+            append_remote_event(
+                "ignored_unauthorized",
+                {"user_id": message.user_id, "message_id": message.message_id},
+                path=self.config.event_log_path,
+            )
+            return
+        text = message.text.strip()
+        append_remote_event(
+            "received",
+            {"user_id": message.user_id, "message_id": message.message_id, "text": sanitize_remote_text_for_log(text)},
+            path=self.config.event_log_path,
+        )
+        if not text:
+            return
+        if _is_forbidden_remote_text(text):
+            command = text.split(maxsplit=1)[0].removeprefix("/")
+            self.send_to_user(message.user_id, f"远程 QQ 入口禁用 /{command}。请在本机终端设置密钥。")
+            append_remote_event(
+                "forbidden_command",
+                {"user_id": message.user_id, "command": command},
+                path=self.config.event_log_path,
+            )
+            return
+        self.last_user_id = message.user_id
+        self.enqueue_text(text)
+        self.send_to_user(message.user_id, "已接收，DiaEvo 会在当前会话中继续处理。")
+
+    def send_to_last_user(self, text: str) -> None:
+        if not self.last_user_id:
+            return
+        self.send_to_user(self.last_user_id, text)
+
+    def send_to_user(self, user_id: str, text: str) -> None:
+        message = _truncate(text, self.config.max_message_chars)
+        self.send_message(user_id, message)
+        append_remote_event(
+            "sent",
+            {"user_id": user_id, "text": message},
+            path=self.config.event_log_path,
+        )
+
+
+class OneBotClient:
+    def __init__(self, config: QQBridgeConfig) -> None:
+        self.config = config
+
+    def send_private_msg(self, user_id: str, text: str) -> None:
+        if not self.config.onebot_http_url:
+            raise QQBridgeError("DIAEVO_QQ_ONEBOT_HTTP_URL is required to send messages")
+        url = f"{self.config.onebot_http_url}/send_private_msg"
+        payload = json.dumps({"user_id": int(user_id), "message": text}, ensure_ascii=False).encode("utf-8")
+        headers = {"Content-Type": "application/json"}
+        if self.config.access_token:
+            headers["Authorization"] = f"Bearer {self.config.access_token}"
+        request = urllib.request.Request(url, data=payload, headers=headers, method="POST")
+        try:
+            with urllib.request.urlopen(request, timeout=20) as response:
+                response.read()
+        except urllib.error.URLError as exc:
+            raise QQBridgeError(f"OneBot send_private_msg failed: {exc}") from exc
+
+
+async def run_bridge(config: QQBridgeConfig) -> None:
+    validate_config(config)
+    session = QQRemoteSession(config)
+    await run_onebot_event_loop(config, session.handle_message)
+
+
+async def run_interactive_bridge(config: QQBridgeConfig, bridge: QQInteractiveBridge) -> None:
+    validate_config(config)
+    await run_onebot_event_loop(config, bridge.handle_message)
+
+
+async def run_onebot_event_loop(config: QQBridgeConfig, handler: Callable[[RemoteMessage], None]) -> None:
+    try:
+        import websockets
+    except ImportError as exc:
+        raise QQBridgeError("qq-bridge requires optional dependency `websockets`; install diaevo[qq].") from exc
+
+    headers = {}
+    if config.access_token:
+        headers["Authorization"] = f"Bearer {config.access_token}"
+
+    while True:
+        try:
+            connect_kwargs = _websocket_header_kwargs(websockets.connect, headers)
+            async with websockets.connect(config.onebot_ws_url, **connect_kwargs) as websocket:
+                async for raw in websocket:
+                    try:
+                        event = json.loads(raw)
+                    except json.JSONDecodeError:
+                        continue
+                    message = parse_onebot_private_message(event)
+                    if message is not None:
+                        handler(message)
+        except Exception as exc:
+            append_remote_event("bridge_reconnect", {"error": str(exc)}, path=config.event_log_path)
+            await asyncio.sleep(3)
+
+
+def run_bridge_from_env(env_path: str | Path | None = None) -> int:
+    config = config_from_env_vars(env_path)
+    try:
+        asyncio.run(run_bridge(config))
+    except KeyboardInterrupt:
+        return 0
+    return 0
+
+
+def _hash_code(code: str) -> str:
+    return hashlib.sha256(code.encode("utf-8")).hexdigest()
+
+
+def _is_forbidden_remote_text(text: str) -> bool:
+    stripped = text.strip()
+    if not stripped.startswith("/"):
+        return False
+    command = stripped.split(maxsplit=1)[0].removeprefix("/").lower()
+    return command in FORBIDDEN_REMOTE_COMMANDS
+
+
+def _websocket_header_kwargs(connect: Callable[..., Any], headers: dict[str, str]) -> dict[str, Any]:
+    if not headers:
+        return {}
+    parameters = inspect.signature(connect).parameters
+    if "additional_headers" in parameters:
+        return {"additional_headers": headers}
+    return {"extra_headers": headers}
+
+
+def _command_arg(text: str) -> str:
+    parts = text.split(maxsplit=1)
+    return parts[1].strip() if len(parts) == 2 else ""
+
+
+def _split_shell_like(text: str) -> list[str]:
+    import shlex
+
+    return shlex.split(text, posix=False)
+
+
+def _remote_command_to_cli_argv(command_name: str, rest: list[str]) -> list[str] | None:
+    shortcuts: dict[str, Callable[[list[str]], list[str]]] = {
+        "ingest": lambda args: ["ingest", "--input", "data/sample_traces.jsonl", *args],
+        "mine": lambda args: ["mine", *args],
+        "kg": lambda args: ["kg", "--no-open", *args],
+        "recommend": lambda args: ["recommend", "--task", " ".join(args) if args else "给当前项目生成测试修复 skill"],
+        "generate": lambda args: ["generate", "--cluster-id", args[0] if args else "C03"],
+        "verify": lambda args: ["verify", "--skill", args[0] if args else "outputs/candidate_skills/C03"],
+        "feedback": lambda args: ["feedback", *args],
+        "tools": lambda args: ["tools", *args],
+        "answer-kg": lambda args: ["answer-kg", *args],
+        "answer_kg": lambda args: ["answer-kg", *args],
+    }
+    handler = shortcuts.get(command_name)
+    return handler(rest) if handler else None
+
+
+def _capture_cli(argv: list[str]) -> str:
+    import contextlib
+    import io
+
+    stdout = io.StringIO()
+    stderr = io.StringIO()
+    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+        code = cli_main(argv)
+    output = stdout.getvalue().strip()
+    errors = stderr.getvalue().strip()
+    parts: list[str] = []
+    if output:
+        parts.append(output)
+    if errors:
+        parts.append(errors)
+    if code:
+        parts.append(f"命令退出，状态码：{code}")
+    return "\n".join(parts)
+
+
+def _format_tool_result(result: dict[str, Any], limit: int) -> str:
+    text = json.dumps(redact_for_log(result), ensure_ascii=False, indent=2, sort_keys=True)
+    return _truncate(text, limit)
+
+
+def _truncate(text: str, limit: int) -> str:
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 28)].rstrip() + "\n... <已截断>"

@@ -12,6 +12,9 @@ sentence-transformers  # required for answer-kg --vector-backend dense
 # gepa
 # litellm
 
+# Optional QQ remote bridge for OneBot 11 / NapCatQQ:
+# websockets>=12.0
+
 # Future extension points from the project plan / pyproject full extra:
 # numpy
 # pandas

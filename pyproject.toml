@@ -13,6 +13,7 @@ dependencies = ["rich>=13.7"]
 [project.optional-dependencies]
 ui = ["rich>=13.7"]
 test = ["pytest>=8.0"]
+qq = ["websockets>=12.0"]
 full = [
   "numpy",
   "pandas",
@@ -22,6 +23,7 @@ full = [
   "sentence-transformers",
   "textual",
   "pyyaml",
+  "websockets>=12.0",
 ]
 
 [project.scripts]

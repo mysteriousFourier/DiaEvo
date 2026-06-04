@@ -8,6 +8,7 @@ from .clustering import cluster_traces
 from .ingest import load_plugins, load_skill_registry, load_traces
 from .paths import DATA_DIR, REPORTS_DIR, ensure_project_dirs
 from .sequence_mining import mine_frequent_sequences
+from .generator import generation_diagnostic
 from .skill_graph import build_skill_graph
 from .storage import write_json
 
@@ -51,7 +52,8 @@ def mine(
                 "recommended_action": "generate_candidate_skill",
             }
             for cluster in clusters
-            if cluster.coverage_gap >= 0.25 or cluster.tool_reuse_count > 0 or cluster.failure_rate > 0
+            if generation_diagnostic(cluster.to_mapping()).get("eligible")
+            and (cluster.coverage_gap >= 0.25 or cluster.tool_reuse_count > 0 or cluster.failure_rate > 0)
         ],
         "association_rules": rules[:100],
         "frequent_sequences": sequences[:100],

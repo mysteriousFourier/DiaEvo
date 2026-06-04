@@ -2,18 +2,22 @@ from __future__ import annotations
 
 import os
 import re
+import json
+import hashlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
 from .ingest import load_plugins, load_skill_registry
-from .paths import CANDIDATE_SKILLS_DIR, WORKSPACE_ROOT
+from .paths import CANDIDATE_SKILLS_DIR, DIAEVO_DIR, WORKSPACE_ROOT
 from .recommender import recommend
+from .storage import read_json, write_json
 
 
 MAX_SKILL_TEXT_CHARS = 28_000
 MAX_REFERENCE_CHARS = 4_000
 MAX_REFERENCES = 4
+SKILL_MENU_SUMMARY_CACHE = DIAEVO_DIR / "skill_menu_summaries.json"
 
 
 @dataclass(frozen=True, slots=True)
@@ -31,14 +35,11 @@ def _candidate_skill_roots() -> list[Path]:
         WORKSPACE_ROOT / "skills",
         CANDIDATE_SKILLS_DIR,
         WORKSPACE_ROOT / "outputs" / "reports" / "gepa",
-        WORKSPACE_ROOT / ".diaevo" / "reference_repos" / "garden-skills" / "skills",
     ]
-    for env_name in ("DIAEVO_SKILLS_DIR", "AGENTS_SKILLS_DIR", "CODEX_SKILLS_DIR"):
+    for env_name in ("DIAEVO_SKILLS_DIR",):
         value = os.environ.get(env_name)
         if value:
             roots.append(Path(value).expanduser())
-    home = Path.home()
-    roots.extend([home / ".agents" / "skills", home / ".codex" / "skills"])
     unique: list[Path] = []
     seen: set[str] = set()
     for root in roots:
@@ -85,11 +86,23 @@ def _read_skill_source(skill_file: Path, *, source: str = "installed", score: fl
     if not description:
         first_text_line = next((line.strip("# ").strip() for line in body.splitlines() if line.strip()), "")
         description = first_text_line[:240]
-    tags_value = frontmatter.get("tags") or ""
-    tags = tuple(part.strip() for part in re.split(r"[, ]+", str(tags_value)) if part.strip())
+    tags = _parse_tags(frontmatter.get("tags") or "")
     if not name:
         return None
     return SkillSource(name=name, description=description, path=skill_file.parent, source=source, tags=tags, score=score)
+
+
+def _parse_tags(value: Any) -> tuple[str, ...]:
+    if isinstance(value, list | tuple | set):
+        return tuple(str(part).strip() for part in value if str(part).strip())
+    text = str(value).strip()
+    if text.startswith("[") and text.endswith("]"):
+        text = text[1:-1]
+    return tuple(
+        part.strip().strip('"').strip("'")
+        for part in re.split(r"[, ]+", text)
+        if part.strip().strip('"').strip("'")
+    )
 
 
 def discover_skill_sources() -> list[SkillSource]:
@@ -127,6 +140,89 @@ def discover_skill_sources() -> list[SkillSource]:
             if item:
                 sources.setdefault(item.name.lower(), item)
     return sorted(sources.values(), key=lambda item: item.name.lower())
+
+
+def _source_digest(source: SkillSource) -> str:
+    payload = "\n".join([source.name, source.description, str(source.path), " ".join(source.tags)])
+    return hashlib.sha1(payload.encode("utf-8", errors="replace")).hexdigest()[:16]
+
+
+def _fallback_menu_summary(source: SkillSource) -> str:
+    text = " ".join(str(source.description or "").split())
+    if not text:
+        text = " ".join(source.tags[:4]) or source.source or "skill workflow"
+    return text[:80]
+
+
+def _llm_menu_summaries(sources: list[SkillSource]) -> dict[str, str]:
+    if not sources:
+        return {}
+    try:
+        from .deepseek_chat import chat_completion, config_from_env, extract_assistant_text
+
+        config = config_from_env(max_tokens=1200, no_thinking=True)
+        items = [
+            {
+                "name": source.name,
+                "description": source.description,
+                "tags": list(source.tags),
+                "path": str(source.path),
+            }
+            for source in sources
+        ]
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你为 CLI 菜单生成 skill 简述。只输出 JSON 对象，键是 skill name，值是中文短句。"
+                    "每个值 10 到 24 个汉字左右，说明这个 skill 适合处理什么，不要 Markdown，不要表情。"
+                ),
+            },
+            {"role": "user", "content": json.dumps(items, ensure_ascii=False)},
+        ]
+        text = extract_assistant_text(chat_completion(messages, config))
+        start = text.find("{")
+        end = text.rfind("}")
+        if start >= 0 and end > start:
+            parsed = json.loads(text[start : end + 1])
+        else:
+            parsed = json.loads(text)
+        if isinstance(parsed, dict):
+            return {
+                str(key): " ".join(str(value).split())[:80]
+                for key, value in parsed.items()
+                if str(key).strip() and str(value).strip()
+            }
+    except Exception:
+        return {}
+    return {}
+
+
+def skill_menu_items() -> list[tuple[str, str]]:
+    sources = discover_skill_sources()
+    cache = read_json(SKILL_MENU_SUMMARY_CACHE, default={})
+    if not isinstance(cache, dict):
+        cache = {}
+    summaries = cache.get("summaries") if isinstance(cache.get("summaries"), dict) else {}
+    missing = [
+        source
+        for source in sources
+        if not isinstance(summaries.get(source.name), dict)
+        or summaries[source.name].get("digest") != _source_digest(source)
+        or not summaries[source.name].get("summary")
+    ]
+    generated = _llm_menu_summaries(missing)
+    changed = False
+    for source in missing:
+        summary = generated.get(source.name) or _fallback_menu_summary(source)
+        summaries[source.name] = {"digest": _source_digest(source), "summary": summary}
+        changed = True
+    if changed:
+        write_json(SKILL_MENU_SUMMARY_CACHE, {"summaries": summaries})
+    return [
+        (source.name, str(summaries.get(source.name, {}).get("summary") or _fallback_menu_summary(source)))
+        for source in sources
+    ]
 
 
 def _task_tokens(task: str) -> set[str]:

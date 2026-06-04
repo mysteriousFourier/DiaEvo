@@ -123,7 +123,7 @@ def test_adapt_external_skill_from_local_vite_fixture(tmp_path):
     assert result["adaptation_summary"]["mode"] == "project_summary"
 
 
-def test_adapt_external_skill_preserves_source_skill_package(tmp_path):
+def test_adapt_external_skill_records_source_package_without_copying_body_or_references(tmp_path):
     source = _write_skill_package_fixture(tmp_path)
     output = tmp_path / "candidate"
 
@@ -133,17 +133,19 @@ def test_adapt_external_skill_preserves_source_skill_package(tmp_path):
     assert result["adaptation_summary"]["mode"] == "skill_package"
     assert result["verify_result"]["passed"]
     text = (output / "SKILL.md").read_text(encoding="utf-8")
-    assert "## Preserved Source Skill" in text
-    assert "## Workflow" in text
-    assert "## Pre-delivery Checklist" in text
-    assert "## References Routing" in text
-    assert (output / "references" / "advanced-patterns.md").exists()
-    assert (output / "references" / "critique-guide.md").exists()
+    assert "## Preserved Source Skill" not in text
+    assert "## Workflow" not in text
+    assert "## Pre-delivery Checklist" not in text
+    assert "Ask only when task intent is genuinely unclear" not in text
+    assert "External Reference Metadata" in text
+    assert not (output / "references" / "advanced-patterns.md").exists()
+    assert not (output / "references" / "critique-guide.md").exists()
     assert not (output / "references" / ".env").exists()
     assert not (output / "references" / "helper.py").exists()
     manifest = (output / "migration_manifest.json").read_text(encoding="utf-8")
-    assert "skill_package" in manifest
+    assert "provenance_only_no_external_skill_body_or_references" in manifest
     assert "advanced-patterns.md" in manifest
+    assert '"copied_references": []' in manifest
     assert "sensitive_path" in manifest
     assert "unsupported_reference_extension" in manifest
 

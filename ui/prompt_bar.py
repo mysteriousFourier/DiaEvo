@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import sys
 
-from .cli_style import PURPLE, DIM, GLYPHS, RESET, _char_width, _display_width, _fit, _term_width
+from .cli_style import CYAN, PURPLE, DIM, GLYPHS, RESET, _char_width, _display_width, _fit, _term_width
 
 try:
     import msvcrt
@@ -14,9 +14,11 @@ COMMANDS = [
     ("/mine", "运行挖掘流程"),
     ("/kg", "打开可编辑知识图谱"),
     ("/kg_answer", "开关 KG 图向量检索回答"),
+    ("/skill", "选择并加载 skill"),
     ("/recommend", "按任务推荐技能"),
     ("/generate", "生成候选 SKILL.md"),
     ("/verify", "验证候选技能"),
+    ("/self-evolve", "直接运行本地自进化"),
     ("/demo", "运行完整 MVP 演示"),
     ("/feedback", "将工具事件回灌为轨迹"),
     ("/tools", "列出本地工具说明"),
@@ -31,6 +33,8 @@ COMMANDS = [
 ]
 COMMAND_NAMES = tuple(name for name, _ in COMMANDS)
 COMMAND_MENU_PAGE_SIZE = 9
+COMMANDS_REQUIRING_ARGUMENTS = {"/skill", "/tool"}
+_SKILL_MENU_CACHE: list[tuple[str, str]] | None = None
 
 
 def _erase_lines(count: int) -> None:
@@ -48,6 +52,73 @@ def _matching_commands(value: str) -> list[tuple[str, str]]:
     if any(char.isspace() for char in query):
         return []
     return [(name, desc) for name, desc in COMMANDS if name.startswith(query)]
+
+
+def _load_skill_menu_items() -> list[tuple[str, str]]:
+    global _SKILL_MENU_CACHE
+    if _SKILL_MENU_CACHE is not None:
+        return _SKILL_MENU_CACHE
+    try:
+        from diaevo.skill_context import skill_menu_items
+
+        _SKILL_MENU_CACHE = skill_menu_items()
+    except Exception:
+        _SKILL_MENU_CACHE = []
+    return _SKILL_MENU_CACHE
+
+
+def _set_skill_menu_cache_for_tests(items: list[tuple[str, str]] | None) -> None:
+    global _SKILL_MENU_CACHE
+    _SKILL_MENU_CACHE = items
+
+
+def _skill_query(value: str) -> str | None:
+    first_line = value.splitlines()[0] if value else ""
+    lower_line = first_line.lower()
+    if lower_line == "/skill":
+        return ""
+    if lower_line.startswith("/skill "):
+        return first_line[len("/skill ") :].strip()
+    return None
+
+
+def _selected_skill_description(value: str) -> str:
+    query = _skill_query(value)
+    if query is None or not query:
+        return ""
+    lowered = query.lower()
+    for name, description in _load_skill_menu_items():
+        if name.lower() == lowered:
+            return description
+    return ""
+
+
+def _matching_skill_items(value: str) -> list[tuple[str, str]]:
+    query = _skill_query(value)
+    if query is None:
+        return []
+    lowered = query.lower()
+    items = _load_skill_menu_items()
+    if query and any(name.lower() == lowered for name, _ in items):
+        return []
+    if not lowered:
+        return items
+    return [
+        (name, description)
+        for name, description in items
+        if lowered in name.lower() or lowered in description.lower()
+    ]
+
+
+def _menu_matches(value: str) -> list[tuple[str, str]]:
+    skill_items = _matching_skill_items(value)
+    if skill_items:
+        return skill_items
+    return _matching_commands(value)
+
+
+def _menu_match_count(value: str) -> int:
+    return len(_menu_matches(value))
 
 
 def _command_menu_window(
@@ -89,6 +160,28 @@ def _submit_value(value: str, selected_index: int = 0) -> str:
         selected_index = max(0, min(selected_index, len(matches) - 1))
         return matches[selected_index][0]
     return value.rstrip("\n")
+
+
+def _menu_completion_value(value: str, selected_index: int = 0) -> str:
+    skill_items = _matching_skill_items(value)
+    if skill_items:
+        selected_index = max(0, min(selected_index, len(skill_items) - 1))
+        return f"/skill {skill_items[selected_index][0]}"
+    matches = _matching_commands(value)
+    if not matches or active_command_name(value):
+        return value
+    selected_index = max(0, min(selected_index, len(matches) - 1))
+    return matches[selected_index][0] + " "
+
+
+def _should_complete_menu_selection(value: str, selected_index: int = 0) -> bool:
+    if _matching_skill_items(value):
+        return True
+    matches = _matching_commands(value)
+    if not matches or active_command_name(value):
+        return False
+    selected_index = max(0, min(selected_index, len(matches) - 1))
+    return matches[selected_index][0] in COMMANDS_REQUIRING_ARGUMENTS
 
 
 def _highlight_command_line(line: str) -> str:
@@ -147,11 +240,11 @@ def render_prompt_line(value: str = "") -> str:
 
 
 def render_footer() -> str:
-    return f"  {DIM}Enter 运行命令或当前菜单项 {GLYPHS['dot']} Ctrl+J 换行 {GLYPHS['dot']} ? 查看快捷键{RESET}"
+    return f"  {DIM}Enter 发送 {GLYPHS['dot']} Tab 补全 {GLYPHS['dot']} Esc 清空菜单{RESET}"
 
 
 def render_command_menu(value: str, selected_index: int = 0) -> str:
-    matches = _matching_commands(value)
+    matches = _menu_matches(value)
     if not matches:
         return ""
     offset, visible_matches, selected_index = _command_menu_window(matches, selected_index)
@@ -163,10 +256,17 @@ def render_command_menu(value: str, selected_index: int = 0) -> str:
         padding = " " * max(1, name_width - _display_width(name))
         desc = _fit(description, width - name_width - 1)
         if index == selected_index:
-            lines.append(f"{PURPLE}{name}{padding}{desc}{RESET}")
+            lines.append(f"{CYAN}{name}{RESET}{padding}{desc}")
         else:
             lines.append(f"{name}{padding}{DIM}{desc}{RESET}")
     return "\n".join(lines)
+
+
+def render_skill_description(value: str) -> str:
+    description = _selected_skill_description(value)
+    if not description:
+        return ""
+    return f"{DIM}说明  {_fit(description, min(max(72, _term_width() - 4), 144) - 6)}{RESET}"
 
 
 def render_prompt(value: str = "") -> str:
@@ -187,18 +287,40 @@ def render_prompt_state(value: str = "", selected_index: int = 0) -> str:
     return "\n".join(pieces)
 
 
-def _cursor_to_input(rendered_lines: int, value: str) -> str:
+def _cursor_position_in_wrapped_value(value: str, cursor_index: int | None = None) -> tuple[int, int]:
+    cursor_index = len(value) if cursor_index is None else max(0, min(cursor_index, len(value)))
+    before_cursor = value[:cursor_index]
+    wrapped_before_cursor = _wrapped_prompt_lines(before_cursor)
+    prefix, cursor_line, _ = wrapped_before_cursor[-1]
+    return len(wrapped_before_cursor), _display_width(f"{prefix}{cursor_line}")
+
+
+def _cursor_to_input(
+    rendered_lines: int,
+    value: str,
+    lines_above_input: int = 0,
+    cursor_index: int | None = None,
+) -> str:
     input_lines = _wrapped_prompt_lines(value)
-    prefix, last_line, _ = input_lines[-1]
-    lines_below_input = max(0, rendered_lines - len(input_lines))
-    right_moves = _display_width(f"{prefix}{last_line}")
-    return f"\033[{lines_below_input}A\r\033[{right_moves}C"
+    cursor_line_number, right_moves = _cursor_position_in_wrapped_value(value, cursor_index)
+    lines_below_input = max(0, rendered_lines - len(input_lines) - lines_above_input)
+    lines_after_cursor = max(0, len(input_lines) - cursor_line_number)
+    up_moves = lines_below_input + lines_after_cursor
+    return f"\033[{up_moves}A\r\033[{right_moves}C"
 
 
-def _cursor_to_bottom(rendered_lines: int, value: str) -> str:
+def _cursor_to_bottom(
+    rendered_lines: int,
+    value: str,
+    lines_above_input: int = 0,
+    cursor_index: int | None = None,
+) -> str:
     input_line_count = len(_wrapped_prompt_lines(value))
-    lines_below_input = max(0, rendered_lines - input_line_count)
-    return f"\033[{lines_below_input}B\r"
+    cursor_line_number, _right_moves = _cursor_position_in_wrapped_value(value, cursor_index)
+    lines_below_input = max(0, rendered_lines - input_line_count - lines_above_input)
+    lines_after_cursor = max(0, input_line_count - cursor_line_number)
+    down_moves = lines_below_input + lines_after_cursor
+    return f"\033[{down_moves}B\r"
 
 
 def read_prompt() -> str:
@@ -229,9 +351,14 @@ def read_prompt() -> str:
             if not value.strip():
                 redraw()
                 continue
+            if _should_complete_menu_selection(value, selected_index):
+                value = _menu_completion_value(value, selected_index)
+                selected_index = 0
+                redraw()
+                continue
             value = _submit_value(value, selected_index)
-            sys.stdout.write(_cursor_to_bottom(rendered_lines, value))
-            sys.stdout.write("\n")
+            sys.stdout.write(_cursor_to_bottom(rendered_lines, rendered_value))
+            _erase_lines(rendered_lines)
             sys.stdout.flush()
             return value
         if char == "\003":
@@ -252,18 +379,17 @@ def read_prompt() -> str:
             continue
         if char in {"\x00", "\xe0"}:
             key = msvcrt.getwch()
-            matches = _matching_commands(value)
-            if matches and key == "H":
-                selected_index = _move_menu_selection(selected_index, len(matches), -1)
+            match_count = _menu_match_count(value)
+            if match_count and key == "H":
+                selected_index = _move_menu_selection(selected_index, match_count, -1)
                 redraw()
-            elif matches and key == "P":
-                selected_index = _move_menu_selection(selected_index, len(matches), 1)
+            elif match_count and key == "P":
+                selected_index = _move_menu_selection(selected_index, match_count, 1)
                 redraw()
             continue
         if char == "\t":
-            matches = _matching_commands(value)
-            if matches:
-                value = matches[selected_index][0] + " "
+            if _menu_match_count(value):
+                value = _menu_completion_value(value, selected_index)
                 selected_index = 0
                 redraw()
             continue
