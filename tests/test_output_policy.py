@@ -446,6 +446,22 @@ def test_read_next_command_uses_plain_prompt_by_default(monkeypatch) -> None:
     assert interactive_shell._read_next_command(ChatConfigState()) == "hello"
 
 
+def test_read_next_command_consumes_qq_flow_queue_when_raw_disabled(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    monkeypatch.delenv("DIAEVO_FLOW_INPUT", raising=False)
+    while not FLOW_INPUT_QUEUE.empty():
+        FLOW_INPUT_QUEUE.get_nowait()
+    FLOW_INPUT_QUEUE.put(FlowInputEvent("远程回复", interrupt=True, source="QQ"))
+    monkeypatch.setattr(
+        interactive_shell,
+        "read_prompt",
+        lambda: (_ for _ in ()).throw(AssertionError("queued QQ input should win over local prompt")),
+    )
+
+    assert interactive_shell._read_next_command(ChatConfigState()) == "远程回复"
+
+
 def test_transient_inputs_use_plain_input_by_default(monkeypatch) -> None:
     from ui import interactive_shell
 
@@ -462,6 +478,52 @@ def test_transient_inputs_use_plain_input_by_default(monkeypatch) -> None:
 
     assert interactive_shell._read_transient_choice("选择：", valid_chars={"1", "2"}) == "2"
     assert interactive_shell._read_transient_text("换方案：") == "反馈"
+
+
+def test_qq_approval_reply_is_consumed_by_transient_choice_when_raw_disabled(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    monkeypatch.delenv("DIAEVO_FLOW_INPUT", raising=False)
+    monkeypatch.setattr(interactive_shell, "_qq_send", lambda *args, **kwargs: None)
+    monkeypatch.setattr(interactive_shell, "QQ_INTERACTIVE_BRIDGE", object())
+    monkeypatch.setattr(
+        interactive_shell.sys,
+        "stdin",
+        type("FakeStdin", (), {"isatty": lambda self: True})(),
+    )
+    monkeypatch.setattr(
+        interactive_shell,
+        "msvcrt",
+        type("FakeMsvcrt", (), {"kbhit": lambda self: False})(),
+    )
+    while not FLOW_INPUT_QUEUE.empty():
+        FLOW_INPUT_QUEUE.get_nowait()
+    FLOW_INPUT_QUEUE.put(FlowInputEvent("/approve", interrupt=True, source="QQ"))
+
+    assert interactive_shell._read_transient_choice("选择：", valid_chars={"1", "2", "3"}) == "1"
+
+
+def test_qq_text_reply_is_consumed_by_transient_text_when_raw_disabled(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    monkeypatch.delenv("DIAEVO_FLOW_INPUT", raising=False)
+    monkeypatch.setattr(interactive_shell, "_qq_send", lambda *args, **kwargs: None)
+    monkeypatch.setattr(interactive_shell, "QQ_INTERACTIVE_BRIDGE", object())
+    monkeypatch.setattr(
+        interactive_shell.sys,
+        "stdin",
+        type("FakeStdin", (), {"isatty": lambda self: True})(),
+    )
+    monkeypatch.setattr(
+        interactive_shell,
+        "msvcrt",
+        type("FakeMsvcrt", (), {"kbhit": lambda self: False})(),
+    )
+    while not FLOW_INPUT_QUEUE.empty():
+        FLOW_INPUT_QUEUE.get_nowait()
+    FLOW_INPUT_QUEUE.put(FlowInputEvent("改成只读方案", interrupt=True, source="QQ"))
+
+    assert interactive_shell._read_transient_text("换方案：") == "改成只读方案"
 
 
 def test_chat_config_state_tracks_session_tool_approvals() -> None:

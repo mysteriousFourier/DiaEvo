@@ -337,6 +337,13 @@ def _enqueue_qq_text(text: str, user_id: str = "") -> None:
     if clean.startswith("/") and not lowered.startswith("/talk ") and lowered not in {"/approve", "/deny"}:
         QQ_COMMAND_QUEUE.put(clean)
         return
+    if not _raw_flow_input_enabled():
+        event = _qq_flow_event(text, user_id=user_id)
+        FLOW_INPUT_QUEUE.put(event)
+        if event.interrupt or event.hard_interrupt:
+            FLOW_FORCE_TERMINATE_EVENT.set()
+            FLOW_INTERRUPT_EVENT.set()
+        return
     FLOW_INPUT.queue_external_text(text, source="QQ", reply_to_user_id=user_id)
 
 
@@ -384,16 +391,43 @@ def _event_to_command(event: FlowInputEvent, chat_state: ChatConfigState) -> str
     return event.text.strip()
 
 
+def _qq_flow_event(text: str, *, user_id: str = "") -> FlowInputEvent:
+    clean = text.strip()
+    talk = clean.lower().startswith("/talk ")
+    payload = clean[6:].strip() if talk else clean
+    return FlowInputEvent(
+        payload,
+        interrupt=False if talk else True,
+        talk=talk,
+        source="QQ",
+        reply_to_user_id=user_id,
+    )
+
+
 def _raw_flow_input_enabled() -> bool:
     return os.environ.get("DIAEVO_FLOW_INPUT", "").strip().lower() in RAW_INPUT_ENV_VALUES
 
 
+def _next_queued_command(chat_state: ChatConfigState) -> str:
+    try:
+        command = QQ_COMMAND_QUEUE.get_nowait()
+    except queue.Empty:
+        command = ""
+    if command:
+        return command
+    while True:
+        try:
+            event = FLOW_INPUT_QUEUE.get_nowait()
+        except queue.Empty:
+            return ""
+        command = _event_to_command(event, chat_state)
+        if command:
+            return command
+
+
 def _read_next_command(chat_state: ChatConfigState) -> str:
     if not _raw_flow_input_enabled():
-        try:
-            command = QQ_COMMAND_QUEUE.get_nowait()
-        except queue.Empty:
-            command = ""
+        command = _next_queued_command(chat_state)
         if command:
             return command
         return read_prompt()
@@ -1023,7 +1057,7 @@ def _read_transient_choice(
 ) -> str:
     if send_to_qq:
         _qq_send(_plain_transient_prompt(prompt))
-    if not _raw_flow_input_enabled() or msvcrt is None or not sys.stdin.isatty():
+    if not _should_poll_transient_input(send_to_qq=send_to_qq):
         return input(prompt)
 
     with _pause_flow_input():
@@ -1064,7 +1098,7 @@ def _read_transient_choice(
 def _read_transient_text(prompt: str, *, send_to_qq: bool = True) -> str:
     if send_to_qq:
         _qq_send(_plain_transient_prompt(prompt))
-    if not _raw_flow_input_enabled() or msvcrt is None or not sys.stdin.isatty():
+    if not _should_poll_transient_input(send_to_qq=send_to_qq):
         return input(prompt)
 
     with _pause_flow_input():
@@ -1105,6 +1139,14 @@ def _read_transient_text(prompt: str, *, send_to_qq: bool = True) -> str:
                 value += char
                 sys.stdout.write(char)
                 sys.stdout.flush()
+
+
+def _should_poll_transient_input(*, send_to_qq: bool) -> bool:
+    if msvcrt is None or not sys.stdin.isatty():
+        return False
+    if _raw_flow_input_enabled():
+        return True
+    return send_to_qq and QQ_INTERACTIVE_BRIDGE is not None
 
 
 def _read_qq_transient_text() -> str:
