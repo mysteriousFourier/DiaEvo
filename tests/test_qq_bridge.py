@@ -1,12 +1,14 @@
 import json
 from pathlib import Path
 
+import diaevo.qq_bridge as qq_bridge
 from diaevo.qq_bridge import (
     QQBridgeConfig,
     QQRemoteSession,
     RemoteMessage,
     config_from_env_vars,
     discover_napcat_command,
+    _shell_command_for_path,
     parse_onebot_private_message,
     prepare_onebot_service,
 )
@@ -164,6 +166,32 @@ def test_discover_napcat_command_uses_path(monkeypatch, tmp_path) -> None:
     command = discover_napcat_command()
 
     assert str(fake).lower() in command.lower()
+
+
+def test_discover_napcat_command_finds_workspace_tmp_onekey(monkeypatch, tmp_path) -> None:
+    root = tmp_path / ".tmp" / "napcat" / "onekey" / "bootmain"
+    root.mkdir(parents=True)
+    script = root / "napcat.bat"
+    script.write_text("@echo off\n.\\NapCatWinBootMain.exe\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr("diaevo.qq_bridge.WORKSPACE_ROOT", tmp_path)
+    monkeypatch.setattr("diaevo.qq_bridge.INSTALL_ROOT", tmp_path / "install")
+    monkeypatch.setattr("diaevo.qq_bridge._npm_global_bin", lambda: None)
+
+    command = discover_napcat_command()
+
+    assert str(script).lower() in command.lower()
+
+
+def test_windows_shell_command_sets_working_directory(monkeypatch, tmp_path) -> None:
+    script = tmp_path / "napcat.bat"
+    script.write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setattr(qq_bridge.sys, "platform", "win32")
+
+    command = _shell_command_for_path(script)
+
+    assert "/D" in command
+    assert str(tmp_path) in command
 
 
 def test_parse_onebot_private_text_message() -> None:

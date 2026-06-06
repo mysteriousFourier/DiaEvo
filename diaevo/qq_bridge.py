@@ -178,6 +178,9 @@ def discover_napcat_command() -> str:
     for path in _candidate_napcat_paths(npm_bin=npm_bin):
         if path.exists() and path.is_file():
             return _shell_command_for_path(path)
+    for path in _recursive_napcat_candidates():
+        if path.exists() and path.is_file():
+            return _shell_command_for_path(path)
     return ""
 
 
@@ -230,10 +233,63 @@ def _candidate_napcat_paths(*, npm_bin: Path | None = None) -> list[Path]:
     return candidates
 
 
+def _recursive_napcat_candidates() -> list[Path]:
+    roots = [
+        WORKSPACE_ROOT / ".tmp" / "napcat",
+        WORKSPACE_ROOT / "NapCat",
+        WORKSPACE_ROOT / "NapCatQQ",
+        INSTALL_ROOT / "NapCat",
+        INSTALL_ROOT / "NapCatQQ",
+    ]
+    for env_name in ("LOCALAPPDATA", "APPDATA"):
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            roots.extend([Path(value) / "NapCat", Path(value) / "NapCatQQ"])
+
+    preferred_names = (
+        "napcat.bat",
+        "NapCatWinBootMain.exe",
+        "launcher-user.bat",
+        "launcher-win10-user.bat",
+        "launcher.bat",
+        "napcat.cmd",
+        "NapCatQQ.exe",
+        "NapCat.exe",
+    )
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        for name in preferred_names:
+            for path in root.rglob(name):
+                key = str(path).lower()
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append(path)
+    return sorted(candidates, key=_napcat_candidate_rank)
+
+
+def _napcat_candidate_rank(path: Path) -> tuple[int, int, str]:
+    name = path.name.lower()
+    text = str(path).lower()
+    if name == "napcat.bat" and "bootmain" in text:
+        priority = 0
+    elif name == "napcat.bat":
+        priority = 1
+    elif name == "napcatwinbootmain.exe":
+        priority = 2
+    elif name.startswith("launcher") and name.endswith(".bat"):
+        priority = 3
+    else:
+        priority = 4
+    return (priority, len(path.parts), text)
+
+
 def _shell_command_for_path(path: Path) -> str:
     text = str(path)
     if sys.platform.startswith("win"):
-        return f'start "" "{text}"'
+        return f'start "" /D "{path.parent}" "{text}"'
     return f'"{text}"'
 
 
