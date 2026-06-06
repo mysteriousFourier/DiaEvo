@@ -158,6 +158,57 @@ def test_start_can_use_toolkit_without_raw_listener(monkeypatch):
     assert controller._toolkit_thread is None
 
 
+def test_pause_stops_toolkit_prompt_until_transient_input_finishes(monkeypatch):
+    controller = FlowInputController()
+    prompt_started = threading.Event()
+    sessions = []
+
+    class FakeApp:
+        def __init__(self):
+            self.exited = threading.Event()
+
+        def exit(self, **kwargs):
+            self.exited.set()
+
+        def invalidate(self):
+            pass
+
+    class FakeSession:
+        def __init__(self):
+            self.app = FakeApp()
+            self.started = threading.Event()
+            sessions.append(self)
+
+        def prompt(self, **kwargs):
+            pre_run = kwargs.get("pre_run")
+            if pre_run is not None:
+                pre_run()
+            self.started.set()
+            prompt_started.set()
+            self.app.exited.wait(timeout=1)
+            raise EOFError
+
+    monkeypatch.setattr("ui.flow_input.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(controller, "_create_toolkit_session", FakeSession)
+    monkeypatch.setattr("ui.flow_input._prompt_stdout_patch", lambda: nullcontext())
+
+    assert controller.start(listen=False, toolkit=True) is True
+    assert prompt_started.wait(timeout=1)
+    first_session = sessions[0]
+
+    with controller.pause():
+        assert controller.paused.is_set()
+        assert first_session.app.exited.is_set()
+        assert controller._toolkit_thread is None
+        assert not controller._toolkit_mode
+
+    assert not controller.paused.is_set()
+    assert controller._toolkit_thread is not None
+    assert len(sessions) == 2
+
+    controller.stop(enabled=True)
+
+
 def test_toolkit_submission_queues_flow_event():
     controller = FlowInputController()
 

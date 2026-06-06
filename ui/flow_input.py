@@ -122,11 +122,16 @@ class FlowInputController:
 
     @contextmanager
     def pause(self) -> Iterator[None]:
+        resume_toolkit = self._toolkit_mode and self.active.is_set()
         self.paused.set()
+        if resume_toolkit:
+            self._stop_toolkit_worker()
         try:
             yield
         finally:
             self.paused.clear()
+            if resume_toolkit and self.active.is_set() and not self._toolkit_mode:
+                self._start_toolkit_worker()
 
     def begin_output(self) -> None:
         if self._toolkit_mode:
