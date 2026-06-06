@@ -1,4 +1,5 @@
 import json
+import sys
 import zipfile
 from pathlib import Path
 
@@ -513,10 +514,59 @@ def test_remote_key_command_is_forbidden(tmp_path) -> None:
 
     session.handle_message(RemoteMessage(user_id="10001", text="/key sk-test"))
 
-    assert "禁用 /key" in sent[-1][1]
+    assert sent == []
     log_text = (tmp_path / "qq_remote_events.jsonl").read_text(encoding="utf-8")
     assert "forbidden_command" in log_text
     assert "sk-test" not in log_text
+
+
+def test_remote_tool_error_is_logged_without_qq_message(monkeypatch, tmp_path) -> None:
+    sent: list[tuple[str, str]] = []
+
+    def fake_execute_tool(name, args, *, approve=False, event_log_path=None):
+        return {"status": "error", "tool": name, "error": "boom"}
+
+    monkeypatch.setattr("diaevo.qq_bridge.execute_tool", fake_execute_tool)
+    session = QQRemoteSession(_config(tmp_path), send_message=lambda user, text: sent.append((user, text)))
+
+    session.handle_message(RemoteMessage(user_id="10001", text="/tool run_shell command=pytest"))
+
+    assert sent == []
+
+
+def test_remote_chat_error_is_logged_without_qq_message(monkeypatch, tmp_path) -> None:
+    sent: list[tuple[str, str]] = []
+
+    def fake_chat_once(*args, **kwargs):
+        raise RuntimeError("model down")
+
+    monkeypatch.setattr("diaevo.qq_bridge.chat_once", fake_chat_once)
+    session = QQRemoteSession(_config(tmp_path), send_message=lambda user, text: sent.append((user, text)))
+
+    session.handle_message(RemoteMessage(user_id="10001", text="你好"))
+
+    assert sent == []
+    log_text = (tmp_path / "qq_remote_events.jsonl").read_text(encoding="utf-8")
+    assert "chat_failed" in log_text
+
+
+def test_remote_cli_error_is_logged_without_qq_message(monkeypatch, tmp_path) -> None:
+    sent: list[tuple[str, str]] = []
+
+    def fake_cli_main(argv):
+        print("bad output")
+        print("bad error", file=sys.stderr)
+        return 2
+
+    monkeypatch.setattr("diaevo.qq_bridge.cli_main", fake_cli_main)
+    session = QQRemoteSession(_config(tmp_path), send_message=lambda user, text: sent.append((user, text)))
+
+    session.handle_message(RemoteMessage(user_id="10001", text="/tools"))
+
+    assert sent == []
+    log_text = (tmp_path / "qq_remote_events.jsonl").read_text(encoding="utf-8")
+    assert "command_failed" in log_text
+    assert "bad output" in log_text
 
 
 def test_tool_requires_approval_then_executes_after_code(monkeypatch, tmp_path) -> None:

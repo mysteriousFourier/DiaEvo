@@ -262,7 +262,8 @@ def _print_tool_result(result: dict[str, object]) -> None:
     _begin_flow_output()
     rendered = render_tool_result(result)
     print(rendered)
-    _qq_send(rendered)
+    if _tool_result_should_send_to_qq(result):
+        _qq_send(rendered)
     _show_flow_prompt(force=True)
 
 
@@ -277,10 +278,11 @@ def _print_assistant_flow(text: str) -> None:
     _show_flow_prompt(force=True)
 
 
-def _print_status_flow(text: str) -> None:
+def _print_status_flow(text: str, *, send_to_qq: bool = False) -> None:
     _begin_flow_output()
     print_status(text)
-    _qq_send(text)
+    if send_to_qq:
+        _qq_send(text)
     _show_flow_prompt(force=True)
 
 
@@ -292,6 +294,15 @@ def _qq_send(text: str) -> None:
         bridge.send_to_last_user(text)
     except Exception:
         return
+
+
+def _tool_result_should_send_to_qq(result: dict[str, object]) -> bool:
+    status = str(result.get("status") or "ok").lower()
+    if status == "requires_approval":
+        return True
+    if status in {"error", "timeout", "interrupted", "failed"} or status.startswith("error:"):
+        return False
+    return True
 
 
 def _enqueue_qq_text(text: str) -> None:
@@ -325,9 +336,9 @@ def _start_qq_interactive_bridge() -> None:
         try:
             asyncio.run(run_interactive_bridge(config, QQ_INTERACTIVE_BRIDGE))
         except QQBridgeError as exc:
-            _print_status_flow(f"QQ 远程入口启动失败：{exc}")
+            _print_status_flow(f"QQ 远程入口启动失败：{exc}", send_to_qq=False)
         except Exception as exc:
-            _print_status_flow(f"QQ 远程入口退出：{exc}")
+            _print_status_flow(f"QQ 远程入口退出：{exc}", send_to_qq=False)
 
     QQ_INTERACTIVE_THREAD = threading.Thread(target=worker, name="diaevo-qq-bridge", daemon=True)
     QQ_INTERACTIVE_THREAD.start()
@@ -511,11 +522,11 @@ def _run(argv: list[str]) -> None:
     if output:
         _begin_flow_output()
         print(output)
-        _qq_send(output)
+        if code == 0:
+            _qq_send(output)
     if error_output:
         _begin_flow_output()
         print(error_output, file=sys.stderr)
-        _qq_send(error_output)
     if code:
         _print_status_flow(f"命令退出，状态码：{code}")
 

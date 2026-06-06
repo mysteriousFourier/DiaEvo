@@ -734,25 +734,33 @@ class QQRemoteSession:
             else:
                 args = parse_tool_args(" ".join(raw_args) if raw_args else "{}")
         except Exception as exc:
-            self._send(user_id, f"工具参数解析失败：{exc}")
+            append_remote_event(
+                "tool_parse_failed",
+                {"user_id": user_id, "error": str(exc)},
+                path=self.config.event_log_path,
+            )
             return
         result = execute_tool(tool_name, args, event_log_path=DIAEVO_DIR / "tool_events.jsonl")
         if result.get("status") == "requires_approval":
             self._create_pending_approval(user_id, tool_name, args, result)
             return
-        self._send(user_id, _format_tool_result(result, self.config.max_message_chars))
+        if _result_should_send_to_qq(result):
+            self._send(user_id, _format_tool_result(result, self.config.max_message_chars))
 
     def _handle_cli_command(self, user_id: str, text: str) -> None:
         try:
             parts = _split_shell_like(text)
         except ValueError as exc:
-            self._send(user_id, f"命令解析失败：{exc}")
+            append_remote_event(
+                "command_parse_failed",
+                {"user_id": user_id, "error": str(exc)},
+                path=self.config.event_log_path,
+            )
             return
         if not parts:
             return
         command_name = parts[0].removeprefix("/").lower()
         if command_name in FORBIDDEN_REMOTE_COMMANDS:
-            self._send(user_id, f"远程 QQ 入口禁用 /{command_name}。请在本机终端设置密钥。")
             append_remote_event(
                 "forbidden_command",
                 {"user_id": user_id, "command": command_name},
@@ -761,10 +769,21 @@ class QQRemoteSession:
             return
         argv = _remote_command_to_cli_argv(command_name, parts[1:])
         if argv is None:
-            self._send(user_id, f"未知远程命令：/{command_name}")
+            append_remote_event(
+                "unknown_command",
+                {"user_id": user_id, "command": command_name},
+                path=self.config.event_log_path,
+            )
             return
-        output = _capture_cli(argv)
-        self._send(user_id, _truncate(output.strip() or "命令已完成。", self.config.max_message_chars))
+        code, output, errors = _capture_cli(argv)
+        if code == 0:
+            self._send(user_id, _truncate(output.strip() or "命令已完成。", self.config.max_message_chars))
+        else:
+            append_remote_event(
+                "command_failed",
+                {"user_id": user_id, "command": command_name, "code": code, "stdout": output, "stderr": errors},
+                path=self.config.event_log_path,
+            )
 
     def _handle_chat(self, user_id: str, text: str) -> None:
         try:
@@ -775,7 +794,11 @@ class QQRemoteSession:
                 config,
             )
         except Exception as exc:
-            self._send(user_id, f"模型请求失败：{exc}")
+            append_remote_event(
+                "chat_failed",
+                {"user_id": user_id, "error": str(exc)},
+                path=self.config.event_log_path,
+            )
             return
         self._send(user_id, _truncate(answer, self.config.max_message_chars))
 
@@ -850,7 +873,8 @@ class QQRemoteSession:
             },
             path=self.config.event_log_path,
         )
-        self._send(user_id, _format_tool_result(result, self.config.max_message_chars))
+        if _result_should_send_to_qq(result):
+            self._send(user_id, _format_tool_result(result, self.config.max_message_chars))
 
     def _handle_deny(self, user_id: str, text: str) -> None:
         parts = text.split(maxsplit=2)
@@ -1071,7 +1095,7 @@ def _remote_command_to_cli_argv(command_name: str, rest: list[str]) -> list[str]
     return handler(rest) if handler else None
 
 
-def _capture_cli(argv: list[str]) -> str:
+def _capture_cli(argv: list[str]) -> tuple[int, str, str]:
     import contextlib
     import io
 
@@ -1081,19 +1105,21 @@ def _capture_cli(argv: list[str]) -> str:
         code = cli_main(argv)
     output = stdout.getvalue().strip()
     errors = stderr.getvalue().strip()
-    parts: list[str] = []
-    if output:
-        parts.append(output)
-    if errors:
-        parts.append(errors)
-    if code:
-        parts.append(f"命令退出，状态码：{code}")
-    return "\n".join(parts)
+    return code, output, errors
 
 
 def _format_tool_result(result: dict[str, Any], limit: int) -> str:
     text = json.dumps(redact_for_log(result), ensure_ascii=False, indent=2, sort_keys=True)
     return _truncate(text, limit)
+
+
+def _result_should_send_to_qq(result: dict[str, Any]) -> bool:
+    status = str(result.get("status") or "ok").lower()
+    if status == "requires_approval":
+        return True
+    if status in {"error", "timeout", "interrupted", "failed"} or status.startswith("error:"):
+        return False
+    return True
 
 
 def _truncate(text: str, limit: int) -> str:
