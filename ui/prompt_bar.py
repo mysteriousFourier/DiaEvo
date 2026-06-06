@@ -322,7 +322,13 @@ def _cursor_to_input(
     lines_below_input = max(0, rendered_lines - len(input_lines) - lines_above_input)
     lines_after_cursor = max(0, len(input_lines) - cursor_line_number)
     up_moves = lines_below_input + lines_after_cursor
-    return f"\033[{up_moves}A\r\033[{right_moves}C"
+    pieces = []
+    if up_moves:
+        pieces.append(f"\033[{up_moves}A")
+    pieces.append("\r")
+    if right_moves:
+        pieces.append(f"\033[{right_moves}C")
+    return "".join(pieces)
 
 
 def _cursor_to_bottom(
@@ -336,7 +342,9 @@ def _cursor_to_bottom(
     lines_below_input = max(0, rendered_lines - input_line_count - lines_above_input)
     lines_after_cursor = max(0, input_line_count - cursor_line_number)
     down_moves = lines_below_input + lines_after_cursor
-    return f"\033[{down_moves}B\r"
+    if down_moves:
+        return f"\033[{down_moves}B\r"
+    return "\r"
 
 
 def read_prompt() -> str:
@@ -377,10 +385,9 @@ def read_prompt() -> str:
             _erase_lines(rendered_lines)
             sys.stdout.flush()
             return value
-        if char == "\003":
-            raise KeyboardInterrupt
-        if char == "\032":
-            raise EOFError
+        if char in {"\003", "\032"}:
+            redraw()
+            continue
         if char == "\n":
             if not value or value.endswith("\n"):
                 continue

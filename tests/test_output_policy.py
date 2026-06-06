@@ -415,9 +415,21 @@ def test_flow_status_animates_status_line_without_touching_draft(monkeypatch, ca
     captured = capsys.readouterr()
     assert "inside" in captured.out
     assert any("正在请求模型" in item for item in updates)
+    assert any("Working (0s • esc to interrupt)" in item for item in updates)
     assert updates[-1] == ""
     assert interactive_shell.FLOW_INPUT.draft == "abc"
     assert captured.err == ""
+
+
+def test_flow_status_elapsed_format_matches_codex_style() -> None:
+    from ui import interactive_shell
+
+    assert interactive_shell._fmt_elapsed_compact(0) == "0s"
+    assert interactive_shell._fmt_elapsed_compact(59) == "59s"
+    assert interactive_shell._fmt_elapsed_compact(60) == "1m 00s"
+    assert interactive_shell._fmt_elapsed_compact(61) == "1m 01s"
+    assert interactive_shell._fmt_elapsed_compact(3600) == "1h 00m 00s"
+    assert interactive_shell._fmt_elapsed_compact(3661) == "1h 01m 01s"
 
 
 def test_chat_config_state_tracks_session_tool_approvals() -> None:

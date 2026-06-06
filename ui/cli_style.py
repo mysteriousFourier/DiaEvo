@@ -320,7 +320,7 @@ def render_trust_dialog(selected: int = 1) -> str:
         f"{GLYPHS['prompt'] if selected == 1 else ' '} 1. 是，我信任这个目录",
         f"{GLYPHS['prompt'] if selected == 2 else ' '} 2. 否，退出",
         "",
-        f"{DIM}Enter 确认 {GLYPHS['dot']} Esc/Ctrl+C 取消{RESET}",
+        f"{DIM}Enter 确认 {GLYPHS['dot']} 输入 2 退出{RESET}",
     ]
 
     lines = [_frame_line(GLYPHS["tl"], GLYPHS["tr"], width, title)]
@@ -337,7 +337,13 @@ def maybe_show_trust_dialog() -> bool:
         return True
     print(render_trust_dialog())
     while True:
-        choice = input("选择 1 或 2 [1]: ").strip().lower()
+        try:
+            choice = input("选择 1 或 2 [1]: ").strip().lower()
+        except KeyboardInterrupt:
+            print("\n请输入 1 或 2。")
+            continue
+        except EOFError:
+            return False
         if choice in {"", "1", "y", "yes"}:
             save_trusted_workspace()
             return True

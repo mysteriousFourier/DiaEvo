@@ -123,6 +123,16 @@ def test_cursor_to_bottom_accounts_for_lines_above_input() -> None:
     assert cursor == "\033[2B\r"
 
 
+def test_cursor_sequences_omit_zero_distance_moves() -> None:
+    to_input = prompt_bar._cursor_to_input(rendered_lines=3, value="")
+    to_bottom = prompt_bar._cursor_to_bottom(rendered_lines=1, value="")
+
+    assert "\033[0A" not in to_input
+    assert "\033[0B" not in to_bottom
+    assert "\033[0C" not in to_input
+    assert to_bottom == "\r"
+
+
 def test_fit_preserves_ansi_accent_when_truncated() -> None:
     rendered = cli_style._fit(f"{cli_style.PURPLE}重点词汇{cli_style.RESET} 后面很长", 8)
 
@@ -165,6 +175,36 @@ def test_read_prompt_erases_menu_and_footer_on_submit(monkeypatch) -> None:
     writes = "".join(fake_stdout.writes)
     assert "Enter 发送" in writes
     assert writes.rstrip().endswith("\033[2K")
+
+
+def test_read_prompt_ignores_ctrl_c_until_exit_command(monkeypatch) -> None:
+    class FakeStdout:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+
+        def write(self, value: str) -> int:
+            self.writes.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+    class FakeStdin:
+        def isatty(self) -> bool:
+            return True
+
+    class FakeMsvcrt:
+        def __init__(self) -> None:
+            self.chars = iter(["\003", "/", "e", "x", "i", "t", "\r"])
+
+        def getwch(self) -> str:
+            return next(self.chars)
+
+    monkeypatch.setattr(prompt_bar.sys, "stdout", FakeStdout())
+    monkeypatch.setattr(prompt_bar.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(prompt_bar, "msvcrt", FakeMsvcrt())
+
+    assert prompt_bar.read_prompt() == "/exit"
 
 
 def test_home_card_has_no_outer_border() -> None:

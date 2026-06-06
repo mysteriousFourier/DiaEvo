@@ -87,3 +87,29 @@ def test_flow_input_arrow_delete_and_backspace_edit_cursor(capsys):
     assert controller.draft == "bd"
     assert controller.cursor_index == 1
     capsys.readouterr()
+
+
+def test_ctrl_c_does_not_queue_flow_interrupt(capsys):
+    controller = FlowInputController()
+    controller.draft = "keep typing"
+
+    controller._handle_character("\003")
+
+    assert controller.draft == "keep typing"
+    assert controller.queue.empty()
+    assert controller.interrupt_event.is_set() is False
+    assert controller.force_terminate_event.is_set() is False
+    capsys.readouterr()
+
+
+def test_escape_still_queues_hard_interrupt(capsys):
+    controller = FlowInputController()
+
+    controller._handle_character("\x1b")
+
+    event = controller.queue.get_nowait()
+    assert event.interrupt is True
+    assert event.hard_interrupt is True
+    assert controller.interrupt_event.is_set() is True
+    assert controller.force_terminate_event.is_set() is True
+    capsys.readouterr()

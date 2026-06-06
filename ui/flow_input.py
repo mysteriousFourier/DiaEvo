@@ -299,23 +299,25 @@ class FlowInputController:
                 key = msvcrt.getwch()
                 self._handle_extended_key(key)
                 continue
-            if char == "\003":
-                self._queue_interrupt(hard=True)
-                continue
-            if char == "\x1b":
-                self._queue_escape_interrupt()
-                continue
-            if char in {"\r", "\n"}:
-                self._queue_enter()
-                continue
-            if char == "\b":
-                self._backspace()
-                continue
-            if char == "\t":
-                self._complete_selected_command()
-                continue
-            if char.isprintable():
-                self._append_printable(char)
+            self._handle_character(char)
+
+    def _handle_character(self, char: str) -> None:
+        if char == "\003":
+            return
+        if char == "\x1b":
+            self._queue_escape_interrupt()
+            return
+        if char in {"\r", "\n"}:
+            self._queue_enter()
+            return
+        if char == "\b":
+            self._backspace()
+            return
+        if char == "\t":
+            self._complete_selected_command()
+            return
+        if char.isprintable():
+            self._append_printable(char)
 
     def _queue_enter(self) -> None:
         if _should_complete_menu_selection(self.draft, self.selected_index):

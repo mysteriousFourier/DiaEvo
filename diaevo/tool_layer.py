@@ -648,6 +648,18 @@ RESULT_SNIPPET_RE = re.compile(
     r'<div[^>]+class="result__snippet"[^>]*>(?P<snippet_div>.*?)</div>',
     flags=re.IGNORECASE | re.DOTALL,
 )
+BING_RESULT_RE = re.compile(
+    r'<li[^>]+class="[^"]*\bb_algo\b[^"]*"[^>]*>(?P<body>.*?)</li>',
+    flags=re.IGNORECASE | re.DOTALL,
+)
+BING_LINK_RE = re.compile(
+    r'<h2[^>]*>\s*<a[^>]+href="(?P<url>[^"]+)"[^>]*>(?P<title>.*?)</a>',
+    flags=re.IGNORECASE | re.DOTALL,
+)
+BING_SNIPPET_RE = re.compile(
+    r'<div[^>]+class="[^"]*\bb_caption\b[^"]*"[^>]*>.*?<p[^>]*>(?P<snippet>.*?)</p>',
+    flags=re.IGNORECASE | re.DOTALL,
+)
 
 
 def _clean_html_fragment(value: str) -> str:
@@ -757,6 +769,43 @@ def _duckduckgo_search(query: str, *, max_results: int, domains: list[str]) -> l
     return _parse_duckduckgo_results(page["content"], max_results)
 
 
+def _parse_bing_results(page_content: str, max_results: int) -> list[dict[str, Any]]:
+    results: list[dict[str, Any]] = []
+    for match in BING_RESULT_RE.finditer(page_content):
+        block = match.group("body")
+        link = BING_LINK_RE.search(block)
+        if not link:
+            continue
+        title = _clean_html_fragment(link.group("title"))
+        url = html.unescape(link.group("url"))
+        if not title or not url:
+            continue
+        snippet = ""
+        snippet_match = BING_SNIPPET_RE.search(block)
+        if snippet_match:
+            snippet = _clean_html_fragment(snippet_match.group("snippet") or "")
+        results.append(
+            {
+                "title": title,
+                "url": url,
+                "snippet": snippet,
+                "source": "bing_html",
+                "fetch_status": "not_fetched",
+                "content_excerpt": "",
+                "content_truncated": False,
+            }
+        )
+        if len(results) >= max_results:
+            break
+    return results
+
+
+def _bing_search(query: str, *, max_results: int, domains: list[str]) -> list[dict[str, Any]]:
+    url = f"https://www.bing.com/search?q={quote_plus(_query_with_domains(query, domains))}"
+    page = _fetch_url(url, 240_000)
+    return _parse_bing_results(page["content"], max_results)
+
+
 def _fetch_search_result_excerpts(results: list[dict[str, Any]], fetch_top: int) -> None:
     for item in results[:fetch_top]:
         url = str(item.get("url") or "").strip()
@@ -784,7 +833,7 @@ def _web_search(args: dict[str, Any], approved: bool) -> dict[str, Any]:
         raise ToolError("web_search requires query")
     max_results = max(1, min(int(args.get("max_results") or 5), 20))
     fetch_top = max(0, min(int(args.get("fetch_top", 3)), max_results))
-    backend = str(args.get("backend") or "auto").strip().lower()
+    backend = str(args.get("backend") or os.environ.get("DIAEVO_WEB_SEARCH_BACKEND") or "auto").strip().lower()
     domains = _coerce_domains(args.get("domains"))
     recency_days = args.get("recency_days")
     recency_value = int(recency_days) if recency_days not in {None, ""} else None
@@ -834,7 +883,12 @@ def _web_search(args: dict[str, Any], approved: bool) -> dict[str, Any]:
                 "fallback_reason": fallback_reason,
             }
 
-    if backend in {"auto", "duckduckgo", "duckduckgo_html"}:
+    if backend in {"bing", "bing_html"}:
+        attempted_backends.append("bing_html")
+        results = _bing_search(query, max_results=max_results, domains=domains)
+        _fetch_search_result_excerpts(results, fetch_top)
+        used_backend = "bing_html"
+    elif backend in {"auto", "duckduckgo", "duckduckgo_html"}:
         attempted_backends.append("duckduckgo_html")
         results = _duckduckgo_search(query, max_results=max_results, domains=domains)
         _fetch_search_result_excerpts(results, fetch_top)
@@ -1339,8 +1393,9 @@ _register(
     ToolSpec(
         name="web_search",
         description=(
-            "Search the web after approval using SearXNG when configured, with DuckDuckGo HTML fallback, "
-            "and optionally fetch excerpts from top results."
+            "Search the web after approval using SearXNG when configured, with DuckDuckGo HTML fallback "
+            "or an explicit Bing HTML backend, and optionally fetch excerpts from top results. "
+            "Set DIAEVO_WEB_SEARCH_BACKEND to choose the default backend when the tool call does not pass backend."
         ),
         input_schema=_schema(
             {
@@ -1349,7 +1404,7 @@ _register(
                 "fetch_top": {"type": "integer", "default": 3},
                 "backend": {
                     "type": "string",
-                    "enum": ["auto", "searxng", "duckduckgo", "duckduckgo_html"],
+                    "enum": ["auto", "searxng", "duckduckgo", "duckduckgo_html", "bing", "bing_html"],
                     "default": "auto",
                 },
                 "domains": {

@@ -295,6 +295,75 @@ def test_web_search_falls_back_to_duckduckgo_when_searxng_fails(monkeypatch, tmp
     assert result["results"][0]["content_excerpt"] == ""
 
 
+def test_web_search_can_use_bing_html_backend(monkeypatch, tmp_path):
+    import diaevo.tool_layer as tool_layer
+
+    calls = []
+    bing_html = """
+    <ol id="b_results">
+      <li class="b_algo">
+        <h2><a href="https://example.com/a">Example A</a></h2>
+        <div class="b_caption"><p>Bing snippet</p></div>
+      </li>
+    </ol>
+    """
+
+    def fake_fetch(url, max_bytes):
+        calls.append(url)
+        return {
+            "url": url,
+            "status_code": 200,
+            "content_type": "text/html",
+            "truncated": False,
+            "content": bing_html,
+        }
+
+    monkeypatch.setattr(tool_layer, "_fetch_url", fake_fetch)
+
+    result = execute_tool(
+        "web_search",
+        {"query": "DiaEvo", "backend": "bing_html", "fetch_top": 0, "domains": ["example.com"]},
+        approve=True,
+        event_log_path=tmp_path / "events.jsonl",
+    )
+
+    assert result["status"] == "ok"
+    assert result["backend"] == "bing_html"
+    assert result["attempted_backends"] == ["bing_html"]
+    assert result["results"][0]["title"] == "Example A"
+    assert result["results"][0]["snippet"] == "Bing snippet"
+    assert "bing.com/search" in calls[0]
+    assert "site%3Aexample.com" in calls[0]
+
+
+def test_web_search_default_backend_can_be_forced_by_env(monkeypatch, tmp_path):
+    import diaevo.tool_layer as tool_layer
+
+    calls = []
+
+    def fake_fetch(url, max_bytes):
+        calls.append(url)
+        if "searx.local/search" in url:
+            raise tool_layer.ToolError("searx unavailable")
+        raise AssertionError("duckduckgo should not be called when env forces searxng")
+
+    monkeypatch.setenv("DIAEVO_WEB_SEARCH_BACKEND", "searxng")
+    monkeypatch.setenv("DIAEVO_SEARXNG_URL", "https://searx.local")
+    monkeypatch.setattr(tool_layer, "_fetch_url", fake_fetch)
+
+    result = execute_tool(
+        "web_search",
+        {"query": "DiaEvo", "fetch_top": 0},
+        approve=True,
+        event_log_path=tmp_path / "events.jsonl",
+    )
+
+    assert result["status"] == "error"
+    assert result["error"] == "searx unavailable"
+    assert len(calls) == 1
+    assert "searx.local/search" in calls[0]
+
+
 def test_web_search_schema_exposes_new_search_options():
     schemas = {item["name"]: item for item in tool_schemas()}
     properties = schemas["web_search"]["input_schema"]["properties"]
@@ -303,6 +372,7 @@ def test_web_search_schema_exposes_new_search_options():
     assert properties["query"]["minLength"] == 1
     assert properties["fetch_top"]["default"] == 3
     assert "searxng" in properties["backend"]["enum"]
+    assert "bing_html" in properties["backend"]["enum"]
     assert "domains" in properties
 
 

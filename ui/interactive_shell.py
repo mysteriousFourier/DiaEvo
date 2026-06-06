@@ -414,15 +414,21 @@ def _flow_status(message: str) -> object:
     """动效刷新输入栏上一行，输入栏本身只由用户输入驱动。"""
     frames = "-\\|/"
     stopped = threading.Event()
+    started_at = time.monotonic()
+
+    def render(index: int) -> None:
+        elapsed = _fmt_elapsed_compact(int(time.monotonic() - started_at))
+        FLOW_INPUT.update_status_line(f"{frames[index % len(frames)]} Working ({elapsed} • esc to interrupt) · {message}")
 
     def animate() -> None:
-        index = 0
+        index = 1
         while not stopped.is_set():
-            FLOW_INPUT.update_status_line(f"{frames[index % len(frames)]} {message}")
+            render(index)
             index += 1
             time.sleep(0.12)
 
     _show_flow_prompt(force=True)
+    render(0)
     thread = threading.Thread(target=animate, daemon=True)
     thread.start()
     try:
@@ -431,6 +437,18 @@ def _flow_status(message: str) -> object:
         stopped.set()
         thread.join(timeout=0.5)
         FLOW_INPUT.clear_status_line()
+
+
+def _fmt_elapsed_compact(elapsed_secs: int) -> str:
+    elapsed_secs = max(0, int(elapsed_secs))
+    if elapsed_secs < 60:
+        return f"{elapsed_secs}s"
+    if elapsed_secs < 3600:
+        minutes, seconds = divmod(elapsed_secs, 60)
+        return f"{minutes}m {seconds:02}s"
+    hours, remainder = divmod(elapsed_secs, 3600)
+    minutes, seconds = divmod(remainder, 60)
+    return f"{hours}h {minutes:02}m {seconds:02}s"
 
 
 def _start_flow_input_listener() -> bool:
@@ -1008,7 +1026,13 @@ def _read_transient_choice(
                 continue
             char = msvcrt.getwch()
             if char == "\003":
-                raise KeyboardInterrupt
+                continue
+            if char == "\x1b":
+                if default_on_enter:
+                    _erase_lines(rendered_lines)
+                    sys.stdout.flush()
+                    return default_on_enter
+                continue
             if char in {"\x00", "\xe0"}:
                 msvcrt.getwch()
                 continue
@@ -1042,7 +1066,11 @@ def _read_transient_text(prompt: str, *, send_to_qq: bool = True) -> str:
                 continue
             char = msvcrt.getwch()
             if char == "\003":
-                raise KeyboardInterrupt
+                continue
+            if char == "\x1b":
+                _erase_lines(rendered_lines)
+                sys.stdout.flush()
+                return ""
             if char in {"\x00", "\xe0"}:
                 msvcrt.getwch()
                 continue
@@ -1376,6 +1404,9 @@ def main() -> int:
             command = pending_command if pending_command is not None else _read_next_command(chat_state)
             pending_command = None
         except (EOFError, KeyboardInterrupt):
+            if sys.stdin.isatty():
+                print("输入 /exit 退出。")
+                continue
             print()
             stop_title_monitor()
             return 0
