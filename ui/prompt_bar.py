@@ -426,8 +426,25 @@ def _prompt_session():
         complete_while_typing=True,
         bottom_toolbar=render_plain_footer,
         reserve_space_for_menu=8,
+        style=_prompt_style(),
     )
     return _PROMPT_SESSION
+
+
+def _prompt_style():
+    from prompt_toolkit.styles import Style
+
+    return Style.from_dict(
+        {
+            "bottom-toolbar": "ansibrightblack bg:ansidefault noreverse",
+            "completion-menu.completion": "ansidefault bg:ansidefault noreverse",
+            "completion-menu.completion.current": "ansicyan bg:ansidefault underline noreverse",
+            "completion-menu.meta.completion": "ansibrightblack bg:ansidefault noreverse",
+            "completion-menu.meta.completion.current": "ansibrightblack bg:ansidefault underline noreverse",
+            "scrollbar.background": "bg:ansidefault noreverse",
+            "scrollbar.button": "bg:ansidefault noreverse",
+        }
+    )
 
 
 def _completion_items(value: str) -> list[tuple[str, str]]:

@@ -206,6 +206,10 @@ def test_prompt_toolkit_completion_items_include_commands_and_skills(monkeypatch
     prompt_bar._set_skill_menu_cache_for_tests(None)
 
 
+def test_prompt_toolkit_style_builds_without_default_background() -> None:
+    prompt_bar._prompt_style()
+
+
 def test_read_prompt_ignores_ctrl_c_until_exit_command(monkeypatch) -> None:
     class FakeStdout:
         def __init__(self) -> None:
