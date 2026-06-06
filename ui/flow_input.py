@@ -6,9 +6,10 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
-from typing import Callable, Iterator
+from typing import Any, Callable, Iterator
 
 from .prompt_bar import (
+    _completion_items,
     _cursor_to_bottom,
     _cursor_to_input,
     _erase_lines,
@@ -16,11 +17,14 @@ from .prompt_bar import (
     _menu_match_count,
     _menu_completion_value,
     _move_menu_selection,
+    _prompt_style,
+    _prompt_toolkit_enabled,
+    _prompt_stdout_patch,
     _should_complete_menu_selection,
     _submit_value,
     render_prompt_state,
 )
-from .cli_style import DIM, RESET
+from .cli_style import DIM, GLYPHS, RESET
 
 try:
     import msvcrt
@@ -60,6 +64,11 @@ class FlowInputController:
         self._lock = threading.Lock()
         self._render_lock = threading.RLock()
         self._thread: threading.Thread | None = None
+        self._toolkit_thread: threading.Thread | None = None
+        self._toolkit_session: Any | None = None
+        self._toolkit_stop_requested = threading.Event()
+        self._toolkit_mode = False
+        self.status_line = ""
 
     @property
     def available(self) -> bool:
@@ -69,20 +78,23 @@ class FlowInputController:
     def listener_available(self) -> bool:
         return msvcrt is not None and sys.stdin.isatty()
 
-    def start(self, *, listen: bool = True) -> bool:
+    def start(self, *, listen: bool = True, toolkit: bool = False) -> bool:
         if not self.available:
             return False
+        self.active.set()
+        if toolkit and _prompt_toolkit_enabled() and self._start_toolkit_worker():
+            return True
         if listen and self.listener_available:
             with self._lock:
                 if self._thread is None or not self._thread.is_alive():
                     self._thread = threading.Thread(target=self._worker, daemon=True)
                     self._thread.start()
-        self.active.set()
         return True
 
     def stop(self, enabled: bool) -> None:
         if not enabled:
             return
+        self._stop_toolkit_worker()
         with self._render_lock:
             self.active.clear()
             self.begin_output()
@@ -94,14 +106,15 @@ class FlowInputController:
             self.cursor_index = 0
             self.selected_index = 0
             self.queued_preview.clear()
+            self.status_line = ""
             self._rendered_lines = 0
             self._rendered_lines_above_input = 0
             self._rendered_value = ""
             self._rendered_cursor_index = 0
 
     @contextmanager
-    def session(self, *, listen: bool = True) -> Iterator[None]:
-        enabled = self.start(listen=listen)
+    def session(self, *, listen: bool = True, toolkit: bool = False) -> Iterator[None]:
+        enabled = self.start(listen=listen, toolkit=toolkit)
         try:
             yield
         finally:
@@ -116,6 +129,9 @@ class FlowInputController:
             self.paused.clear()
 
     def begin_output(self) -> None:
+        if self._toolkit_mode:
+            self._invalidate_toolkit()
+            return
         with self._render_lock:
             if self.prompt_visible.is_set() and self._rendered_lines:
                 sys.stdout.write(
@@ -140,6 +156,10 @@ class FlowInputController:
     def show_prompt(self, label: str = "", *, force: bool = False) -> None:
         if not self.available or self.paused.is_set():
             return
+        if self._toolkit_mode:
+            self.prompt_visible.set()
+            self._invalidate_toolkit()
+            return
         with self._render_lock:
             if self.prompt_visible.is_set() and not force:
                 return
@@ -149,6 +169,11 @@ class FlowInputController:
         if not self.available or self.paused.is_set():
             return
         clean = str(text).replace("\n", " ").strip()
+        self.status_line = clean
+        if self._toolkit_mode:
+            self.status_visible.set()
+            self._invalidate_toolkit()
+            return
         with self._render_lock:
             if not self.prompt_visible.is_set():
                 return
@@ -167,6 +192,11 @@ class FlowInputController:
 
     def clear_status_line(self) -> None:
         if not self.available or self.paused.is_set():
+            return
+        self.status_line = ""
+        if self._toolkit_mode:
+            self.status_visible.clear()
+            self._invalidate_toolkit()
             return
         with self._render_lock:
             if not self.prompt_visible.is_set() or not self.status_visible.is_set():
@@ -289,6 +319,146 @@ class FlowInputController:
             self.queued_preview.append(preview)
             self.show_prompt(force=True)
         return event
+
+    def _start_toolkit_worker(self) -> bool:
+        with self._lock:
+            if self._toolkit_thread is not None and self._toolkit_thread.is_alive():
+                self._toolkit_mode = True
+                return True
+            try:
+                self._toolkit_session = self._create_toolkit_session()
+            except Exception:
+                self._toolkit_session = None
+                self._toolkit_mode = False
+                return False
+            self._toolkit_stop_requested.clear()
+            self._toolkit_mode = True
+            self._toolkit_thread = threading.Thread(target=self._toolkit_worker, daemon=True)
+            self._toolkit_thread.start()
+        return True
+
+    def _stop_toolkit_worker(self) -> None:
+        if not self._toolkit_mode:
+            return
+        self._toolkit_stop_requested.set()
+        self._abort_toolkit_prompt()
+        thread = self._toolkit_thread
+        if thread is not None and thread.is_alive():
+            thread.join(timeout=0.5)
+        self._toolkit_mode = False
+        self._toolkit_thread = None
+        self._toolkit_session = None
+
+    def _create_toolkit_session(self) -> Any:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.completion import Completer, Completion
+        from prompt_toolkit.completion import CompleteEvent
+        from prompt_toolkit.document import Document
+        from prompt_toolkit.key_binding import KeyBindings
+
+        controller = self
+
+        class DiaEvoCompleter(Completer):
+            def get_completions(self, document: Document, complete_event: CompleteEvent):
+                text = document.text_before_cursor
+                if not text.startswith("/") or "\n" in text:
+                    return
+                for value, description in _completion_items(text):
+                    yield Completion(value, start_position=-len(text), display=value, display_meta=description)
+
+        bindings = KeyBindings()
+
+        @bindings.add("c-c")
+        def _ignore_ctrl_c(event) -> None:
+            event.app.invalidate()
+
+        @bindings.add("escape")
+        def _escape_interrupt(event) -> None:
+            controller._queue_toolkit_escape(event.app.current_buffer.text)
+            event.app.current_buffer.reset()
+            event.app.invalidate()
+
+        return PromptSession(
+            message=f"{GLYPHS['prompt']} ",
+            completer=DiaEvoCompleter(),
+            complete_while_typing=True,
+            bottom_toolbar=self._render_toolkit_toolbar,
+            reserve_space_for_menu=8,
+            style=_prompt_style(),
+            refresh_interval=0.2,
+            key_bindings=bindings,
+        )
+
+    def _toolkit_worker(self) -> None:
+        session = self._toolkit_session
+        while session is not None and self.active.is_set() and not self._toolkit_stop_requested.is_set():
+            try:
+                with _prompt_stdout_patch():
+                    text = session.prompt()
+            except (EOFError, KeyboardInterrupt):
+                if self._toolkit_stop_requested.is_set() or not self.active.is_set():
+                    break
+                continue
+            except Exception:
+                break
+            self._queue_toolkit_submission(text)
+        self._toolkit_mode = False
+
+    def _abort_toolkit_prompt(self) -> None:
+        session = self._toolkit_session
+        app = getattr(session, "app", None)
+        if app is None:
+            return
+        try:
+            app.exit(exception=EOFError)
+        except Exception:
+            try:
+                app.invalidate()
+            except Exception:
+                return
+
+    def _invalidate_toolkit(self) -> None:
+        session = self._toolkit_session
+        app = getattr(session, "app", None)
+        if app is None:
+            return
+        try:
+            app.invalidate()
+        except Exception:
+            return
+
+    def _queue_toolkit_submission(self, text: str) -> None:
+        value = _submit_value(str(text), 0).strip()
+        if not value:
+            return
+        event = _event_from_text(value, interrupt=True)
+        self.queue.put(event)
+        with self._render_lock:
+            self.queued_preview.append(_preview_text(event.text if event.talk else value))
+        self._invalidate_toolkit()
+
+    def _queue_toolkit_escape(self, text: str) -> None:
+        value = str(text).strip()
+        if value:
+            event = _event_from_text(value, interrupt=True, hard_interrupt=True)
+        else:
+            event = FlowInputEvent("", interrupt=True, hard_interrupt=True)
+        self.queue.put(event)
+        self.force_terminate_event.set()
+        self.interrupt_event.set()
+        if value:
+            with self._render_lock:
+                self.queued_preview.append(_preview_text(event.text if event.talk else value))
+        self._invalidate_toolkit()
+
+    def _render_toolkit_toolbar(self) -> str:
+        pieces = []
+        if self.status_line:
+            pieces.append(self.status_line)
+        if self.queued_preview:
+            pieces.append(self._render_queued_preview().replace(DIM, "").replace(RESET, ""))
+        pieces.append("Enter 发送 · Tab 补全 · Esc 中止 · /exit 退出")
+        return "  ".join(pieces)
 
     def _worker(self) -> None:
         while True:

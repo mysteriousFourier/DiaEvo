@@ -1,6 +1,8 @@
 import queue
+import threading
+from contextlib import nullcontext
 
-from ui.flow_input import FlowInputController
+from ui.flow_input import FlowInputController, FlowInputEvent
 
 
 def test_escape_with_active_slash_menu_clears_draft_without_interrupt(capsys):
@@ -112,6 +114,68 @@ def test_start_can_render_without_raw_listener(monkeypatch):
     assert controller._thread is None
 
     controller.stop(enabled=True)
+
+
+def test_start_can_use_toolkit_without_raw_listener(monkeypatch):
+    controller = FlowInputController()
+    prompt_started = threading.Event()
+
+    class FakeApp:
+        def __init__(self):
+            self.exited = threading.Event()
+
+        def exit(self, **kwargs):
+            self.exited.set()
+
+        def invalidate(self):
+            pass
+
+    class FakeSession:
+        def __init__(self):
+            self.app = FakeApp()
+
+        def prompt(self):
+            prompt_started.set()
+            self.app.exited.wait(timeout=1)
+            raise EOFError
+
+    monkeypatch.setattr("ui.flow_input.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(controller, "_create_toolkit_session", lambda: FakeSession())
+    monkeypatch.setattr("ui.flow_input._prompt_stdout_patch", lambda: nullcontext())
+
+    assert controller.start(listen=False, toolkit=True) is True
+    assert prompt_started.wait(timeout=1)
+    assert controller.active.is_set()
+    assert controller._thread is None
+    assert controller._toolkit_thread is not None
+
+    controller.stop(enabled=True)
+
+    assert not controller.active.is_set()
+    assert controller._toolkit_thread is None
+
+
+def test_toolkit_submission_queues_flow_event():
+    controller = FlowInputController()
+
+    controller._queue_toolkit_submission("继续检查输入栏")
+
+    assert controller.queue.get_nowait() == FlowInputEvent("继续检查输入栏", interrupt=True)
+    assert controller.queued_preview == ["继续检查输入栏"]
+
+
+def test_toolkit_escape_queues_hard_interrupt():
+    controller = FlowInputController()
+
+    controller._queue_toolkit_escape("改成 prompt_toolkit")
+
+    assert controller.queue.get_nowait() == FlowInputEvent(
+        "改成 prompt_toolkit",
+        interrupt=True,
+        hard_interrupt=True,
+    )
+    assert controller.interrupt_event.is_set()
+    assert controller.force_terminate_event.is_set()
 
 
 def test_escape_still_queues_hard_interrupt(capsys):

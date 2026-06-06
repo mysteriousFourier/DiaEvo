@@ -444,6 +444,21 @@ def test_flow_status_renders_bottom_prompt_when_raw_input_disabled(monkeypatch) 
     assert not interactive_shell.FLOW_INPUT_ACTIVE.is_set()
 
 
+def test_flow_input_listener_uses_toolkit_by_default(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    calls = []
+    monkeypatch.delenv("DIAEVO_FLOW_INPUT", raising=False)
+    monkeypatch.setattr(
+        interactive_shell.FLOW_INPUT,
+        "start",
+        lambda **kwargs: calls.append(kwargs) or True,
+    )
+
+    assert interactive_shell._start_flow_input_listener() is True
+    assert calls == [{"listen": False, "toolkit": True}]
+
+
 def test_flow_status_elapsed_format_matches_codex_style() -> None:
     from ui import interactive_shell
 
