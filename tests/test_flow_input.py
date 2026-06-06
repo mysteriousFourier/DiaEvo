@@ -26,10 +26,23 @@ def test_talk_preview_is_removed_when_talk_event_is_handled(capsys):
 
     controller._queue_enter()
     handled = []
-    count = controller.handle_talk_queued(handled.append)
+    count = controller.handle_talk_queued(lambda event: handled.append(event.text))
 
     assert count == 1
     assert handled == ["快速问题"]
+    assert controller.queued_preview == []
+    capsys.readouterr()
+
+
+def test_qq_talk_preview_is_removed_when_talk_event_is_handled(capsys):
+    controller = FlowInputController()
+
+    controller.queue_external_text("/talk 当前进度", source="QQ")
+    handled = []
+    count = controller.handle_talk_queued(lambda event: handled.append(event.text))
+
+    assert count == 1
+    assert handled == ["当前进度"]
     assert controller.queued_preview == []
     capsys.readouterr()
 

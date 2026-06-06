@@ -310,6 +310,67 @@ def test_flow_input_talk_enter_keeps_prompt_editable(monkeypatch) -> None:
     assert "".join(writes).count("❯ ") >= 2
 
 
+def test_qq_talk_external_text_does_not_request_interruption() -> None:
+    controller = FlowInputController()
+
+    event = controller.queue_external_text("/talk 当前进度", source="QQ")
+
+    assert event == FlowInputEvent("当前进度", interrupt=False, talk=True)
+    assert event.reply_to_user_id == ""
+    assert controller.force_terminate_event.is_set() is False
+    assert controller.interrupt_event.is_set() is False
+
+
+def test_qq_slash_command_queues_without_interrupting_main_flow() -> None:
+    from ui import interactive_shell
+
+    while not interactive_shell.QQ_COMMAND_QUEUE.empty():
+        interactive_shell.QQ_COMMAND_QUEUE.get_nowait()
+    while not FLOW_INPUT_QUEUE.empty():
+        FLOW_INPUT_QUEUE.get_nowait()
+    interactive_shell.FLOW_INTERRUPT_EVENT.clear()
+    interactive_shell.FLOW_FORCE_TERMINATE_EVENT.clear()
+
+    interactive_shell._enqueue_qq_text("/help")
+
+    assert interactive_shell.QQ_COMMAND_QUEUE.get_nowait() == "/help"
+    assert FLOW_INPUT_QUEUE.empty()
+    assert interactive_shell.FLOW_INTERRUPT_EVENT.is_set() is False
+    assert interactive_shell.FLOW_FORCE_TERMINATE_EVENT.is_set() is False
+
+
+def test_qq_approval_command_still_uses_flow_queue() -> None:
+    from ui import interactive_shell
+
+    while not interactive_shell.QQ_COMMAND_QUEUE.empty():
+        interactive_shell.QQ_COMMAND_QUEUE.get_nowait()
+    while not FLOW_INPUT_QUEUE.empty():
+        FLOW_INPUT_QUEUE.get_nowait()
+
+    interactive_shell._enqueue_qq_text("/approve")
+
+    assert interactive_shell.QQ_COMMAND_QUEUE.empty()
+    event = FLOW_INPUT_QUEUE.get_nowait()
+    assert event.text == "/approve"
+    assert event.interrupt is True
+    interactive_shell.FLOW_INTERRUPT_EVENT.clear()
+    interactive_shell.FLOW_FORCE_TERMINATE_EVENT.clear()
+
+
+def test_qq_talk_keeps_reply_user_on_flow_event() -> None:
+    from ui import interactive_shell
+
+    while not FLOW_INPUT_QUEUE.empty():
+        FLOW_INPUT_QUEUE.get_nowait()
+
+    interactive_shell._enqueue_qq_text("/talk 当前进度", "10001")
+
+    event = FLOW_INPUT_QUEUE.get_nowait()
+    assert event.talk is True
+    assert event.text == "当前进度"
+    assert event.reply_to_user_id == "10001"
+
+
 def test_flow_input_tab_completes_current_command_menu_item(monkeypatch) -> None:
     controller = FlowInputController()
     writes = []
@@ -332,7 +393,7 @@ def test_flow_input_can_drain_only_talk_events() -> None:
     controller.queue.put(FlowInputEvent("普通输入", interrupt=True))
     controller.queue.put(FlowInputEvent("旁路问题", talk=True))
 
-    handled = controller.handle_talk_queued(lambda text: started.append(text))
+    handled = controller.handle_talk_queued(lambda event: started.append(event.text))
 
     assert handled == 1
     assert started == ["旁路问题"]
@@ -519,7 +580,7 @@ def test_flow_talk_starts_background_thread_without_main_history(monkeypatch) ->
 
     started = []
 
-    monkeypatch.setattr(interactive_shell, "_start_talk_thread", lambda text, state: started.append(text))
+    monkeypatch.setattr(interactive_shell, "_start_talk_thread", lambda text, state, **kwargs: started.append(text))
 
     state = ChatConfigState()
     messages: list[dict[str, object]] = []
@@ -537,7 +598,7 @@ def test_talk_command_starts_background_thread(monkeypatch) -> None:
 
     started = []
 
-    monkeypatch.setattr(interactive_shell, "_start_talk_thread", lambda text, state: started.append(text))
+    monkeypatch.setattr(interactive_shell, "_start_talk_thread", lambda text, state, **kwargs: started.append(text))
 
     state = ChatConfigState()
     keep_running = interactive_shell._dispatch_command("/talk 快速解释一下", state, messages=[])
@@ -621,6 +682,20 @@ def test_skill_command_appends_context_message(monkeypatch) -> None:
     assert len(messages) == 1
     assert messages[0]["role"] == "system"
     assert "[Loaded skill: web-design-engineer]" in str(messages[0]["content"])
+
+
+def test_successful_tool_result_does_not_send_qq_completion_notice(monkeypatch, capsys) -> None:
+    from ui import interactive_shell
+
+    sent = []
+    monkeypatch.setattr(interactive_shell, "_qq_send", lambda text: sent.append(text))
+    monkeypatch.setattr(interactive_shell, "_show_flow_prompt", lambda *args, **kwargs: None)
+
+    interactive_shell._print_tool_result({"status": "ok", "tool": "read_file", "content": "done"})
+
+    assert sent == []
+    captured = capsys.readouterr()
+    assert "read_file" in captured.out
 
 
 def test_run_shell_repeated_failure_marks_note(monkeypatch) -> None:
@@ -765,8 +840,115 @@ def test_talk_command_includes_main_context_without_appending(monkeypatch) -> No
     )
 
     assert answer == "side answer"
+    assert "正在工作的人" in str(captured["messages"][0]["content"])
     assert "主线正在修 /talk 输入" in str(captured["messages"][1]["content"])
     assert main_messages == [{"role": "user", "content": "主线正在修 /talk 输入"}]
+
+
+def test_talk_answer_is_sent_to_target_qq_user_when_printed(monkeypatch, capsys) -> None:
+    from ui import interactive_shell
+
+    sent = []
+    monkeypatch.setattr(interactive_shell, "_qq_send_to_user", lambda user_id, text: sent.append((user_id, text)))
+    monkeypatch.setattr(interactive_shell, "_show_flow_prompt", lambda *args, **kwargs: None)
+
+    interactive_shell._print_talk_answer("旁路回答", reply_to_user_id="10001")
+
+    assert sent == [("10001", "旁路回答")]
+    captured = capsys.readouterr()
+    assert "talk>" in captured.out
+    assert "旁路回答" in captured.out
+
+
+def test_local_talk_answer_does_not_send_to_qq(monkeypatch, capsys) -> None:
+    from ui import interactive_shell
+
+    sent = []
+    monkeypatch.setattr(interactive_shell, "_qq_send_to_user", lambda user_id, text: sent.append((user_id, text)))
+    monkeypatch.setattr(interactive_shell, "_show_flow_prompt", lambda *args, **kwargs: None)
+
+    interactive_shell._print_talk_answer("本机旁路回答")
+
+    assert sent == []
+    captured = capsys.readouterr()
+    assert "本机旁路回答" in captured.out
+
+
+def test_search_result_message_uses_sidecar_filtered_context(monkeypatch) -> None:
+    from ui import interactive_shell
+    import json
+
+    captured = {}
+
+    def fake_chat_completion(messages, config, *, tools=None, tool_choice=None):
+        captured["messages"] = messages
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": json.dumps(
+                            {
+                                "reason": "保留和当前任务相关的官方文档。",
+                                "relevant_results": [
+                                    {
+                                        "title": "Relevant docs",
+                                        "url": "https://example.com/relevant",
+                                        "why": "匹配主线任务",
+                                        "summary": "可用于实现当前修复。",
+                                    }
+                                ],
+                            },
+                            ensure_ascii=False,
+                        )
+                    }
+                }
+            ]
+        }
+
+    monkeypatch.setattr(interactive_shell, "chat_completion", fake_chat_completion)
+
+    state = ChatConfigState()
+    state.value = object()
+    call = RequestedToolCall(id="call_search", name="web_search", args={"query": "fix talk"})
+    raw_result = {
+        "status": "ok",
+        "tool": "web_search",
+        "query": "fix talk",
+        "results": [
+            {
+                "title": "Relevant docs",
+                "url": "https://example.com/relevant",
+                "content_excerpt": "raw search excerpt that should stay out of the main context",
+            },
+            {
+                "title": "Irrelevant page",
+                "url": "https://example.com/other",
+                "content_excerpt": "unrelated raw excerpt",
+            },
+        ],
+    }
+    main_messages: list[dict[str, object]] = [{"role": "user", "content": "主线正在修 talk 不中断"}]
+
+    message = interactive_shell._tool_result_message_for_main_context(
+        call,
+        raw_result,
+        messages=main_messages,
+        chat_state=state,
+    )
+    content = json.loads(str(message["content"]))
+
+    assert content["context_mode"] == "sidecar_filtered_search"
+    assert "results" not in content
+    assert "raw search excerpt" not in message["content"]
+    assert content["relevant_results"] == [
+        {
+            "title": "Relevant docs",
+            "url": "https://example.com/relevant",
+            "why": "匹配主线任务",
+            "summary": "可用于实现当前修复。",
+        }
+    ]
+    assert "主线正在修 talk 不中断" in str(captured["messages"][1]["content"])
 
 
 def test_image_command_appends_vision_result_to_history(monkeypatch) -> None:

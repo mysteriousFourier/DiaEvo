@@ -923,7 +923,7 @@ class QQInteractiveBridge:
         self,
         config: QQBridgeConfig,
         *,
-        enqueue_text: Callable[[str], None],
+        enqueue_text: Callable[[str, str], None],
         send_message: Callable[[str, str], None] | None = None,
         now: Callable[[], float] | None = None,
     ) -> None:
@@ -959,7 +959,7 @@ class QQInteractiveBridge:
             )
             return
         self.last_user_id = message.user_id
-        self.enqueue_text(text)
+        self.enqueue_text(text, message.user_id)
         self.send_to_user(message.user_id, "已接收，DiaEvo 会在当前会话中继续处理。")
 
     def send_to_last_user(self, text: str) -> None:
@@ -1115,12 +1115,7 @@ def _format_tool_result(result: dict[str, Any], limit: int) -> str:
 
 
 def _result_should_send_to_qq(result: dict[str, Any]) -> bool:
-    status = str(result.get("status") or "ok").lower()
-    if status == "requires_approval":
-        return True
-    if status in {"error", "timeout", "interrupted", "failed"} or status.startswith("error:"):
-        return False
-    return True
+    return False
 
 
 def _truncate(text: str, limit: int) -> str:

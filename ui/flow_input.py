@@ -5,7 +5,7 @@ import sys
 import threading
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Callable, Iterator
 
 from .prompt_bar import (
@@ -34,6 +34,8 @@ class FlowInputEvent:
     interrupt: bool = False
     talk: bool = False
     hard_interrupt: bool = False
+    source: str = field(default="", compare=False)
+    reply_to_user_id: str = field(default="", compare=False)
 
 
 class FlowInputController:
@@ -228,7 +230,7 @@ class FlowInputController:
     def handle_queued(
         self,
         messages: list[dict[str, object]],
-        talk_handler: Callable[[str], None],
+        talk_handler: Callable[[FlowInputEvent], None],
     ) -> bool:
         interrupted = False
         for event in self.drain():
@@ -236,7 +238,7 @@ class FlowInputController:
                 interrupted = True
                 continue
             if event.talk:
-                talk_handler(event.text)
+                talk_handler(event)
                 continue
             if event.text:
                 messages.append({"role": "user", "content": event.text})
@@ -244,7 +246,7 @@ class FlowInputController:
                 interrupted = True
         return interrupted
 
-    def handle_talk_queued(self, talk_handler: Callable[[str], None]) -> int:
+    def handle_talk_queued(self, talk_handler: Callable[[FlowInputEvent], None]) -> int:
         talk_events: list[FlowInputEvent] = []
         with self.queue.mutex:
             kept = self.queue.queue.__class__()
@@ -257,18 +259,24 @@ class FlowInputController:
             self.queue.queue.extend(kept)
         for event in talk_events:
             if event.text:
-                talk_handler(event.text)
+                talk_handler(event)
         if talk_events:
             with self._render_lock:
-                talk_texts = [event.text for event in talk_events]
-                self.queued_preview = [text for text in self.queued_preview if text not in talk_texts]
+                for event in talk_events:
+                    self._remove_queued_preview_for_event(event)
         return len(talk_events)
 
-    def queue_external_text(self, text: str, *, source: str = "") -> FlowInputEvent:
-        event = _event_from_text(text.strip(), interrupt=True)
+    def queue_external_text(self, text: str, *, source: str = "", reply_to_user_id: str = "") -> FlowInputEvent:
+        event = _event_from_text(
+            text.strip(),
+            interrupt=True,
+            source=source,
+            reply_to_user_id=reply_to_user_id,
+        )
         self.queue.put(event)
-        self.force_terminate_event.set()
-        self.interrupt_event.set()
+        if event.interrupt or event.hard_interrupt:
+            self.force_terminate_event.set()
+            self.interrupt_event.set()
         preview = _preview_text(event.text if event.talk else text.strip())
         if source:
             preview = f"{source} {preview}".strip()
@@ -435,11 +443,32 @@ class FlowInputController:
         latest = self.queued_preview[-1]
         return f"{DIM}排队 {count}  {latest}{RESET}"
 
+    def _remove_queued_preview_for_event(self, event: FlowInputEvent) -> None:
+        shown = _preview_text(event.text if event.talk else event.text)
+        for index, preview in enumerate(self.queued_preview):
+            if preview == shown or preview.endswith(f" {shown}"):
+                del self.queued_preview[index]
+                return
 
-def _event_from_text(text: str, *, interrupt: bool, hard_interrupt: bool = False) -> FlowInputEvent:
+
+def _event_from_text(
+    text: str,
+    *,
+    interrupt: bool,
+    hard_interrupt: bool = False,
+    source: str = "",
+    reply_to_user_id: str = "",
+) -> FlowInputEvent:
     talk = text.lower().startswith("/talk ")
     payload = text[6:].strip() if talk else text
-    return FlowInputEvent(payload, interrupt=False if talk else interrupt, talk=talk, hard_interrupt=hard_interrupt)
+    return FlowInputEvent(
+        payload,
+        interrupt=False if talk else interrupt,
+        talk=talk,
+        hard_interrupt=hard_interrupt,
+        source=source,
+        reply_to_user_id=reply_to_user_id,
+    )
 
 
 def _preview_text(text: str, limit: int = 72) -> str:

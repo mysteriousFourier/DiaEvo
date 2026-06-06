@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import getpass
 import asyncio
+import json
 import multiprocessing
 import queue
 import shlex
@@ -38,6 +39,7 @@ from diaevo.tool_chat import (
     chat_tool_schemas,
     extract_assistant_message,
     requested_tool_calls,
+    tool_result_message,
     tool_result_message_for_call,
 )
 
@@ -100,10 +102,12 @@ FLOW_INPUT_PAUSED = FLOW_INPUT.paused
 FLOW_INTERRUPT_EVENT = FLOW_INPUT.interrupt_event
 FLOW_FORCE_TERMINATE_EVENT = FLOW_INPUT.force_terminate_event
 FLOW_PROMPT_VISIBLE = FLOW_INPUT.prompt_visible
+QQ_COMMAND_QUEUE: "queue.Queue[str]" = queue.Queue()
 _TALK_THREADS: set[threading.Thread] = set()
 _TALK_THREADS_LOCK = threading.Lock()
 QQ_INTERACTIVE_BRIDGE: QQInteractiveBridge | None = None
 QQ_INTERACTIVE_THREAD: threading.Thread | None = None
+SEARCH_CONTEXT_TOOLS = {"web_search", "arxiv_search"}
 
 
 @dataclass(frozen=True)
@@ -187,6 +191,8 @@ def _talk_once(
             "content": (
                 "你是 DiaEvo 的旁路问答助手。回答当前问题，不要调用工具，不要改变主会话计划；"
                 "你可以使用随请求提供的主会话上下文快照，但不要把旁路回答写入主会话；"
+                "回答方式要像用户在问一个正在工作的人：先说明主线正在做什么或最近进展，"
+                "再回答问题；不要要求主任务停下来，也不要声称已经修改主线状态；"
                 "如果问题需要的上下文仍缺失，直接说明缺少哪些信息。"
             ),
         },
@@ -208,35 +214,47 @@ def _start_talk_thread(
     chat_state: ChatConfigState,
     *,
     context: str = "",
+    reply_to_user_id: str = "",
 ) -> threading.Thread | None:
     prompt = prompt.strip()
     if not prompt:
         return None
 
-    thread = threading.Thread(target=_talk_thread_worker, args=(prompt, chat_state, context), daemon=True)
+    thread = threading.Thread(
+        target=_talk_thread_worker,
+        args=(prompt, chat_state, context, reply_to_user_id),
+        daemon=True,
+    )
     with _TALK_THREADS_LOCK:
         _TALK_THREADS.add(thread)
     thread.start()
     return thread
 
 
-def _talk_thread_worker(prompt: str, chat_state: ChatConfigState, context: str = "") -> None:
+def _talk_thread_worker(
+    prompt: str,
+    chat_state: ChatConfigState,
+    context: str = "",
+    reply_to_user_id: str = "",
+) -> None:
     try:
         answer = _talk_once(prompt, chat_state, show_status=False, context=context)
     except Exception as exc:
         answer = f"旁路提问失败：{exc}"
     try:
-        _print_talk_answer(answer)
+        _print_talk_answer(answer, reply_to_user_id=reply_to_user_id)
     finally:
         thread = threading.current_thread()
         with _TALK_THREADS_LOCK:
             _TALK_THREADS.discard(thread)
 
 
-def _print_talk_answer(answer: str) -> None:
+def _print_talk_answer(answer: str, *, reply_to_user_id: str = "") -> None:
     _begin_flow_output()
     print("\ntalk>")
     print_assistant(answer)
+    if reply_to_user_id:
+        _qq_send_to_user(reply_to_user_id, answer)
     _show_flow_prompt(force=True)
 
 
@@ -297,17 +315,27 @@ def _qq_send(text: str) -> None:
         return
 
 
+def _qq_send_to_user(user_id: str, text: str) -> None:
+    bridge = QQ_INTERACTIVE_BRIDGE
+    if bridge is None or not user_id:
+        return
+    try:
+        bridge.send_to_user(user_id, text)
+    except Exception:
+        return
+
+
 def _tool_result_should_send_to_qq(result: dict[str, object]) -> bool:
-    status = str(result.get("status") or "ok").lower()
-    if status == "requires_approval":
-        return True
-    if status in {"error", "timeout", "interrupted", "failed"} or status.startswith("error:"):
-        return False
-    return True
+    return False
 
 
-def _enqueue_qq_text(text: str) -> None:
-    FLOW_INPUT.queue_external_text(text, source="QQ")
+def _enqueue_qq_text(text: str, user_id: str = "") -> None:
+    clean = text.strip()
+    lowered = clean.lower()
+    if clean.startswith("/") and not lowered.startswith("/talk ") and lowered not in {"/approve", "/deny"}:
+        QQ_COMMAND_QUEUE.put(clean)
+        return
+    FLOW_INPUT.queue_external_text(text, source="QQ", reply_to_user_id=user_id)
 
 
 def _start_qq_interactive_bridge() -> None:
@@ -349,7 +377,7 @@ def _start_qq_interactive_bridge() -> None:
 def _event_to_command(event: FlowInputEvent, chat_state: ChatConfigState) -> str:
     if event.talk:
         if event.text:
-            _start_talk_thread(event.text, chat_state)
+            _start_talk_thread(event.text, chat_state, reply_to_user_id=event.reply_to_user_id)
         return ""
     return event.text.strip()
 
@@ -359,6 +387,13 @@ def _read_next_command(chat_state: ChatConfigState) -> str:
     if listener_enabled:
         _show_flow_prompt(force=True)
         while True:
+            try:
+                command = QQ_COMMAND_QUEUE.get_nowait()
+            except queue.Empty:
+                command = ""
+            if command:
+                _begin_flow_output()
+                return command
             try:
                 event = FLOW_INPUT_QUEUE.get(timeout=0.1)
             except queue.Empty:
@@ -430,18 +465,18 @@ def _drain_flow_inputs() -> list[FlowInputEvent]:
 
 
 def _start_contextual_talk_thread(
-    prompt: str,
+    event: FlowInputEvent,
     chat_state: ChatConfigState,
     messages: list[dict[str, object]] | None,
 ) -> threading.Thread | None:
     context = _talk_context_snapshot(messages)
     if context:
-        return _start_talk_thread(prompt, chat_state, context=context)
-    return _start_talk_thread(prompt, chat_state)
+        return _start_talk_thread(event.text, chat_state, context=context, reply_to_user_id=event.reply_to_user_id)
+    return _start_talk_thread(event.text, chat_state, reply_to_user_id=event.reply_to_user_id)
 
 
 def _handle_flow_inputs(messages: list[dict[str, object]], chat_state: ChatConfigState) -> bool:
-    return FLOW_INPUT.handle_queued(messages, lambda text: _start_contextual_talk_thread(text, chat_state, messages))
+    return FLOW_INPUT.handle_queued(messages, lambda event: _start_contextual_talk_thread(event, chat_state, messages))
 
 
 def _interrupted_tool_result(call: RequestedToolCall) -> dict[str, object]:
@@ -450,6 +485,162 @@ def _interrupted_tool_result(call: RequestedToolCall) -> dict[str, object]:
         "tool": call.name,
         "message": "Tool call skipped because the user supplied new input before it ran.",
     }
+
+
+def _tool_result_message_for_main_context(
+    call: RequestedToolCall,
+    result: dict[str, object],
+    *,
+    messages: list[dict[str, object]],
+    chat_state: ChatConfigState,
+) -> dict[str, object]:
+    context_result = _search_result_for_main_context(call, result, messages=messages, chat_state=chat_state)
+    return tool_result_message(call.id, context_result, name=call.name, legacy=call.legacy)
+
+
+def _search_result_for_main_context(
+    call: RequestedToolCall,
+    result: dict[str, object],
+    *,
+    messages: list[dict[str, object]],
+    chat_state: ChatConfigState,
+) -> dict[str, object]:
+    if call.name not in SEARCH_CONTEXT_TOOLS or str(result.get("status") or "ok") != "ok":
+        return result
+    try:
+        return _sidecar_filter_search_result(call.name, result, messages, chat_state)
+    except Exception as exc:
+        fallback = _local_search_context_summary(call.name, result)
+        fallback["filter_error"] = str(exc)
+        return fallback
+
+
+def _sidecar_filter_search_result(
+    tool_name: str,
+    result: dict[str, object],
+    messages: list[dict[str, object]],
+    chat_state: ChatConfigState,
+) -> dict[str, object]:
+    config = _ensure_chat_config(chat_state, max_tokens=4096, no_thinking=True)
+    context = _talk_context_snapshot(messages, max_messages=10) or "(no main conversation snapshot)"
+    candidates = _search_candidates_for_filter(result)
+    if not candidates:
+        return _local_search_context_summary(tool_name, result)
+    filter_messages = [
+        {
+            "role": "system",
+            "content": (
+                "你是搜索结果旁路筛选器。你不回答用户问题，只判断搜索结果中哪些对主会话当前任务有用。"
+                "不要把原始搜索内容整体复述进上下文。只返回 JSON 对象，字段：reason 字符串，"
+                "relevant_results 数组。每个 relevant_results 元素只包含 title、url、why、summary；"
+                "summary 最多两句，保留和主任务直接相关的事实。无用结果返回空数组。"
+            ),
+        },
+        {
+            "role": "user",
+            "content": (
+                f"主会话记忆快照：\n{context}\n\n"
+                f"搜索工具：{tool_name}\n"
+                f"查询：{result.get('query') or result.get('search_query') or ''}\n"
+                f"候选结果 JSON：\n{json.dumps(candidates, ensure_ascii=False)}"
+            ),
+        },
+    ]
+    response = chat_completion(filter_messages, config)
+    filtered = _parse_json_object(extract_assistant_text(response))
+    relevant = filtered.get("relevant_results")
+    if not isinstance(relevant, list):
+        relevant = []
+    return {
+        "status": "ok",
+        "tool": tool_name,
+        "query": result.get("query") or result.get("search_query") or "",
+        "context_mode": "sidecar_filtered_search",
+        "filter_reason": str(filtered.get("reason") or "").strip(),
+        "source_result_count": len(candidates),
+        "relevant_results": [_clean_filtered_search_item(item) for item in relevant if isinstance(item, dict)][:6],
+    }
+
+
+def _search_candidates_for_filter(result: dict[str, object]) -> list[dict[str, object]]:
+    raw_items = result.get("results")
+    if not isinstance(raw_items, list):
+        return []
+    candidates: list[dict[str, object]] = []
+    for index, item in enumerate(raw_items[:10], start=1):
+        if not isinstance(item, dict):
+            continue
+        candidates.append(
+            {
+                "index": index,
+                "title": _short_context_text(item.get("title"), 180),
+                "url": _short_context_text(item.get("url") or item.get("abs_url") or item.get("pdf_url"), 260),
+                "snippet": _short_context_text(
+                    item.get("content_excerpt") or item.get("snippet") or item.get("summary") or item.get("content"),
+                    700,
+                ),
+                "authors": item.get("authors") if isinstance(item.get("authors"), list) else [],
+                "published": _short_context_text(item.get("published") or item.get("updated"), 80),
+                "category": _short_context_text(item.get("primary_category"), 80),
+            }
+        )
+    return candidates
+
+
+def _local_search_context_summary(tool_name: str, result: dict[str, object]) -> dict[str, object]:
+    candidates = _search_candidates_for_filter(result)
+    return {
+        "status": "ok",
+        "tool": tool_name,
+        "query": result.get("query") or result.get("search_query") or "",
+        "context_mode": "local_compacted_search",
+        "filter_reason": "旁路筛选不可用，已仅保留标题、链接和短摘录。",
+        "source_result_count": len(candidates),
+        "relevant_results": [
+            {
+                "title": item.get("title", ""),
+                "url": item.get("url", ""),
+                "why": "候选搜索结果，需由主模型结合任务再判断。",
+                "summary": item.get("snippet", ""),
+            }
+            for item in candidates[:5]
+        ],
+    }
+
+
+def _parse_json_object(text: str) -> dict[str, object]:
+    clean = text.strip()
+    if clean.startswith("```"):
+        clean = clean.strip("`").strip()
+        if clean.lower().startswith("json"):
+            clean = clean[4:].strip()
+    try:
+        value = json.loads(clean)
+    except json.JSONDecodeError:
+        start = clean.find("{")
+        end = clean.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        value = json.loads(clean[start : end + 1])
+    if not isinstance(value, dict):
+        raise ValueError("sidecar search filter did not return a JSON object")
+    return value
+
+
+def _clean_filtered_search_item(item: dict[str, object]) -> dict[str, str]:
+    return {
+        "title": _short_context_text(item.get("title"), 180),
+        "url": _short_context_text(item.get("url"), 260),
+        "why": _short_context_text(item.get("why"), 240),
+        "summary": _short_context_text(item.get("summary"), 700),
+    }
+
+
+def _short_context_text(value: object, limit: int) -> str:
+    text = " ".join(str(value or "").split())
+    if len(text) <= limit:
+        return text
+    return text[: limit - 3].rstrip() + "..."
 
 
 def _handle_flow_inputs_before_pending_tool_calls(
@@ -469,7 +660,7 @@ def _handle_flow_inputs_before_pending_tool_calls(
     for event in events:
         if event.talk:
             if event.text:
-                _start_contextual_talk_thread(event.text, chat_state, messages)
+                _start_contextual_talk_thread(event, chat_state, messages)
             continue
         if event.hard_interrupt and not event.text:
             interrupted = True
@@ -561,7 +752,7 @@ def _chat_completion_interruptible(
     process.start()
     try:
         while process.is_alive():
-            FLOW_INPUT.handle_talk_queued(lambda text: _start_contextual_talk_thread(text, chat_state, messages))
+            FLOW_INPUT.handle_talk_queued(lambda event: _start_contextual_talk_thread(event, chat_state, messages))
             if FLOW_FORCE_TERMINATE_EVENT.is_set():
                 process.terminate()
                 process.join(timeout=2)
@@ -736,7 +927,7 @@ def _dispatch_command(
         if not prompt:
             print("usage: /talk <问题>")
             return True
-        _start_contextual_talk_thread(prompt, chat_state, messages)
+        _start_contextual_talk_thread(FlowInputEvent(prompt, talk=True), chat_state, messages)
         return True
     if name == "image":
         if len(rest) < 2:
@@ -880,7 +1071,7 @@ def _read_qq_transient_text() -> str:
             FLOW_INPUT.queued_preview = FLOW_INPUT.queued_preview[1:]
     if event.talk:
         if event.text:
-            _start_talk_thread(event.text, ChatConfigState())
+            _start_talk_thread(event.text, ChatConfigState(), reply_to_user_id=event.reply_to_user_id)
         return ""
     return event.text.strip()
 
@@ -1069,7 +1260,9 @@ def _chat_turn_with_tools(messages: list[dict[str, object]], chat_state: ChatCon
                 _print_tool_reason(call)
                 _show_flow_prompt()
                 result = _execute_model_tool_call(call, turn_id=turn_id, chat_state=chat_state)
-                messages.append(tool_result_message_for_call(call, result))
+                messages.append(
+                    _tool_result_message_for_main_context(call, result, messages=messages, chat_state=chat_state)
+                )
                 interrupted = _handle_flow_inputs_before_pending_tool_calls(
                     messages,
                     chat_state,
@@ -1180,7 +1373,7 @@ def main() -> int:
 
     while True:
         try:
-            command = pending_command if pending_command is not None else read_prompt()
+            command = pending_command if pending_command is not None else _read_next_command(chat_state)
             pending_command = None
         except (EOFError, KeyboardInterrupt):
             print()
@@ -1211,7 +1404,12 @@ def main() -> int:
             drained = _drain_flow_inputs()
             for event in drained:
                 if event.talk and event.text:
-                    _start_talk_thread(event.text, chat_state, context=interrupted_talk_context)
+                    _start_talk_thread(
+                        event.text,
+                        chat_state,
+                        context=interrupted_talk_context,
+                        reply_to_user_id=event.reply_to_user_id,
+                    )
                     continue
                 if event.text and pending_command is None:
                     pending_command = event.text

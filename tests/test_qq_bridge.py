@@ -534,7 +534,7 @@ def test_remote_tool_error_is_logged_without_qq_message(monkeypatch, tmp_path) -
     assert sent == []
 
 
-def test_remote_tool_success_sends_completion_notice_without_result(monkeypatch, tmp_path) -> None:
+def test_remote_tool_success_is_silent_until_final_task_message(monkeypatch, tmp_path) -> None:
     sent: list[tuple[str, str]] = []
 
     def fake_execute_tool(name, args, *, approve=False, event_log_path=None):
@@ -545,7 +545,7 @@ def test_remote_tool_success_sends_completion_notice_without_result(monkeypatch,
 
     session.handle_message(RemoteMessage(user_id="10001", text="/tool read_file path=README.md"))
 
-    assert sent == [("10001", "已完成，请在电脑查看结果。")]
+    assert sent == []
 
 
 def test_remote_chat_error_is_logged_without_qq_message(monkeypatch, tmp_path) -> None:
@@ -614,8 +614,9 @@ def test_tool_requires_approval_then_executes_after_code(monkeypatch, tmp_path) 
     session.handle_message(RemoteMessage(user_id="10001", text=f"/approve {code}"))
 
     assert calls[-1] == ("run_shell", {"command": "pytest"}, True)
-    assert sent[-1][1] == "已完成，请在电脑查看结果。"
-    assert "done" not in sent[-1][1]
+    assert len(sent) == 1
+    assert "需要远程确认" in sent[0][1]
+    assert "done" not in sent[0][1]
     assert session.pending == {}
 
     events = [
