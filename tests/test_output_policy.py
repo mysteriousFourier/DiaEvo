@@ -421,6 +421,29 @@ def test_flow_status_animates_status_line_without_touching_draft(monkeypatch, ca
     assert captured.err == ""
 
 
+def test_flow_status_renders_bottom_prompt_when_raw_input_disabled(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    writes = []
+    monkeypatch.delenv("DIAEVO_FLOW_INPUT", raising=False)
+    monkeypatch.setattr("ui.flow_input.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr("ui.flow_input.sys.stdout.write", lambda text: writes.append(text))
+    monkeypatch.setattr("ui.flow_input.sys.stdout.flush", lambda: None)
+    monkeypatch.setattr("ui.prompt_bar._term_width", lambda: 80)
+
+    with interactive_shell._flow_input_session():
+        assert interactive_shell.FLOW_INPUT_ACTIVE.is_set()
+        interactive_shell._show_flow_prompt(force=True)
+        with interactive_shell._flow_status("正在请求模型"):
+            pass
+
+    rendered = ANSI_RE.sub("", "".join(writes))
+    assert "❯ " in rendered
+    assert "Working (0s • esc to interrupt)" in rendered
+    assert "正在请求模型" in rendered
+    assert not interactive_shell.FLOW_INPUT_ACTIVE.is_set()
+
+
 def test_flow_status_elapsed_format_matches_codex_style() -> None:
     from ui import interactive_shell
 

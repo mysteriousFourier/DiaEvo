@@ -501,9 +501,7 @@ def _fmt_elapsed_compact(elapsed_secs: int) -> str:
 
 
 def _start_flow_input_listener() -> bool:
-    if not _raw_flow_input_enabled():
-        return False
-    return FLOW_INPUT.start()
+    return FLOW_INPUT.start(listen=_raw_flow_input_enabled())
 
 
 def _stop_flow_input_listener(enabled: bool) -> None:
@@ -512,7 +510,7 @@ def _stop_flow_input_listener(enabled: bool) -> None:
 
 @contextmanager
 def _flow_input_session() -> object:
-    with FLOW_INPUT.session():
+    with FLOW_INPUT.session(listen=_raw_flow_input_enabled()):
         yield
 
 

@@ -63,15 +63,20 @@ class FlowInputController:
 
     @property
     def available(self) -> bool:
+        return sys.stdin.isatty()
+
+    @property
+    def listener_available(self) -> bool:
         return msvcrt is not None and sys.stdin.isatty()
 
-    def start(self) -> bool:
+    def start(self, *, listen: bool = True) -> bool:
         if not self.available:
             return False
-        with self._lock:
-            if self._thread is None or not self._thread.is_alive():
-                self._thread = threading.Thread(target=self._worker, daemon=True)
-                self._thread.start()
+        if listen and self.listener_available:
+            with self._lock:
+                if self._thread is None or not self._thread.is_alive():
+                    self._thread = threading.Thread(target=self._worker, daemon=True)
+                    self._thread.start()
         self.active.set()
         return True
 
@@ -95,8 +100,8 @@ class FlowInputController:
             self._rendered_cursor_index = 0
 
     @contextmanager
-    def session(self) -> Iterator[None]:
-        enabled = self.start()
+    def session(self, *, listen: bool = True) -> Iterator[None]:
+        enabled = self.start(listen=listen)
         try:
             yield
         finally:

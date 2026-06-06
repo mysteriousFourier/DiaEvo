@@ -102,6 +102,18 @@ def test_ctrl_c_does_not_queue_flow_interrupt(capsys):
     capsys.readouterr()
 
 
+def test_start_can_render_without_raw_listener(monkeypatch):
+    controller = FlowInputController()
+
+    monkeypatch.setattr("ui.flow_input.sys.stdin.isatty", lambda: True)
+
+    assert controller.start(listen=False) is True
+    assert controller.active.is_set()
+    assert controller._thread is None
+
+    controller.stop(enabled=True)
+
+
 def test_escape_still_queues_hard_interrupt(capsys):
     controller = FlowInputController()
 
