@@ -1,6 +1,7 @@
 # Core algorithms are standard-library first.
 # Default terminal UI runtime:
 rich>=13.7
+prompt_toolkit>=3.0.43
 
 # Test runner:
 pytest>=8.0

@@ -179,9 +179,31 @@ def test_read_prompt_erases_menu_and_footer_on_submit(monkeypatch) -> None:
 
 def test_read_prompt_uses_plain_input_by_default(monkeypatch) -> None:
     monkeypatch.delenv("DIAEVO_RAW_PROMPT", raising=False)
+    monkeypatch.setenv("DIAEVO_PROMPT_TOOLKIT", "0")
     monkeypatch.setattr("builtins.input", lambda prompt="": f"{prompt}hello")
 
     assert prompt_bar.read_prompt() == f"{cli_style.GLYPHS['prompt']} hello"
+
+
+def test_read_prompt_uses_prompt_toolkit_session_when_available(monkeypatch) -> None:
+    class FakeSession:
+        def prompt(self) -> str:
+            return "/"
+
+    monkeypatch.delenv("DIAEVO_RAW_PROMPT", raising=False)
+    monkeypatch.setenv("DIAEVO_PROMPT_TOOLKIT", "1")
+    monkeypatch.setattr(prompt_bar, "_prompt_session", lambda: FakeSession())
+
+    assert prompt_bar.read_prompt() == "/learn"
+
+
+def test_prompt_toolkit_completion_items_include_commands_and_skills(monkeypatch) -> None:
+    prompt_bar._set_skill_menu_cache_for_tests([("alpha-skill", "Alpha summary")])
+
+    assert ("/help", "显示本地命令") in prompt_bar._completion_items("/h")
+    assert ("/skill alpha-skill", "Alpha summary") in prompt_bar._completion_items("/skill a")
+
+    prompt_bar._set_skill_menu_cache_for_tests(None)
 
 
 def test_read_prompt_ignores_ctrl_c_until_exit_command(monkeypatch) -> None:

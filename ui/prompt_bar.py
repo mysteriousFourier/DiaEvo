@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import os
 import sys
+from contextlib import nullcontext
+from typing import Any
 
 from .cli_style import CYAN, PURPLE, DIM, GLYPHS, RESET, _char_width, _display_width, _fit, _term_width
 
@@ -52,6 +54,9 @@ COMMAND_NAMES = tuple(name for name, _ in COMMANDS) + HIDDEN_COMMAND_NAMES
 COMMAND_MENU_PAGE_SIZE = 9
 COMMANDS_REQUIRING_ARGUMENTS = {"/skill"}
 _SKILL_MENU_CACHE: list[tuple[str, str]] | None = None
+_PROMPT_SESSION: Any | None = None
+_PROMPT_TOOLKIT_DISABLED = {"0", "false", "no", "off"}
+_RAW_PROMPT_ENABLED = {"1", "true", "yes", "on"}
 
 
 def _erase_lines(count: int) -> None:
@@ -260,6 +265,10 @@ def render_footer() -> str:
     return f"  {DIM}Enter 发送 {GLYPHS['dot']} Tab 补全 {GLYPHS['dot']} Esc 清空菜单{RESET}"
 
 
+def render_plain_footer() -> str:
+    return "Enter 发送 · Tab 补全 · /exit 退出"
+
+
 def render_command_menu(value: str, selected_index: int = 0) -> str:
     matches = _menu_matches(value)
     if not matches:
@@ -349,9 +358,85 @@ def _cursor_to_bottom(
 
 
 def read_prompt() -> str:
-    if os.environ.get("DIAEVO_RAW_PROMPT", "").strip().lower() not in {"1", "true", "yes", "on"}:
-        return input(f"{GLYPHS['prompt']} ")
-    return _read_prompt_raw()
+    if os.environ.get("DIAEVO_RAW_PROMPT", "").strip().lower() in _RAW_PROMPT_ENABLED:
+        return _read_prompt_raw()
+    if _prompt_toolkit_enabled():
+        value = _read_prompt_toolkit()
+        if value is not None:
+            return value
+    return input(f"{GLYPHS['prompt']} ")
+
+
+def _prompt_toolkit_enabled() -> bool:
+    value = os.environ.get("DIAEVO_PROMPT_TOOLKIT", "").strip().lower()
+    return value not in _PROMPT_TOOLKIT_DISABLED
+
+
+def _read_prompt_toolkit() -> str | None:
+    try:
+        session = _prompt_session()
+    except Exception:
+        return None
+    while True:
+        try:
+            try:
+                with _prompt_stdout_patch():
+                    text = session.prompt()
+            except Exception:
+                text = session.prompt()
+        except (EOFError, KeyboardInterrupt):
+            print("输入 /exit 退出。")
+            continue
+        return _submit_value(text, 0).strip()
+
+
+def _prompt_stdout_patch():
+    try:
+        from prompt_toolkit.patch_stdout import patch_stdout
+    except Exception:
+        return nullcontext()
+    return patch_stdout()
+
+
+def _prompt_session():
+    global _PROMPT_SESSION
+    if _PROMPT_SESSION is not None:
+        return _PROMPT_SESSION
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.completion import Completer, Completion
+        from prompt_toolkit.completion import CompleteEvent
+        from prompt_toolkit.document import Document
+    except Exception as exc:  # pragma: no cover - dependency may be absent in minimal installs.
+        raise RuntimeError("prompt_toolkit is not available") from exc
+
+    class DiaEvoCompleter(Completer):
+        def get_completions(self, document: Document, complete_event: CompleteEvent):
+            text = document.text_before_cursor
+            if not text.startswith("/"):
+                return
+            if "\n" in text:
+                return
+            for value, description in _completion_items(text):
+                yield Completion(value, start_position=-len(text), display=value, display_meta=description)
+
+    _PROMPT_SESSION = PromptSession(
+        message=f"{GLYPHS['prompt']} ",
+        completer=DiaEvoCompleter(),
+        complete_while_typing=True,
+        bottom_toolbar=render_plain_footer,
+        reserve_space_for_menu=8,
+    )
+    return _PROMPT_SESSION
+
+
+def _completion_items(value: str) -> list[tuple[str, str]]:
+    skill_query = _skill_query(value)
+    if skill_query is not None:
+        return [(f"/skill {name}", description) for name, description in _matching_skill_items(value)]
+    if any(char.isspace() for char in value):
+        return []
+    return [(name, description) for name, description in _matching_commands(value)]
 
 
 def _read_prompt_raw() -> str:
