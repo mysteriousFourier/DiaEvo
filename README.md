@@ -162,9 +162,9 @@ diaevo
 
 别人 clone 项目后，按常规 Python 依赖安装、复制 `.env.example` 为 `.env` 并填好 QQ 白名单和 API key 即可直接启动；NapCat 下载产物在 clone 目录的 `.tmp/napcat`，不会提交到 git。非 Windows 环境请自行安装 NapCat 并设置 `DIAEVO_QQ_NAPCAT_COMMAND`。
 
-首版只响应 `DIAEVO_QQ_ALLOWED_USERS` 中的私聊 QQ 号。电脑终端输入和 QQ 私聊输入进入同一个交互式会话历史：在电脑前可以直接输入，不在电脑前可用手机继续当前任务。模型回复、工具预览、状态和命令输出会同步发给最近发消息的白名单 QQ。
+首版只响应 `DIAEVO_QQ_ALLOWED_USERS` 中的私聊 QQ 号。电脑终端输入和 QQ 私聊输入进入同一个交互式会话历史：在电脑前可以直接输入，不在电脑前可用手机继续当前任务。主模型最终回复、工具审批预览、状态和命令输出会同步发给最近发消息的白名单 QQ；工具成功后的中间结果不会额外发送“已完成”占位提示，等主任务最终回复即可。
 
-远程普通文本会作为当前会话的新输入；远程斜杠命令会走同一套交互式命令。写入、删除、patch、shell 和网络工具仍会先生成预览并等待审批；手机可回复 `1`、`同意` 或 `/approve` 允许一次，回复 `2` 表示本轮不再询问该工具，回复 `3`、`拒绝` 或 `/deny` 拒绝。`/key` 和 `/vision-key` 在 QQ 入口禁用，请在本机终端设置密钥。
+远程普通文本会作为当前会话的新输入，并会中断当前主任务后交给模型处理；远程斜杠命令会排队走同一套交互式命令，不会打断正在执行的主任务。`/talk <问题>` 是旁路提问：它会读取主会话最近上下文，不写入主历史，不中断当前模型或工具工作，并把回答发回发起这次 `/talk` 的 QQ 用户。写入、删除、patch、shell 和网络工具仍会先生成预览并等待审批；手机可回复 `1`、`同意` 或 `/approve` 允许一次，回复 `2` 表示本轮不再询问该工具，回复 `3`、`拒绝` 或 `/deny` 拒绝。`/key` 和 `/vision-key` 在 QQ 入口禁用，请在本机终端设置密钥。
 
 `diaevo qq-bridge` 仍保留为独立调试入口：它不共享本地交互式终端会话，只适合验证 OneBot 收发、白名单和确认码审批是否工作。
 
@@ -178,7 +178,7 @@ diaevo
 | 模型聊天 | 通过 `.env` 和运行时 `/model`、`/baseurl`、`/key` 配置 DeepSeek 或 OpenAI 兼容接口；普通文本进入带工具调用的聊天循环。 |
 | QQ 远程入口 | 可选配置启用后，普通 `diaevo` 会通过 OneBot 11/NapCatQQ 接收白名单 QQ 私聊，与本地终端共享同一个交互式会话。 |
 | 图像理解 | `/image <path|url> <问题>` 使用 GLM 视觉模型理解图片，默认 `glm-4.6v-flash`，并发上限为 1，结果会写回主会话历史。 |
-| 本地工具层 | `list_files`、`read_file`、`write_file`、`edit_file`、`delete_file`、`apply_patch`、`run_shell`、`web_search`、`web_fetch`，带工作区边界、只读/写入分级和审批门。 |
+| 本地工具层 | `list_files`、`read_file`、`write_file`、`edit_file`、`delete_file`、`apply_patch`、`run_shell`、`web_search`、`web_fetch`，带工作区边界、只读/写入分级和审批门；`web_search` 和 `arxiv_search` 的原始结果只用于终端展示，进入主模型上下文前会先由旁路筛选器压缩成相关摘要。 |
 | 轨迹捕获与反馈 | 本地工具调用会写入 `.diaevo/tool_events.jsonl`；`ingest` 规范化样例/真实轨迹，`feedback` 将工具事件折叠回可挖掘轨迹。 |
 | 挖掘快照 | 使用 TF-IDF、K-Means、关联规则、频繁序列、task-skill-tool 图和覆盖缺口生成 `data/mining_snapshots/YYMMDD/` 可读证据包。 |
 | 推荐解释 | `recommend` 综合文本相似度、规则、PageRank、使用记录、成功率、覆盖缺口、风险和成本，并输出每个 skill 的 score explanation、脚本审查状态和 `SKILL.md` 回退原因。 |
