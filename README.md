@@ -144,6 +144,8 @@ DIAEVO_QQ_ACCESS_TOKEN=
 DIAEVO_QQ_APPROVAL_TTL_SECONDS=300
 DIAEVO_QQ_MAX_MESSAGE_CHARS=1800
 DIAEVO_QQ_NAPCAT_AUTOSTART=true
+DIAEVO_QQ_NAPCAT_AUTO_INSTALL=true
+DIAEVO_QQ_NAPCAT_DOWNLOAD_URL=https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.Windows.OneKey.zip
 DIAEVO_QQ_NAPCAT_COMMAND=
 DIAEVO_QQ_NAPCAT_STARTUP_WAIT_SECONDS=25
 ```
@@ -155,7 +157,9 @@ pip install -e ".[qq]"
 diaevo
 ```
 
-如果 `DIAEVO_QQ_NAPCAT_AUTOSTART=true`，DiaEvo 会先检查 `DIAEVO_QQ_ONEBOT_WS_URL` 和 `DIAEVO_QQ_ONEBOT_HTTP_URL` 对应端口是否已经监听；没有监听时会自动从 PATH、npm 全局目录、当前 workspace、DiaEvo 安装目录和常见安装目录寻找 NapCat 启动项，再等待 OneBot 服务可连接。`DIAEVO_QQ_NAPCAT_COMMAND` 只是可选覆盖项，只有自动发现失败或你想指定自定义启动脚本时才需要填写。若启动后仍需要扫码登录，二维码会出现在 NapCatQQ 自己的窗口或控制台中。
+如果 `DIAEVO_QQ_NAPCAT_AUTOSTART=true`，DiaEvo 会先检查 `DIAEVO_QQ_ONEBOT_WS_URL` 和 `DIAEVO_QQ_ONEBOT_HTTP_URL` 对应端口是否已经监听；没有监听时会自动从 PATH、npm 全局目录、当前 workspace、DiaEvo 安装目录和常见安装目录寻找 NapCat 启动项。若仍未找到且 `DIAEVO_QQ_NAPCAT_AUTO_INSTALL=true`，Windows 下会下载 NapCat 一键包到当前 workspace 的 `.tmp\napcat` 并从那里启动，再等待 OneBot 服务可连接。`DIAEVO_QQ_NAPCAT_COMMAND` 只是可选覆盖项，只有自动发现/自动安装失败或你想指定自定义启动脚本时才需要填写。若启动后仍需要扫码登录，二维码会出现在 NapCatQQ 自己的窗口或控制台中。
+
+别人 clone 项目后，按常规 Python 依赖安装、复制 `.env.example` 为 `.env` 并填好 QQ 白名单和 API key 即可直接启动；NapCat 下载产物在 `.tmp/napcat`，不会提交到 git。非 Windows 环境请自行安装 NapCat 并设置 `DIAEVO_QQ_NAPCAT_COMMAND`。
 
 首版只响应 `DIAEVO_QQ_ALLOWED_USERS` 中的私聊 QQ 号。电脑终端输入和 QQ 私聊输入进入同一个交互式会话历史：在电脑前可以直接输入，不在电脑前可用手机继续当前任务。模型回复、工具预览、状态和命令输出会同步发给最近发消息的白名单 QQ。
 

@@ -15,6 +15,7 @@ import urllib.error
 import urllib.parse
 import urllib.request
 import uuid
+import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Callable
@@ -29,6 +30,9 @@ from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args
 DEFAULT_APPROVAL_TTL_SECONDS = 300
 DEFAULT_MAX_MESSAGE_CHARS = 1800
 DEFAULT_NAPCAT_STARTUP_WAIT_SECONDS = 25.0
+DEFAULT_NAPCAT_DOWNLOAD_URL = (
+    "https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.Windows.OneKey.zip"
+)
 FORBIDDEN_REMOTE_COMMANDS = {"key", "vision-key", "vision_key", "visionkey"}
 
 
@@ -45,6 +49,9 @@ class QQBridgeConfig:
     napcat_autostart: bool = False
     napcat_command: str = ""
     napcat_startup_wait_seconds: float = DEFAULT_NAPCAT_STARTUP_WAIT_SECONDS
+    napcat_auto_install: bool = False
+    napcat_download_url: str = DEFAULT_NAPCAT_DOWNLOAD_URL
+    napcat_install_dir: Path = WORKSPACE_ROOT / ".tmp" / "napcat"
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +89,7 @@ def _split_csv(value: str | None) -> set[str]:
 def config_from_env_vars(env_path: str | Path | None = None) -> QQBridgeConfig:
     load_env(env_path)
     autostart_value = os.environ.get("DIAEVO_QQ_NAPCAT_AUTOSTART")
+    auto_install_value = os.environ.get("DIAEVO_QQ_NAPCAT_AUTO_INSTALL")
     return QQBridgeConfig(
         enabled=_truthy(os.environ.get("DIAEVO_QQ_ENABLED")),
         allowed_users=_split_csv(os.environ.get("DIAEVO_QQ_ALLOWED_USERS")),
@@ -98,6 +106,9 @@ def config_from_env_vars(env_path: str | Path | None = None) -> QQBridgeConfig:
         napcat_startup_wait_seconds=float(
             os.environ.get("DIAEVO_QQ_NAPCAT_STARTUP_WAIT_SECONDS", DEFAULT_NAPCAT_STARTUP_WAIT_SECONDS)
         ),
+        napcat_auto_install=True if auto_install_value is None else _truthy(auto_install_value),
+        napcat_download_url=os.environ.get("DIAEVO_QQ_NAPCAT_DOWNLOAD_URL", DEFAULT_NAPCAT_DOWNLOAD_URL).strip()
+        or DEFAULT_NAPCAT_DOWNLOAD_URL,
     )
 
 
@@ -136,10 +147,26 @@ def prepare_onebot_service(config: QQBridgeConfig) -> dict[str, Any]:
         }
     napcat_command = config.napcat_command or discover_napcat_command()
     if not napcat_command:
-        return {
-            "status": "missing_command",
-            "message": "已启用 NapCat 自动启动，但没有在 PATH、npm 全局目录或常见安装目录找到 NapCat。",
-        }
+        if config.napcat_auto_install:
+            try:
+                napcat_command = install_workspace_napcat(config)
+            except QQBridgeError as exc:
+                return {
+                    "status": "missing_command",
+                    "message": (
+                        "已启用 NapCat 自动启动，但自动安装失败。"
+                        f"{exc} 可手动安装 NapCat，或设置 DIAEVO_QQ_NAPCAT_COMMAND。"
+                    ),
+                }
+        if not napcat_command:
+            return {
+                "status": "missing_command",
+                "message": (
+                    "已启用 NapCat 自动启动，但没有在 PATH、npm 全局目录、workspace .tmp\\napcat "
+                    "或常见安装目录找到 NapCat。可设置 DIAEVO_QQ_NAPCAT_AUTO_INSTALL=true 自动安装，"
+                    "或设置 DIAEVO_QQ_NAPCAT_COMMAND。"
+                ),
+            }
 
     process = _start_napcat_process(napcat_command)
     deadline = time.monotonic() + config.napcat_startup_wait_seconds
@@ -166,6 +193,35 @@ def prepare_onebot_service(config: QQBridgeConfig) -> dict[str, Any]:
         "command": napcat_command,
         "message": "已启动 NapCat，但等待 OneBot 服务可连接超时；可能仍在等待扫码登录。",
     }
+
+
+def install_workspace_napcat(config: QQBridgeConfig) -> str:
+    if not sys.platform.startswith("win"):
+        raise QQBridgeError("NapCat workspace 自动安装当前只支持 Windows。")
+    if not config.napcat_download_url:
+        raise QQBridgeError("DIAEVO_QQ_NAPCAT_DOWNLOAD_URL 为空。")
+
+    install_dir = config.napcat_install_dir
+    existing = _discover_napcat_command_from_roots([install_dir])
+    if existing:
+        return existing
+
+    download_dir = install_dir.parent / f".napcat-download-{uuid.uuid4().hex}"
+    archive_path = download_dir / "NapCat.Shell.Windows.OneKey.zip"
+    try:
+        download_dir.mkdir(parents=True, exist_ok=False)
+        _download_url(config.napcat_download_url, archive_path)
+        install_dir.mkdir(parents=True, exist_ok=True)
+        _extract_zip_safely(archive_path, install_dir)
+    except (OSError, urllib.error.URLError, zipfile.BadZipFile) as exc:
+        raise QQBridgeError(f"下载或解压 NapCat 失败：{exc}") from exc
+    finally:
+        shutil.rmtree(download_dir, ignore_errors=True)
+
+    installed = _discover_napcat_command_from_roots([install_dir])
+    if not installed:
+        raise QQBridgeError(f"NapCat 已下载到 {install_dir}，但未找到可启动文件。")
+    return installed
 
 
 def discover_napcat_command() -> str:
@@ -246,6 +302,17 @@ def _recursive_napcat_candidates() -> list[Path]:
         if value:
             roots.extend([Path(value) / "NapCat", Path(value) / "NapCatQQ"])
 
+    return _napcat_candidates_under(roots)
+
+
+def _discover_napcat_command_from_roots(roots: list[Path]) -> str:
+    for path in _napcat_candidates_under(roots):
+        if path.exists() and path.is_file():
+            return _shell_command_for_path(path)
+    return ""
+
+
+def _napcat_candidates_under(roots: list[Path]) -> list[Path]:
     preferred_names = (
         "napcat.bat",
         "NapCatWinBootMain.exe",
@@ -268,6 +335,22 @@ def _recursive_napcat_candidates() -> list[Path]:
                     seen.add(key)
                     candidates.append(path)
     return sorted(candidates, key=_napcat_candidate_rank)
+
+
+def _download_url(url: str, target: Path) -> None:
+    request = urllib.request.Request(url, headers={"User-Agent": "diaevo-napcat-bootstrap"})
+    with urllib.request.urlopen(request, timeout=90) as response, target.open("wb") as handle:
+        shutil.copyfileobj(response, handle)
+
+
+def _extract_zip_safely(archive_path: Path, target_dir: Path) -> None:
+    target_root = target_dir.resolve(strict=False)
+    with zipfile.ZipFile(archive_path) as archive:
+        for member in archive.infolist():
+            destination = (target_dir / member.filename).resolve(strict=False)
+            if target_root != destination and target_root not in destination.parents:
+                raise QQBridgeError(f"NapCat 压缩包包含非法路径：{member.filename}")
+        archive.extractall(target_dir)
 
 
 def _napcat_candidate_rank(path: Path) -> tuple[int, int, str]:
