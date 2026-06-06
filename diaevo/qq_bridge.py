@@ -368,16 +368,19 @@ def _extract_zip_safely(archive_path: Path, target_dir: Path) -> None:
 def _napcat_candidate_rank(path: Path) -> tuple[int, int, str]:
     name = path.name.lower()
     text = str(path).lower()
-    if name == "napcat.bat" and "bootmain" in text:
+    has_local_qq = (path.parent / "QQ.exe").exists()
+    if name == "napcat.bat" and has_local_qq:
         priority = 0
-    elif name == "napcat.bat":
+    elif name == "napcatwinbootmain.exe" and has_local_qq:
         priority = 1
-    elif name == "napcatwinbootmain.exe":
+    elif name == "napcat.bat":
         priority = 2
-    elif name.startswith("launcher") and name.endswith(".bat"):
+    elif name == "napcatwinbootmain.exe":
         priority = 3
-    else:
+    elif name.startswith("launcher") and name.endswith(".bat"):
         priority = 4
+    else:
+        priority = 5
     return (priority, len(path.parts), text)
 
 

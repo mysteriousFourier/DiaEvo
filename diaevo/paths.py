@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 
 
-INSTALL_ROOT = Path(__file__).resolve().parents[1]
+INSTALL_ROOT = Path(os.environ.get("DIAEVO_INSTALL_ROOT") or Path(__file__).resolve().parents[1]).resolve(strict=False)
 WORKSPACE_ROOT = Path(os.environ.get("DIAEVO_WORKSPACE") or Path.cwd()).resolve(strict=False)
 PROJECT_ROOT = WORKSPACE_ROOT
 DIAEVO_DIR = WORKSPACE_ROOT / ".diaevo"

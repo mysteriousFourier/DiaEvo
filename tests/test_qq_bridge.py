@@ -286,10 +286,36 @@ def test_discover_napcat_command_finds_install_root_tmp_when_workspace_differs(m
     assert str(script).lower() in command.lower()
 
 
+def test_discover_napcat_command_prefers_script_with_local_qq_exe(monkeypatch, tmp_path) -> None:
+    install_root = tmp_path / "diaevo-install"
+    bootmain = install_root / ".tmp" / "napcat" / "onekey" / "bootmain"
+    bootmain.mkdir(parents=True)
+    bad_script = bootmain / "napcat.bat"
+    bad_script.write_text("@echo off\n.\\NapCatWinBootMain.exe\n", encoding="utf-8")
+
+    shell = install_root / ".tmp" / "napcat" / "onekey" / "NapCat.44498.Shell"
+    shell.mkdir(parents=True)
+    good_script = shell / "napcat.bat"
+    good_script.write_text("@echo off\n.\\NapCatWinBootMain.exe\n", encoding="utf-8")
+    (shell / "QQ.exe").write_bytes(b"fake qq")
+
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr("diaevo.qq_bridge.WORKSPACE_ROOT", tmp_path / "workspace")
+    monkeypatch.setattr("diaevo.qq_bridge.INSTALL_ROOT", install_root)
+    monkeypatch.setattr("diaevo.qq_bridge._npm_global_bin", lambda: None)
+
+    command = discover_napcat_command()
+
+    assert str(good_script).lower() in command.lower()
+    assert str(bad_script).lower() not in command.lower()
+
+
 def test_install_managed_napcat_extracts_zip_and_returns_command(monkeypatch, tmp_path) -> None:
     source_zip = tmp_path / "source.zip"
     with zipfile.ZipFile(source_zip, "w") as archive:
         archive.writestr("onekey/bootmain/napcat.bat", "@echo off\n.\\NapCatWinBootMain.exe\n")
+        archive.writestr("onekey/NapCat.44498.Shell/napcat.bat", "@echo off\n.\\NapCatWinBootMain.exe\n")
+        archive.writestr("onekey/NapCat.44498.Shell/QQ.exe", b"fake qq")
 
     def fake_download(url, target):
         target.write_bytes(source_zip.read_bytes())
@@ -309,7 +335,7 @@ def test_install_managed_napcat_extracts_zip_and_returns_command(monkeypatch, tm
 
     command = install_managed_napcat(config)
 
-    assert str(install_dir / "onekey" / "bootmain" / "napcat.bat").lower() in command.lower()
+    assert str(install_dir / "onekey" / "NapCat.44498.Shell" / "napcat.bat").lower() in command.lower()
 
 
 def test_windows_shell_command_sets_working_directory(monkeypatch, tmp_path) -> None:

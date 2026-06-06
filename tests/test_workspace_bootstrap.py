@@ -51,6 +51,35 @@ def test_bootstrap_workspace_creates_local_dirs_and_seed_data(tmp_path):
             assert (workspace / "data" / name).exists()
 
 
+def test_paths_install_root_can_come_from_shim_env(tmp_path):
+    install_root = tmp_path / "diaevo-install"
+    workspace = tmp_path / "selected-workspace"
+    original_install_root = os.environ.get("DIAEVO_INSTALL_ROOT")
+    original_workspace = os.environ.get("DIAEVO_WORKSPACE")
+
+    try:
+        os.environ["DIAEVO_INSTALL_ROOT"] = str(install_root)
+        os.environ["DIAEVO_WORKSPACE"] = str(workspace)
+        import diaevo.paths as paths
+
+        reloaded = importlib.reload(paths)
+
+        assert reloaded.INSTALL_ROOT == install_root.resolve()
+        assert reloaded.WORKSPACE_ROOT == workspace.resolve()
+    finally:
+        if original_install_root is None:
+            os.environ.pop("DIAEVO_INSTALL_ROOT", None)
+        else:
+            os.environ["DIAEVO_INSTALL_ROOT"] = original_install_root
+        if original_workspace is None:
+            os.environ.pop("DIAEVO_WORKSPACE", None)
+        else:
+            os.environ["DIAEVO_WORKSPACE"] = original_workspace
+        import diaevo.paths as paths
+
+        importlib.reload(paths)
+
+
 def test_workspace_env_writes_to_workspace_env_file(tmp_path):
     workspace = tmp_path / "project-b"
     original_model = os.environ.get("DEEPSEEK_MODEL")
