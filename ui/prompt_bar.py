@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sys
 
 from .cli_style import CYAN, PURPLE, DIM, GLYPHS, RESET, _char_width, _display_width, _fit, _term_width
@@ -348,6 +349,12 @@ def _cursor_to_bottom(
 
 
 def read_prompt() -> str:
+    if os.environ.get("DIAEVO_RAW_PROMPT", "").strip().lower() not in {"1", "true", "yes", "on"}:
+        return input(f"{GLYPHS['prompt']} ")
+    return _read_prompt_raw()
+
+
+def _read_prompt_raw() -> str:
     if msvcrt is None or not sys.stdin.isatty():
         return input(f"{GLYPHS['prompt']} ")
 

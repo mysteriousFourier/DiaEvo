@@ -169,12 +169,19 @@ def test_read_prompt_erases_menu_and_footer_on_submit(monkeypatch) -> None:
     monkeypatch.setattr(prompt_bar.sys, "stdin", FakeStdin())
     monkeypatch.setattr(prompt_bar, "msvcrt", FakeMsvcrt())
 
-    value = prompt_bar.read_prompt()
+    value = prompt_bar._read_prompt_raw()
 
     assert value == "/learn"
     writes = "".join(fake_stdout.writes)
     assert "Enter 发送" in writes
     assert writes.rstrip().endswith("\033[2K")
+
+
+def test_read_prompt_uses_plain_input_by_default(monkeypatch) -> None:
+    monkeypatch.delenv("DIAEVO_RAW_PROMPT", raising=False)
+    monkeypatch.setattr("builtins.input", lambda prompt="": f"{prompt}hello")
+
+    assert prompt_bar.read_prompt() == f"{cli_style.GLYPHS['prompt']} hello"
 
 
 def test_read_prompt_ignores_ctrl_c_until_exit_command(monkeypatch) -> None:
@@ -204,7 +211,7 @@ def test_read_prompt_ignores_ctrl_c_until_exit_command(monkeypatch) -> None:
     monkeypatch.setattr(prompt_bar.sys, "stdin", FakeStdin())
     monkeypatch.setattr(prompt_bar, "msvcrt", FakeMsvcrt())
 
-    assert prompt_bar.read_prompt() == "/exit"
+    assert prompt_bar._read_prompt_raw() == "/exit"
 
 
 def test_home_card_has_no_outer_border() -> None:

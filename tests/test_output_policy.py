@@ -432,6 +432,38 @@ def test_flow_status_elapsed_format_matches_codex_style() -> None:
     assert interactive_shell._fmt_elapsed_compact(3661) == "1h 01m 01s"
 
 
+def test_read_next_command_uses_plain_prompt_by_default(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    monkeypatch.delenv("DIAEVO_FLOW_INPUT", raising=False)
+    monkeypatch.setattr(
+        interactive_shell,
+        "_start_flow_input_listener",
+        lambda: (_ for _ in ()).throw(AssertionError("flow listener should be opt-in for idle input")),
+    )
+    monkeypatch.setattr(interactive_shell, "read_prompt", lambda: "hello")
+
+    assert interactive_shell._read_next_command(ChatConfigState()) == "hello"
+
+
+def test_transient_inputs_use_plain_input_by_default(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    monkeypatch.delenv("DIAEVO_FLOW_INPUT", raising=False)
+    monkeypatch.setattr(interactive_shell, "_qq_send", lambda *args, **kwargs: None)
+    monkeypatch.setattr(
+        interactive_shell.sys,
+        "stdin",
+        type("FakeStdin", (), {"isatty": lambda self: True})(),
+    )
+    monkeypatch.setattr(interactive_shell, "msvcrt", object())
+    answers = iter(["2", "反馈"])
+    monkeypatch.setattr("builtins.input", lambda prompt="": next(answers))
+
+    assert interactive_shell._read_transient_choice("选择：", valid_chars={"1", "2"}) == "2"
+    assert interactive_shell._read_transient_text("换方案：") == "反馈"
+
+
 def test_chat_config_state_tracks_session_tool_approvals() -> None:
     state = ChatConfigState()
 

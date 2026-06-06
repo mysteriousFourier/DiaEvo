@@ -4,6 +4,7 @@ import getpass
 import asyncio
 import json
 import multiprocessing
+import os
 import queue
 import shlex
 import sys
@@ -108,6 +109,7 @@ _TALK_THREADS_LOCK = threading.Lock()
 QQ_INTERACTIVE_BRIDGE: QQInteractiveBridge | None = None
 QQ_INTERACTIVE_THREAD: threading.Thread | None = None
 SEARCH_CONTEXT_TOOLS = {"web_search", "arxiv_search"}
+RAW_INPUT_ENV_VALUES = {"1", "true", "yes", "on"}
 
 
 @dataclass(frozen=True)
@@ -382,7 +384,20 @@ def _event_to_command(event: FlowInputEvent, chat_state: ChatConfigState) -> str
     return event.text.strip()
 
 
+def _raw_flow_input_enabled() -> bool:
+    return os.environ.get("DIAEVO_FLOW_INPUT", "").strip().lower() in RAW_INPUT_ENV_VALUES
+
+
 def _read_next_command(chat_state: ChatConfigState) -> str:
+    if not _raw_flow_input_enabled():
+        try:
+            command = QQ_COMMAND_QUEUE.get_nowait()
+        except queue.Empty:
+            command = ""
+        if command:
+            return command
+        return read_prompt()
+
     listener_enabled = _start_flow_input_listener()
     if listener_enabled:
         _show_flow_prompt(force=True)
@@ -452,6 +467,8 @@ def _fmt_elapsed_compact(elapsed_secs: int) -> str:
 
 
 def _start_flow_input_listener() -> bool:
+    if not _raw_flow_input_enabled():
+        return False
     return FLOW_INPUT.start()
 
 
@@ -1006,7 +1023,7 @@ def _read_transient_choice(
 ) -> str:
     if send_to_qq:
         _qq_send(_plain_transient_prompt(prompt))
-    if msvcrt is None or not sys.stdin.isatty():
+    if not _raw_flow_input_enabled() or msvcrt is None or not sys.stdin.isatty():
         return input(prompt)
 
     with _pause_flow_input():
@@ -1047,7 +1064,7 @@ def _read_transient_choice(
 def _read_transient_text(prompt: str, *, send_to_qq: bool = True) -> str:
     if send_to_qq:
         _qq_send(_plain_transient_prompt(prompt))
-    if msvcrt is None or not sys.stdin.isatty():
+    if not _raw_flow_input_enabled() or msvcrt is None or not sys.stdin.isatty():
         return input(prompt)
 
     with _pause_flow_input():
