@@ -94,9 +94,9 @@ class FlowInputController:
     def stop(self, enabled: bool) -> None:
         if not enabled:
             return
+        self.active.clear()
         self._stop_toolkit_worker()
         with self._render_lock:
-            self.active.clear()
             self.begin_output()
             self.interrupt_event.clear()
             self.force_terminate_event.clear()
@@ -344,7 +344,9 @@ class FlowInputController:
         self._abort_toolkit_prompt()
         thread = self._toolkit_thread
         if thread is not None and thread.is_alive():
-            thread.join(timeout=0.5)
+            thread.join(timeout=2.0)
+        if thread is not None and thread.is_alive():
+            return
         self._toolkit_mode = False
         self._toolkit_thread = None
         self._toolkit_session = None
@@ -394,7 +396,7 @@ class FlowInputController:
         while session is not None and self.active.is_set() and not self._toolkit_stop_requested.is_set():
             try:
                 with _prompt_stdout_patch():
-                    text = session.prompt()
+                    text = session.prompt(pre_run=self._toolkit_prompt_pre_run)
             except (EOFError, KeyboardInterrupt):
                 if self._toolkit_stop_requested.is_set() or not self.active.is_set():
                     break
@@ -404,18 +406,34 @@ class FlowInputController:
             self._queue_toolkit_submission(text)
         self._toolkit_mode = False
 
+    def _toolkit_prompt_pre_run(self) -> None:
+        if self._toolkit_stop_requested.is_set() or not self.active.is_set():
+            self._exit_toolkit_app()
+
     def _abort_toolkit_prompt(self) -> None:
+        self._exit_toolkit_app()
+        self._invalidate_toolkit()
+
+    def _exit_toolkit_app(self) -> None:
         session = self._toolkit_session
         app = getattr(session, "app", None)
         if app is None:
             return
-        try:
-            app.exit(exception=EOFError)
-        except Exception:
+        loop = getattr(app, "loop", None)
+
+        def exit_app() -> None:
             try:
-                app.invalidate()
+                app.exit(exception=EOFError)
             except Exception:
                 return
+
+        if loop is not None and not loop.is_closed():
+            try:
+                loop.call_soon_threadsafe(exit_app)
+                return
+            except Exception:
+                pass
+        exit_app()
 
     def _invalidate_toolkit(self) -> None:
         session = self._toolkit_session

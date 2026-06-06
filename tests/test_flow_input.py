@@ -134,7 +134,10 @@ def test_start_can_use_toolkit_without_raw_listener(monkeypatch):
         def __init__(self):
             self.app = FakeApp()
 
-        def prompt(self):
+        def prompt(self, **kwargs):
+            pre_run = kwargs.get("pre_run")
+            if pre_run is not None:
+                pre_run()
             prompt_started.set()
             self.app.exited.wait(timeout=1)
             raise EOFError
@@ -176,6 +179,37 @@ def test_toolkit_escape_queues_hard_interrupt():
     )
     assert controller.interrupt_event.is_set()
     assert controller.force_terminate_event.is_set()
+
+
+def test_toolkit_exit_uses_prompt_loop_threadsafe_callback():
+    controller = FlowInputController()
+    scheduled = []
+    exited = []
+
+    class FakeLoop:
+        def is_closed(self):
+            return False
+
+        def call_soon_threadsafe(self, callback):
+            scheduled.append(callback)
+
+    class FakeApp:
+        loop = FakeLoop()
+
+        def exit(self, **kwargs):
+            exited.append(kwargs)
+
+    class FakeSession:
+        app = FakeApp()
+
+    controller._toolkit_session = FakeSession()
+
+    controller._exit_toolkit_app()
+
+    assert exited == []
+    assert len(scheduled) == 1
+    scheduled[0]()
+    assert exited == [{"exception": EOFError}]
 
 
 def test_escape_still_queues_hard_interrupt(capsys):
