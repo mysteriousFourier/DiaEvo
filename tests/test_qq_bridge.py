@@ -9,7 +9,7 @@ from diaevo.qq_bridge import (
     RemoteMessage,
     config_from_env_vars,
     discover_napcat_command,
-    install_workspace_napcat,
+    install_managed_napcat,
     _shell_command_for_path,
     parse_onebot_private_message,
     prepare_onebot_service,
@@ -38,6 +38,7 @@ def test_config_from_env_vars_reads_whitelist(monkeypatch) -> None:
     monkeypatch.setenv("DIAEVO_QQ_NAPCAT_COMMAND", 'start "" "D:\\NapCat\\NapCatQQ.exe"')
     monkeypatch.setenv("DIAEVO_QQ_NAPCAT_STARTUP_WAIT_SECONDS", "12.5")
     monkeypatch.setenv("DIAEVO_QQ_NAPCAT_DOWNLOAD_URL", "https://example.test/napcat.zip")
+    monkeypatch.setenv("DIAEVO_QQ_NAPCAT_INSTALL_DIR", "D:\\DiaEvo\\NapCat")
 
     config = config_from_env_vars()
 
@@ -50,6 +51,7 @@ def test_config_from_env_vars_reads_whitelist(monkeypatch) -> None:
     assert config.napcat_command == 'start "" "D:\\NapCat\\NapCatQQ.exe"'
     assert config.napcat_startup_wait_seconds == 12.5
     assert config.napcat_download_url == "https://example.test/napcat.zip"
+    assert config.napcat_install_dir == Path("D:\\DiaEvo\\NapCat")
 
 
 def test_config_defaults_to_napcat_autostart(monkeypatch) -> None:
@@ -67,6 +69,41 @@ def test_config_defaults_to_napcat_autostart(monkeypatch) -> None:
     assert config.napcat_autostart is True
     assert config.napcat_auto_install is True
     assert config.napcat_command == ""
+
+
+def test_config_defaults_napcat_install_dir_to_install_root(monkeypatch, tmp_path) -> None:
+    install_root = tmp_path / "diaevo-install"
+    workspace_root = tmp_path / "some-workspace"
+    monkeypatch.setattr("diaevo.qq_bridge.load_env", lambda *args, **kwargs: {})
+    monkeypatch.setattr("diaevo.qq_bridge.INSTALL_ROOT", install_root)
+    monkeypatch.setattr("diaevo.qq_bridge.WORKSPACE_ROOT", workspace_root)
+    monkeypatch.setenv("DIAEVO_QQ_ENABLED", "true")
+    monkeypatch.setenv("DIAEVO_QQ_ALLOWED_USERS", "10001")
+    monkeypatch.setenv("DIAEVO_QQ_ONEBOT_WS_URL", "ws://localhost:3001")
+    monkeypatch.setenv("DIAEVO_QQ_ONEBOT_HTTP_URL", "http://localhost:3000")
+    monkeypatch.delenv("DIAEVO_QQ_NAPCAT_INSTALL_DIR", raising=False)
+
+    config = config_from_env_vars()
+
+    assert config.napcat_install_dir == install_root / ".tmp" / "napcat"
+    assert config.napcat_install_dir != workspace_root / ".tmp" / "napcat"
+
+
+def test_config_resolves_relative_napcat_install_dir_from_install_root(monkeypatch, tmp_path) -> None:
+    install_root = tmp_path / "diaevo-install"
+    workspace_root = tmp_path / "selected-workspace"
+    monkeypatch.setattr("diaevo.qq_bridge.load_env", lambda *args, **kwargs: {})
+    monkeypatch.setattr("diaevo.qq_bridge.INSTALL_ROOT", install_root)
+    monkeypatch.setattr("diaevo.qq_bridge.WORKSPACE_ROOT", workspace_root)
+    monkeypatch.setenv("DIAEVO_QQ_ENABLED", "true")
+    monkeypatch.setenv("DIAEVO_QQ_ALLOWED_USERS", "10001")
+    monkeypatch.setenv("DIAEVO_QQ_ONEBOT_WS_URL", "ws://localhost:3001")
+    monkeypatch.setenv("DIAEVO_QQ_ONEBOT_HTTP_URL", "http://localhost:3000")
+    monkeypatch.setenv("DIAEVO_QQ_NAPCAT_INSTALL_DIR", ".tmp/napcat-custom")
+
+    config = config_from_env_vars()
+
+    assert config.napcat_install_dir == install_root / ".tmp" / "napcat-custom"
 
 
 def test_prepare_onebot_service_reports_when_napcat_not_found(monkeypatch, tmp_path) -> None:
@@ -106,7 +143,7 @@ def test_prepare_onebot_service_auto_installs_when_napcat_not_found(monkeypatch,
 
     monkeypatch.setattr("diaevo.qq_bridge.onebot_service_available", fake_available)
     monkeypatch.setattr("diaevo.qq_bridge.discover_napcat_command", lambda: "")
-    monkeypatch.setattr("diaevo.qq_bridge.install_workspace_napcat", lambda config: "installed-napcat")
+    monkeypatch.setattr("diaevo.qq_bridge.install_managed_napcat", lambda config: "installed-napcat")
     monkeypatch.setattr("diaevo.qq_bridge._start_napcat_process", lambda command: started.append(command) or FakeProcess())
     monkeypatch.setattr("diaevo.qq_bridge.time.sleep", lambda seconds: None)
     config = QQBridgeConfig(
@@ -231,7 +268,25 @@ def test_discover_napcat_command_finds_workspace_tmp_onekey(monkeypatch, tmp_pat
     assert str(script).lower() in command.lower()
 
 
-def test_install_workspace_napcat_extracts_zip_and_returns_command(monkeypatch, tmp_path) -> None:
+def test_discover_napcat_command_finds_install_root_tmp_when_workspace_differs(monkeypatch, tmp_path) -> None:
+    install_root = tmp_path / "diaevo-install"
+    workspace_root = tmp_path / "selected-workspace"
+    root = install_root / ".tmp" / "napcat" / "onekey" / "bootmain"
+    root.mkdir(parents=True)
+    script = root / "napcat.bat"
+    script.write_text("@echo off\n.\\NapCatWinBootMain.exe\n", encoding="utf-8")
+    workspace_root.mkdir()
+    monkeypatch.setenv("PATH", "")
+    monkeypatch.setattr("diaevo.qq_bridge.WORKSPACE_ROOT", workspace_root)
+    monkeypatch.setattr("diaevo.qq_bridge.INSTALL_ROOT", install_root)
+    monkeypatch.setattr("diaevo.qq_bridge._npm_global_bin", lambda: None)
+
+    command = discover_napcat_command()
+
+    assert str(script).lower() in command.lower()
+
+
+def test_install_managed_napcat_extracts_zip_and_returns_command(monkeypatch, tmp_path) -> None:
     source_zip = tmp_path / "source.zip"
     with zipfile.ZipFile(source_zip, "w") as archive:
         archive.writestr("onekey/bootmain/napcat.bat", "@echo off\n.\\NapCatWinBootMain.exe\n")
@@ -252,7 +307,7 @@ def test_install_workspace_napcat_extracts_zip_and_returns_command(monkeypatch, 
         napcat_install_dir=install_dir,
     )
 
-    command = install_workspace_napcat(config)
+    command = install_managed_napcat(config)
 
     assert str(install_dir / "onekey" / "bootmain" / "napcat.bat").lower() in command.lower()
 

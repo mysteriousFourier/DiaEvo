@@ -51,7 +51,7 @@ class QQBridgeConfig:
     napcat_startup_wait_seconds: float = DEFAULT_NAPCAT_STARTUP_WAIT_SECONDS
     napcat_auto_install: bool = False
     napcat_download_url: str = DEFAULT_NAPCAT_DOWNLOAD_URL
-    napcat_install_dir: Path = WORKSPACE_ROOT / ".tmp" / "napcat"
+    napcat_install_dir: Path = INSTALL_ROOT / ".tmp" / "napcat"
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,6 +86,16 @@ def _split_csv(value: str | None) -> set[str]:
     return {item.strip() for item in (value or "").replace(";", ",").split(",") if item.strip()}
 
 
+def _napcat_install_dir_from_env(value: str | None) -> Path:
+    raw = (value or "").strip()
+    if not raw:
+        return INSTALL_ROOT / ".tmp" / "napcat"
+    path = Path(raw).expanduser()
+    if path.is_absolute():
+        return path
+    return INSTALL_ROOT / path
+
+
 def config_from_env_vars(env_path: str | Path | None = None) -> QQBridgeConfig:
     load_env(env_path)
     autostart_value = os.environ.get("DIAEVO_QQ_NAPCAT_AUTOSTART")
@@ -109,6 +119,7 @@ def config_from_env_vars(env_path: str | Path | None = None) -> QQBridgeConfig:
         napcat_auto_install=True if auto_install_value is None else _truthy(auto_install_value),
         napcat_download_url=os.environ.get("DIAEVO_QQ_NAPCAT_DOWNLOAD_URL", DEFAULT_NAPCAT_DOWNLOAD_URL).strip()
         or DEFAULT_NAPCAT_DOWNLOAD_URL,
+        napcat_install_dir=_napcat_install_dir_from_env(os.environ.get("DIAEVO_QQ_NAPCAT_INSTALL_DIR")),
     )
 
 
@@ -149,7 +160,7 @@ def prepare_onebot_service(config: QQBridgeConfig) -> dict[str, Any]:
     if not napcat_command:
         if config.napcat_auto_install:
             try:
-                napcat_command = install_workspace_napcat(config)
+                napcat_command = install_managed_napcat(config)
             except QQBridgeError as exc:
                 return {
                     "status": "missing_command",
@@ -162,9 +173,9 @@ def prepare_onebot_service(config: QQBridgeConfig) -> dict[str, Any]:
             return {
                 "status": "missing_command",
                 "message": (
-                    "已启用 NapCat 自动启动，但没有在 PATH、npm 全局目录、workspace .tmp\\napcat "
+                    "已启用 NapCat 自动启动，但没有在 PATH、npm 全局目录、DiaEvo 安装目录 .tmp\\napcat、workspace .tmp\\napcat "
                     "或常见安装目录找到 NapCat。可设置 DIAEVO_QQ_NAPCAT_AUTO_INSTALL=true 自动安装，"
-                    "或设置 DIAEVO_QQ_NAPCAT_COMMAND。"
+                    "或设置 DIAEVO_QQ_NAPCAT_COMMAND / DIAEVO_QQ_NAPCAT_INSTALL_DIR。"
                 ),
             }
 
@@ -195,9 +206,9 @@ def prepare_onebot_service(config: QQBridgeConfig) -> dict[str, Any]:
     }
 
 
-def install_workspace_napcat(config: QQBridgeConfig) -> str:
+def install_managed_napcat(config: QQBridgeConfig) -> str:
     if not sys.platform.startswith("win"):
-        raise QQBridgeError("NapCat workspace 自动安装当前只支持 Windows。")
+        raise QQBridgeError("NapCat 自动安装当前只支持 Windows。")
     if not config.napcat_download_url:
         raise QQBridgeError("DIAEVO_QQ_NAPCAT_DOWNLOAD_URL 为空。")
 
@@ -291,6 +302,7 @@ def _candidate_napcat_paths(*, npm_bin: Path | None = None) -> list[Path]:
 
 def _recursive_napcat_candidates() -> list[Path]:
     roots = [
+        INSTALL_ROOT / ".tmp" / "napcat",
         WORKSPACE_ROOT / ".tmp" / "napcat",
         WORKSPACE_ROOT / "NapCat",
         WORKSPACE_ROOT / "NapCatQQ",
