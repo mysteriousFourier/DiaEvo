@@ -205,6 +205,65 @@ def test_prepare_onebot_service_starts_napcat_until_port_ready(monkeypatch, tmp_
     assert result["pid"] == 42
 
 
+def test_prepare_onebot_service_reports_non_detached_process_exit(monkeypatch, tmp_path) -> None:
+    class FakeProcess:
+        pid = 45
+        returncode = 2
+
+        def poll(self):
+            return self.returncode
+
+    monkeypatch.setattr("diaevo.qq_bridge.onebot_service_available", lambda config: False)
+    monkeypatch.setattr("diaevo.qq_bridge._start_napcat_process", lambda command: FakeProcess())
+    monkeypatch.setattr("diaevo.qq_bridge.time.sleep", lambda seconds: None)
+    config = QQBridgeConfig(
+        enabled=True,
+        allowed_users={"10001"},
+        onebot_ws_url="ws://127.0.0.1:3001",
+        onebot_http_url="http://127.0.0.1:3000",
+        event_log_path=tmp_path / "qq_remote_events.jsonl",
+        napcat_autostart=True,
+        napcat_command="napcat-start",
+        napcat_startup_wait_seconds=5,
+    )
+
+    result = prepare_onebot_service(config)
+
+    assert result["status"] == "exited"
+    assert result["returncode"] == 2
+
+
+def test_prepare_onebot_service_waits_after_windows_detached_launcher_exit(monkeypatch, tmp_path) -> None:
+    class FakeProcess:
+        pid = 46
+        returncode = 0
+
+        def poll(self):
+            return self.returncode
+
+    times = iter([0.0, 0.0, 0.5, 1.1])
+    monkeypatch.setattr(qq_bridge.sys, "platform", "win32")
+    monkeypatch.setattr("diaevo.qq_bridge.onebot_service_available", lambda config: False)
+    monkeypatch.setattr("diaevo.qq_bridge._start_napcat_process", lambda command: FakeProcess())
+    monkeypatch.setattr("diaevo.qq_bridge.time.monotonic", lambda: next(times))
+    monkeypatch.setattr("diaevo.qq_bridge.time.sleep", lambda seconds: None)
+    config = QQBridgeConfig(
+        enabled=True,
+        allowed_users={"10001"},
+        onebot_ws_url="ws://127.0.0.1:3001",
+        onebot_http_url="http://127.0.0.1:3000",
+        event_log_path=tmp_path / "qq_remote_events.jsonl",
+        napcat_autostart=True,
+        napcat_command='start "" /D "D:\\NapCat" "D:\\NapCat\\napcat.bat"',
+        napcat_startup_wait_seconds=1,
+    )
+
+    result = prepare_onebot_service(config)
+
+    assert result["status"] == "timeout"
+    assert "等待 OneBot" in result["message"]
+
+
 def test_prepare_onebot_service_uses_discovered_napcat_command(monkeypatch, tmp_path) -> None:
     class FakeProcess:
         pid = 43

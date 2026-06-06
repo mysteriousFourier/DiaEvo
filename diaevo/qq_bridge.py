@@ -189,7 +189,7 @@ def prepare_onebot_service(config: QQBridgeConfig) -> dict[str, Any]:
                 "command": napcat_command,
                 "message": "NapCat 已启动，OneBot 服务已可连接。",
             }
-        if process.poll() is not None:
+        if process.poll() is not None and not _napcat_command_is_detached(napcat_command):
             return {
                 "status": "exited",
                 "pid": process.pid,
@@ -401,6 +401,12 @@ def _start_napcat_process(command: str) -> subprocess.Popen:
     else:
         kwargs["start_new_session"] = True
     return subprocess.Popen(command, **kwargs)
+
+
+def _napcat_command_is_detached(command: str) -> bool:
+    if not sys.platform.startswith("win"):
+        return False
+    return command.lstrip().lower().startswith("start ")
 
 
 def _endpoint_available(url: str, *, timeout: float = 0.5) -> bool:
