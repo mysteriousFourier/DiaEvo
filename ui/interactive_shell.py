@@ -466,8 +466,12 @@ def _flow_status(message: str) -> object:
     started_at = time.monotonic()
 
     def render(index: int) -> None:
+        frame_index["value"] = index
+        FLOW_INPUT.update_status_line(status_text())
+
+    def status_text() -> str:
         elapsed = _fmt_elapsed_compact(int(time.monotonic() - started_at))
-        FLOW_INPUT.update_status_line(f"{frames[index % len(frames)]} Working ({elapsed} • esc to interrupt) · {message}")
+        return f"{frames[frame_index['value'] % len(frames)]} Working ({elapsed} • esc to interrupt) · {message}"
 
     def animate() -> None:
         index = 1
@@ -476,7 +480,9 @@ def _flow_status(message: str) -> object:
             index += 1
             time.sleep(0.12)
 
+    frame_index = {"value": 0}
     _show_flow_prompt(force=True)
+    FLOW_INPUT.set_status_line_renderer(status_text)
     render(0)
     thread = threading.Thread(target=animate, daemon=True)
     thread.start()

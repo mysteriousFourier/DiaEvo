@@ -67,8 +67,10 @@ class FlowInputController:
         self._toolkit_thread: threading.Thread | None = None
         self._toolkit_session: Any | None = None
         self._toolkit_stop_requested = threading.Event()
+        self._toolkit_preferred = False
         self._toolkit_mode = False
         self.status_line = ""
+        self._status_renderer: Callable[[], str] | None = None
 
     @property
     def available(self) -> bool:
@@ -82,7 +84,8 @@ class FlowInputController:
         if not self.available:
             return False
         self.active.set()
-        if toolkit and _prompt_toolkit_enabled() and self._start_toolkit_worker():
+        self._toolkit_preferred = toolkit and _prompt_toolkit_enabled()
+        if self._toolkit_preferred and self._start_toolkit_worker():
             return True
         if listen and self.listener_available:
             with self._lock:
@@ -97,6 +100,7 @@ class FlowInputController:
         self.active.clear()
         self._stop_toolkit_worker()
         with self._render_lock:
+            self._toolkit_preferred = False
             self.begin_output()
             self.interrupt_event.clear()
             self.force_terminate_event.clear()
@@ -107,6 +111,7 @@ class FlowInputController:
             self.selected_index = 0
             self.queued_preview.clear()
             self.status_line = ""
+            self._status_renderer = None
             self._rendered_lines = 0
             self._rendered_lines_above_input = 0
             self._rendered_value = ""
@@ -135,7 +140,8 @@ class FlowInputController:
 
     def begin_output(self) -> None:
         if self._toolkit_mode:
-            self._invalidate_toolkit()
+            self._stop_toolkit_worker()
+            self.prompt_visible.clear()
             return
         with self._render_lock:
             if self.prompt_visible.is_set() and self._rendered_lines:
@@ -161,6 +167,10 @@ class FlowInputController:
     def show_prompt(self, label: str = "", *, force: bool = False) -> None:
         if not self.available or self.paused.is_set():
             return
+        if self._toolkit_preferred and not self._toolkit_mode:
+            if self._start_toolkit_worker():
+                self.prompt_visible.set()
+                return
         if self._toolkit_mode:
             self.prompt_visible.set()
             self._invalidate_toolkit()
@@ -196,9 +206,10 @@ class FlowInputController:
             self._render_prompt_line()
 
     def clear_status_line(self) -> None:
+        self.status_line = ""
+        self._status_renderer = None
         if not self.available or self.paused.is_set():
             return
-        self.status_line = ""
         if self._toolkit_mode:
             self.status_visible.clear()
             self._invalidate_toolkit()
@@ -210,6 +221,23 @@ class FlowInputController:
             sys.stdout.write("\033[1A\r\033[2K")
             self.status_visible.clear()
             self._render_prompt_line()
+
+    def set_status_line_renderer(self, renderer: Callable[[], str] | None) -> None:
+        self._status_renderer = renderer
+        if renderer is not None:
+            self.status_line = self._current_status_line()
+        if self._toolkit_mode:
+            self.status_visible.set()
+            self._invalidate_toolkit()
+
+    def _current_status_line(self) -> str:
+        renderer = self._status_renderer
+        if renderer is None:
+            return self.status_line
+        try:
+            return str(renderer()).replace("\n", " ").strip()
+        except Exception:
+            return self.status_line
 
     def _render_prompt_line(self, label: str = "") -> None:
         if self._rendered_lines:
@@ -394,6 +422,7 @@ class FlowInputController:
             style=_prompt_style(),
             refresh_interval=0.2,
             key_bindings=bindings,
+            erase_when_done=True,
         )
 
     def _toolkit_worker(self) -> None:
@@ -476,8 +505,9 @@ class FlowInputController:
 
     def _render_toolkit_toolbar(self) -> str:
         pieces = []
-        if self.status_line:
-            pieces.append(self.status_line)
+        status_line = self._current_status_line()
+        if status_line:
+            pieces.append(status_line)
         if self.queued_preview:
             pieces.append(self._render_queued_preview().replace(DIM, "").replace(RESET, ""))
         pieces.append("Enter 发送 · Tab 补全 · Esc 中止 · /exit 退出")

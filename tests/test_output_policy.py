@@ -421,6 +421,26 @@ def test_flow_status_animates_status_line_without_touching_draft(monkeypatch, ca
     assert captured.err == ""
 
 
+def test_flow_status_renderer_keeps_elapsed_after_redraw(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    now = {"value": 100.0}
+    monkeypatch.setattr(interactive_shell.time, "monotonic", lambda: now["value"])
+    monkeypatch.setattr(interactive_shell, "_show_flow_prompt", lambda *args, **kwargs: None)
+    monkeypatch.setattr(interactive_shell.FLOW_INPUT, "update_status_line", lambda text: None)
+
+    with interactive_shell._flow_status("正在请求模型"):
+        renderer = interactive_shell.FLOW_INPUT._status_renderer
+        assert renderer is not None
+        assert "Working (0s • esc to interrupt)" in renderer()
+
+        now["value"] = 165.0
+
+        assert "Working (1m 05s • esc to interrupt)" in renderer()
+
+    assert interactive_shell.FLOW_INPUT._status_renderer is None
+
+
 def test_flow_status_renders_bottom_prompt_when_raw_input_disabled(monkeypatch) -> None:
     from ui import interactive_shell
 

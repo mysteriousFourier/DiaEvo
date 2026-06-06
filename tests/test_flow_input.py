@@ -209,6 +209,57 @@ def test_pause_stops_toolkit_prompt_until_transient_input_finishes(monkeypatch):
     controller.stop(enabled=True)
 
 
+def test_begin_output_suspends_toolkit_prompt_until_prompt_is_shown(monkeypatch):
+    controller = FlowInputController()
+    prompt_started = threading.Event()
+    sessions = []
+
+    class FakeApp:
+        def __init__(self):
+            self.exited = threading.Event()
+
+        def exit(self, **kwargs):
+            self.exited.set()
+
+        def invalidate(self):
+            pass
+
+    class FakeSession:
+        def __init__(self):
+            self.app = FakeApp()
+            sessions.append(self)
+
+        def prompt(self, **kwargs):
+            pre_run = kwargs.get("pre_run")
+            if pre_run is not None:
+                pre_run()
+            prompt_started.set()
+            self.app.exited.wait(timeout=1)
+            raise EOFError
+
+    monkeypatch.setattr("ui.flow_input.sys.stdin.isatty", lambda: True)
+    monkeypatch.setattr(controller, "_create_toolkit_session", FakeSession)
+    monkeypatch.setattr("ui.flow_input._prompt_stdout_patch", lambda: nullcontext())
+
+    assert controller.start(listen=False, toolkit=True) is True
+    assert prompt_started.wait(timeout=1)
+    first_session = sessions[0]
+
+    controller.begin_output()
+
+    assert first_session.app.exited.is_set()
+    assert controller.active.is_set()
+    assert controller._toolkit_thread is None
+    assert not controller._toolkit_mode
+
+    controller.show_prompt(force=True)
+
+    assert controller._toolkit_thread is not None
+    assert len(sessions) == 2
+
+    controller.stop(enabled=True)
+
+
 def test_toolkit_submission_queues_flow_event():
     controller = FlowInputController()
 
@@ -261,6 +312,19 @@ def test_toolkit_exit_uses_prompt_loop_threadsafe_callback():
     assert len(scheduled) == 1
     scheduled[0]()
     assert exited == [{"exception": EOFError}]
+
+
+def test_toolkit_toolbar_recomputes_dynamic_status_line():
+    controller = FlowInputController()
+    seconds = {"value": 3}
+
+    controller.set_status_line_renderer(lambda: f"Working ({seconds['value']}s) · running")
+
+    assert "Working (3s) · running" in controller._render_toolkit_toolbar()
+
+    seconds["value"] = 27
+
+    assert "Working (27s) · running" in controller._render_toolkit_toolbar()
 
 
 def test_escape_still_queues_hard_interrupt(capsys):
