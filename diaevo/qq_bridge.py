@@ -179,6 +179,7 @@ def prepare_onebot_service(config: QQBridgeConfig) -> dict[str, Any]:
                 ),
             }
 
+    _ensure_napcat_onebot_config(config)
     process = _start_napcat_process(napcat_command)
     deadline = time.monotonic() + config.napcat_startup_wait_seconds
     while time.monotonic() <= deadline:
@@ -233,6 +234,157 @@ def install_managed_napcat(config: QQBridgeConfig) -> str:
     if not installed:
         raise QQBridgeError(f"NapCat 已下载到 {install_dir}，但未找到可启动文件。")
     return installed
+
+
+def _ensure_napcat_onebot_config(config: QQBridgeConfig) -> list[Path]:
+    http_endpoint = _endpoint_host_port(config.onebot_http_url)
+    ws_endpoint = _endpoint_host_port(config.onebot_ws_url)
+    if http_endpoint is None or ws_endpoint is None:
+        return []
+    http_host, http_port = http_endpoint
+    ws_host, ws_port = ws_endpoint
+
+    http_server = {
+        "enable": True,
+        "name": "diaevo-http",
+        "host": _napcat_bind_host(http_host),
+        "port": http_port,
+        "enableCors": True,
+        "enableWebsocket": False,
+        "messagePostFormat": "array",
+        "token": config.access_token,
+        "debug": False,
+    }
+    websocket_server = {
+        "enable": True,
+        "name": "diaevo-ws",
+        "host": _napcat_bind_host(ws_host),
+        "port": ws_port,
+        "messagePostFormat": "array",
+        "reportSelfMessage": False,
+        "enableForcePushEvent": True,
+        "token": config.access_token,
+        "debug": False,
+        "heartInterval": 30000,
+    }
+
+    changed: list[Path] = []
+    for config_dir in _napcat_config_dirs(config):
+        targets = _onebot_config_targets(config_dir)
+        for target in targets:
+            data = _read_json_object(target, default=_default_onebot_config())
+            network = data.setdefault("network", {})
+            network["httpServers"] = _upsert_named_network_config(network.get("httpServers"), http_server)
+            network["websocketServers"] = _upsert_named_network_config(
+                network.get("websocketServers"),
+                websocket_server,
+            )
+            network.setdefault("httpSseServers", [])
+            network.setdefault("httpClients", [])
+            network.setdefault("websocketClients", [])
+            network.setdefault("plugins", [])
+            data.setdefault("musicSignUrl", "")
+            data.setdefault("enableLocalFile2Url", False)
+            data.setdefault("parseMultMsg", False)
+            data.setdefault("imageDownloadProxy", "")
+            data.setdefault(
+                "timeout",
+                {
+                    "baseTimeout": 10000,
+                    "uploadSpeedKBps": 256,
+                    "downloadSpeedKBps": 256,
+                    "maxTimeout": 1800000,
+                },
+            )
+            _write_json_if_changed(target, data)
+            changed.append(target)
+    return changed
+
+
+def _napcat_bind_host(host: str) -> str:
+    return "127.0.0.1" if host.lower() in {"localhost", "::1"} else host
+
+
+def _napcat_config_dirs(config: QQBridgeConfig) -> list[Path]:
+    roots = [
+        config.napcat_install_dir,
+        INSTALL_ROOT / ".tmp" / "napcat",
+        WORKSPACE_ROOT / ".tmp" / "napcat",
+        INSTALL_ROOT / "NapCat",
+        INSTALL_ROOT / "NapCatQQ",
+    ]
+    dirs: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        if not root.exists() or not root.is_dir():
+            continue
+        for marker in root.rglob("napcat.json"):
+            candidate = marker.parent
+            if not (candidate / "webui.json").exists():
+                continue
+            key = str(candidate.resolve(strict=False)).lower()
+            if key not in seen:
+                seen.add(key)
+                dirs.append(candidate)
+    return dirs
+
+
+def _onebot_config_targets(config_dir: Path) -> list[Path]:
+    targets = sorted(config_dir.glob("onebot11_*.json"))
+    default_target = config_dir / "onebot11.json"
+    if default_target not in targets:
+        targets.append(default_target)
+    return targets
+
+
+def _default_onebot_config() -> dict[str, Any]:
+    return {
+        "network": {
+            "httpServers": [],
+            "httpSseServers": [],
+            "httpClients": [],
+            "websocketServers": [],
+            "websocketClients": [],
+            "plugins": [],
+        },
+        "musicSignUrl": "",
+        "enableLocalFile2Url": False,
+        "parseMultMsg": False,
+        "imageDownloadProxy": "",
+        "timeout": {
+            "baseTimeout": 10000,
+            "uploadSpeedKBps": 256,
+            "downloadSpeedKBps": 256,
+            "maxTimeout": 1800000,
+        },
+    }
+
+
+def _read_json_object(path: Path, *, default: dict[str, Any]) -> dict[str, Any]:
+    if not path.exists():
+        return json.loads(json.dumps(default))
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise QQBridgeError(f"NapCat OneBot 配置不是合法 JSON：{path}") from exc
+    if not isinstance(value, dict):
+        raise QQBridgeError(f"NapCat OneBot 配置必须是 JSON object：{path}")
+    return value
+
+
+def _write_json_if_changed(path: Path, data: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    output = json.dumps(data, ensure_ascii=False, indent=2) + "\n"
+    if path.exists() and path.read_text(encoding="utf-8") == output:
+        return
+    path.write_text(output, encoding="utf-8")
+
+
+def _upsert_named_network_config(existing: Any, item: dict[str, Any]) -> list[dict[str, Any]]:
+    configs = [entry for entry in existing if isinstance(entry, dict)] if isinstance(existing, list) else []
+    output = [entry for entry in configs if entry.get("name") != item["name"]]
+    output.append(dict(item))
+    return output
 
 
 def discover_napcat_command() -> str:

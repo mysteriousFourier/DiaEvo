@@ -106,6 +106,72 @@ def test_config_resolves_relative_napcat_install_dir_from_install_root(monkeypat
     assert config.napcat_install_dir == install_root / ".tmp" / "napcat-custom"
 
 
+def test_ensure_napcat_onebot_config_writes_http_and_ws_servers(tmp_path) -> None:
+    config_dir = (
+        tmp_path
+        / ".tmp"
+        / "napcat"
+        / "onekey"
+        / "NapCat.44498.Shell"
+        / "versions"
+        / "9.9.26-44498"
+        / "resources"
+        / "app"
+        / "napcat"
+        / "config"
+    )
+    config_dir.mkdir(parents=True)
+    (config_dir / "napcat.json").write_text("{}", encoding="utf-8")
+    (config_dir / "webui.json").write_text("{}", encoding="utf-8")
+    account_config = config_dir / "onebot11_10001.json"
+    account_config.write_text(
+        json.dumps({"network": {"httpServers": [], "websocketServers": []}}),
+        encoding="utf-8",
+    )
+    config = QQBridgeConfig(
+        enabled=True,
+        allowed_users={"10001"},
+        onebot_ws_url="ws://localhost:3001",
+        onebot_http_url="http://localhost:3000",
+        access_token="secret-token",
+        event_log_path=tmp_path / "qq_remote_events.jsonl",
+        napcat_install_dir=tmp_path / ".tmp" / "napcat",
+    )
+
+    changed = qq_bridge._ensure_napcat_onebot_config(config)
+
+    assert account_config in changed
+    assert config_dir / "onebot11.json" in changed
+    data = json.loads(account_config.read_text(encoding="utf-8"))
+    assert data["network"]["httpServers"] == [
+        {
+            "enable": True,
+            "name": "diaevo-http",
+            "host": "127.0.0.1",
+            "port": 3000,
+            "enableCors": True,
+            "enableWebsocket": False,
+            "messagePostFormat": "array",
+            "token": "secret-token",
+            "debug": False,
+        }
+    ]
+    assert data["network"]["websocketServers"] == [
+        {
+            "enable": True,
+            "name": "diaevo-ws",
+            "host": "127.0.0.1",
+            "port": 3001,
+            "messagePostFormat": "array",
+            "reportSelfMessage": False,
+            "enableForcePushEvent": True,
+            "token": "secret-token",
+            "debug": False,
+            "heartInterval": 30000,
+        }
+    ]
+
+
 def test_prepare_onebot_service_reports_when_napcat_not_found(monkeypatch, tmp_path) -> None:
     config = QQBridgeConfig(
         enabled=True,
@@ -144,6 +210,7 @@ def test_prepare_onebot_service_auto_installs_when_napcat_not_found(monkeypatch,
     monkeypatch.setattr("diaevo.qq_bridge.onebot_service_available", fake_available)
     monkeypatch.setattr("diaevo.qq_bridge.discover_napcat_command", lambda: "")
     monkeypatch.setattr("diaevo.qq_bridge.install_managed_napcat", lambda config: "installed-napcat")
+    monkeypatch.setattr("diaevo.qq_bridge._ensure_napcat_onebot_config", lambda config: [])
     monkeypatch.setattr("diaevo.qq_bridge._start_napcat_process", lambda command: started.append(command) or FakeProcess())
     monkeypatch.setattr("diaevo.qq_bridge.time.sleep", lambda seconds: None)
     config = QQBridgeConfig(
@@ -185,6 +252,7 @@ def test_prepare_onebot_service_starts_napcat_until_port_ready(monkeypatch, tmp_
         return FakeProcess()
 
     monkeypatch.setattr("diaevo.qq_bridge.onebot_service_available", fake_available)
+    monkeypatch.setattr("diaevo.qq_bridge._ensure_napcat_onebot_config", lambda config: [])
     monkeypatch.setattr("diaevo.qq_bridge._start_napcat_process", fake_start)
     monkeypatch.setattr("diaevo.qq_bridge.time.sleep", lambda seconds: None)
     config = QQBridgeConfig(
@@ -214,6 +282,7 @@ def test_prepare_onebot_service_reports_non_detached_process_exit(monkeypatch, t
             return self.returncode
 
     monkeypatch.setattr("diaevo.qq_bridge.onebot_service_available", lambda config: False)
+    monkeypatch.setattr("diaevo.qq_bridge._ensure_napcat_onebot_config", lambda config: [])
     monkeypatch.setattr("diaevo.qq_bridge._start_napcat_process", lambda command: FakeProcess())
     monkeypatch.setattr("diaevo.qq_bridge.time.sleep", lambda seconds: None)
     config = QQBridgeConfig(
@@ -244,6 +313,7 @@ def test_prepare_onebot_service_waits_after_windows_detached_launcher_exit(monke
     times = iter([0.0, 0.0, 0.5, 1.1])
     monkeypatch.setattr(qq_bridge.sys, "platform", "win32")
     monkeypatch.setattr("diaevo.qq_bridge.onebot_service_available", lambda config: False)
+    monkeypatch.setattr("diaevo.qq_bridge._ensure_napcat_onebot_config", lambda config: [])
     monkeypatch.setattr("diaevo.qq_bridge._start_napcat_process", lambda command: FakeProcess())
     monkeypatch.setattr("diaevo.qq_bridge.time.monotonic", lambda: next(times))
     monkeypatch.setattr("diaevo.qq_bridge.time.sleep", lambda seconds: None)
@@ -281,6 +351,7 @@ def test_prepare_onebot_service_uses_discovered_napcat_command(monkeypatch, tmp_
 
     monkeypatch.setattr("diaevo.qq_bridge.onebot_service_available", fake_available)
     monkeypatch.setattr("diaevo.qq_bridge.discover_napcat_command", lambda: "discovered-napcat")
+    monkeypatch.setattr("diaevo.qq_bridge._ensure_napcat_onebot_config", lambda config: [])
     monkeypatch.setattr("diaevo.qq_bridge._start_napcat_process", lambda command: started.append(command) or FakeProcess())
     monkeypatch.setattr("diaevo.qq_bridge.time.sleep", lambda seconds: None)
     config = QQBridgeConfig(
