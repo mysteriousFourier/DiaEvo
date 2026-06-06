@@ -2,7 +2,7 @@
 
 import shutil
 
-from diaevo.cli import build_parser, render_cli_result
+from diaevo.cli import build_parser, render_cli_result, run_learn, workspace_status
 from diaevo.generator import generate_skill
 from diaevo.ingest import ingest_traces
 from diaevo.miner import mine
@@ -25,9 +25,14 @@ def test_generate_and_verify_candidate_skill():
     assert "## Verification Suggestions" in text
     assert "任务关键词" in text
     assert "人工审核" in text
+    assert "轨迹 ID" not in text
+    assert "工具复用次数" not in text
     result = verify_skill(generated["skill_dir"])
     assert result["passed"]
     assert result["risk_score"] < 0.5
+    metadata = read_json(Path(generated["skill_dir"]) / "metadata.json")
+    assert metadata["evidence"]["cluster_id"] == cluster_id
+    assert metadata["evidence"]["trace_ids"]
 
 
 def test_generate_code_backed_skill_validates_in_sandbox(tmp_path):
@@ -130,6 +135,16 @@ def test_cli_accepts_generate_with_code():
     assert args.with_code is True
 
 
+def test_cli_accepts_learn_and_status_commands():
+    learn_args = build_parser().parse_args(["learn", "--dry-run", "--no-tool-events"])
+    status_args = build_parser().parse_args(["status"])
+
+    assert learn_args.command == "learn"
+    assert learn_args.dry_run is True
+    assert learn_args.no_tool_events is True
+    assert status_args.command == "status"
+
+
 def test_cli_accepts_self_evolve_direct_command():
     args = build_parser().parse_args(["self-evolve", "C03", "--budget", "7", "--no-validate"])
 
@@ -173,6 +188,66 @@ def test_cli_renders_skills_list_plain():
     assert "现有 skills：1" in rendered
     assert "web-design-engineer" in rendered
     assert "skills/web-design-engineer" in rendered
+
+
+def test_cli_renders_learn_plain_without_internal_fields():
+    rendered = render_cli_result(
+        "learn",
+        {
+            "status": "ok",
+            "selected_task": {
+                "title": "修复 pytest 失败",
+                "solves": "修复 pytest 失败",
+                "reason": "已有能力覆盖不足",
+            },
+            "generated": {
+                "name_hint": "pytest-failure-repair",
+                "skill_path": "outputs/candidate_skills/C01/SKILL.md",
+            },
+            "verify": {"passed": True},
+            "report_path": "outputs/reports/learn_report.json",
+        },
+    )
+
+    assert "做了什么" in rendered
+    assert "任务名：修复 pytest 失败" in rendered
+    assert "pytest-failure-repair" in rendered
+    assert "C03" not in rendered
+    assert "trace_ids" not in rendered
+    assert "{" not in rendered
+
+
+def test_learn_dry_run_selects_task_card_without_writing_skill():
+    ingest_traces("data/sample_traces.jsonl", include_tool_events=False)
+    report = run_learn(include_tool_events=False, dry_run=True, clusters=4)
+
+    assert report["status"] == "preview"
+    assert report["selected_task"]["title"]
+    assert len(report["candidates"]) <= 3
+    assert "cluster_id" in report["selected_task"]
+    rendered = render_cli_result("learn", report)
+    assert "任务名：" in rendered
+    assert "trace_ids" not in rendered
+
+
+def test_status_reports_recent_learning(monkeypatch, tmp_path):
+    import diaevo.cli as cli
+
+    reports = tmp_path / "reports"
+    reports.mkdir()
+    monkeypatch.setattr(cli, "REPORTS_DIR", reports)
+    monkeypatch.setattr(cli, "WORKSPACE_ROOT", tmp_path)
+    (reports / "learn_report.json").write_text(
+        '{"status":"ok","generated":{"skill_path":"outputs/candidate_skills/C01/SKILL.md"}}',
+        encoding="utf-8",
+    )
+
+    result = workspace_status()
+    rendered = render_cli_result("status", result)
+
+    assert result["last_learn_status"] == "ok"
+    assert "当前状态" in rendered
+    assert "最近生成" in rendered
 
 
 def test_cli_renders_skill_names_only():

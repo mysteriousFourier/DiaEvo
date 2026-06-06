@@ -16,6 +16,42 @@ def slugify(value: str) -> str:
     return text or "candidate-skill"
 
 
+def semantic_skill_name(cluster: dict[str, Any]) -> str:
+    representative = str(cluster.get("representative_task") or "").strip()
+    terms = _as_strings(cluster.get("top_terms"))
+    failures = _as_strings(cluster.get("top_errors")) + _as_strings(cluster.get("top_failure_types"))
+    extensions = _as_strings(cluster.get("file_extensions"))
+    source = " ".join([representative, *terms[:4], *failures[:2], *extensions[:2]])
+    words = re.findall(r"[a-zA-Z][a-zA-Z0-9]+|[\u4e00-\u9fff]{2,}", source.lower())
+    stop = {
+        "tool",
+        "event",
+        "feedback",
+        "trace",
+        "cluster",
+        "candidate",
+        "skill",
+        "fix",
+        "the",
+        "and",
+        "for",
+        "with",
+        "from",
+        "this",
+    }
+    selected: list[str] = []
+    for word in words:
+        if word in stop or word.startswith("evt"):
+            continue
+        if word not in selected:
+            selected.append(word)
+        if len(selected) >= 5:
+            break
+    if not selected:
+        selected = [term for term in terms[:4] if term.lower() not in stop]
+    return slugify("-".join(selected) or representative or "task-workflow")
+
+
 def _find_cluster(cluster_id: str, report: dict[str, Any]) -> dict[str, Any]:
     wanted = cluster_id.upper()
     for cluster in report.get("clusters", []):
@@ -89,8 +125,8 @@ def generation_diagnostic(cluster: dict[str, Any]) -> dict[str, Any]:
             "reason": "tool_event_only_cluster",
             "message": (
                 "该簇只包含工具事件日志，代表任务不是用户任务；"
-                "直接生成 skill 会得到空泛的工具调用说明。请先运行 /mine 处理真实任务轨迹，"
-                "或选择包含用户任务、文件/命令上下文的簇。"
+                "直接生成 skill 会得到空泛的工具调用说明。请先完成或导入包含用户任务、"
+                "文件和命令上下文的真实轨迹。"
             ),
             "source_counts": source_counts,
             "representative_task": representative,
@@ -162,8 +198,7 @@ def build_skill_markdown(cluster: dict[str, Any]) -> str:
     representative = str(cluster.get("representative_task", ""))
     failure_rate = float(cluster.get("failure_rate", 0.0) or 0.0)
     coverage_gap = float(cluster.get("coverage_gap", 0.0) or 0.0)
-    name_terms = "-".join(terms[:3]) if terms else cluster_id.lower()
-    name = slugify(f"{cluster_id}-{name_terms}")
+    name = semantic_skill_name(cluster)
     description = f"面向相似任务的轨迹驱动工作流：{representative[:120]}"
     risk = min(1.0, 0.20 + failure_rate * 0.30 + coverage_gap * 0.25)
     source_counts = cluster.get("source_counts", {})
@@ -193,19 +228,9 @@ def build_skill_markdown(cluster: dict[str, Any]) -> str:
         "失败类型：",
         *_list_items([*errors, *failure_types][:6], "暂无反复出现的失败信号。"),
         "",
-        "## Mined Evidence",
+        "## Why This Helps",
         "",
         *_explanation_text(cluster),
-        "",
-        f"- 来源簇：`{cluster_id}`",
-        f"- 轨迹 ID：`{', '.join(str(item) for item in cluster.get('trace_ids', []))}`",
-        f"- 簇大小：`{cluster.get('size', 0)}`",
-        f"- 来源计数：`{source_counts}`",
-        f"- 失败率：`{failure_rate:.2f}`",
-        f"- 覆盖缺口：`{coverage_gap:.2f}`",
-        f"- 事件数量：`{int(cluster.get('event_count', 0) or 0)}`",
-        f"- 工具成功率：`{float(cluster.get('tool_success_rate', 0.0) or 0.0):.2f}`",
-        f"- 工具复用次数：`{int(cluster.get('tool_reuse_count', 0) or 0)}`",
         "",
         "## Operating Steps",
         "",
@@ -358,9 +383,12 @@ def generate_skill(cluster_id: str, output_dir: str | Path | None = None, *, wit
     markdown = build_skill_markdown(cluster)
     if with_code:
         markdown = markdown.rstrip() + "\n\n" + _code_backed_section()
-    first_name = slugify(
-        f"{cluster_id}-{('-'.join(cluster.get('top_terms', [])[:3]) if cluster.get('top_terms') else 'candidate')}"
-    )
+    first_name = semantic_skill_name(cluster)
+    source_counts = cluster.get("source_counts", {})
+    if not isinstance(source_counts, dict):
+        source_counts = {}
+    failure_rate = float(cluster.get("failure_rate", 0.0) or 0.0)
+    coverage_gap = float(cluster.get("coverage_gap", 0.0) or 0.0)
     target_root = Path(output_dir) if output_dir else CANDIDATE_SKILLS_DIR / cluster_id.upper()
     target_root.mkdir(parents=True, exist_ok=True)
     skill_path = target_root / "SKILL.md"
@@ -375,6 +403,18 @@ def generate_skill(cluster_id: str, output_dir: str | Path | None = None, *, wit
         "code_backed": bool(with_code),
         "workspace": str(CANDIDATE_SKILLS_DIR.parent.parent),
         "diagnostic": diagnostic,
+        "evidence": {
+            "cluster_id": cluster_id.upper(),
+            "trace_ids": [str(item) for item in cluster.get("trace_ids", [])],
+            "size": cluster.get("size", 0),
+            "source_counts": source_counts,
+            "failure_rate": round(failure_rate, 4),
+            "coverage_gap": round(coverage_gap, 4),
+            "event_count": int(cluster.get("event_count", 0) or 0),
+            "tool_success_rate": round(float(cluster.get("tool_success_rate", 0.0) or 0.0), 4),
+            "tool_reuse_count": int(cluster.get("tool_reuse_count", 0) or 0),
+            "explanations": cluster.get("explanations", []),
+        },
         **code_metadata,
     }
     write_json(target_root / "metadata.json", metadata)

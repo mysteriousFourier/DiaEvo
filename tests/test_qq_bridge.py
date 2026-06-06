@@ -6,7 +6,9 @@ from diaevo.qq_bridge import (
     QQRemoteSession,
     RemoteMessage,
     config_from_env_vars,
+    discover_napcat_command,
     parse_onebot_private_message,
+    prepare_onebot_service,
 )
 
 
@@ -27,6 +29,9 @@ def test_config_from_env_vars_reads_whitelist(monkeypatch) -> None:
     monkeypatch.setenv("DIAEVO_QQ_ALLOWED_USERS", "10001, 10002")
     monkeypatch.setenv("DIAEVO_QQ_ONEBOT_WS_URL", "ws://localhost:3001")
     monkeypatch.setenv("DIAEVO_QQ_ONEBOT_HTTP_URL", "http://localhost:3000/")
+    monkeypatch.setenv("DIAEVO_QQ_NAPCAT_AUTOSTART", "true")
+    monkeypatch.setenv("DIAEVO_QQ_NAPCAT_COMMAND", 'start "" "D:\\NapCat\\NapCatQQ.exe"')
+    monkeypatch.setenv("DIAEVO_QQ_NAPCAT_STARTUP_WAIT_SECONDS", "12.5")
 
     config = config_from_env_vars()
 
@@ -34,6 +39,131 @@ def test_config_from_env_vars_reads_whitelist(monkeypatch) -> None:
     assert config.allowed_users == {"10001", "10002"}
     assert config.onebot_ws_url == "ws://localhost:3001"
     assert config.onebot_http_url == "http://localhost:3000"
+    assert config.napcat_autostart is True
+    assert config.napcat_command == 'start "" "D:\\NapCat\\NapCatQQ.exe"'
+    assert config.napcat_startup_wait_seconds == 12.5
+
+
+def test_config_defaults_to_napcat_autostart(monkeypatch) -> None:
+    monkeypatch.setattr("diaevo.qq_bridge.load_env", lambda *args, **kwargs: {})
+    monkeypatch.setenv("DIAEVO_QQ_ENABLED", "true")
+    monkeypatch.setenv("DIAEVO_QQ_ALLOWED_USERS", "10001")
+    monkeypatch.setenv("DIAEVO_QQ_ONEBOT_WS_URL", "ws://localhost:3001")
+    monkeypatch.setenv("DIAEVO_QQ_ONEBOT_HTTP_URL", "http://localhost:3000")
+    monkeypatch.delenv("DIAEVO_QQ_NAPCAT_AUTOSTART", raising=False)
+    monkeypatch.delenv("DIAEVO_QQ_NAPCAT_COMMAND", raising=False)
+
+    config = config_from_env_vars()
+
+    assert config.napcat_autostart is True
+    assert config.napcat_command == ""
+
+
+def test_prepare_onebot_service_reports_when_napcat_not_found(monkeypatch, tmp_path) -> None:
+    config = QQBridgeConfig(
+        enabled=True,
+        allowed_users={"10001"},
+        onebot_ws_url="ws://127.0.0.1:3001",
+        onebot_http_url="http://127.0.0.1:3000",
+        event_log_path=tmp_path / "qq_remote_events.jsonl",
+        napcat_autostart=True,
+        napcat_command="",
+    )
+    monkeypatch.setattr("diaevo.qq_bridge.onebot_service_available", lambda config: False)
+    monkeypatch.setattr("diaevo.qq_bridge.discover_napcat_command", lambda: "")
+
+    result = prepare_onebot_service(config)
+
+    assert result["status"] == "missing_command"
+    assert "没有" in result["message"]
+
+
+def test_prepare_onebot_service_starts_napcat_until_port_ready(monkeypatch, tmp_path) -> None:
+    class FakeProcess:
+        pid = 42
+        returncode = None
+
+        def poll(self):
+            return None
+
+    checks = {"count": 0}
+    started = []
+
+    def fake_available(config):
+        checks["count"] += 1
+        return checks["count"] >= 2
+
+    def fake_start(command):
+        started.append(command)
+        return FakeProcess()
+
+    monkeypatch.setattr("diaevo.qq_bridge.onebot_service_available", fake_available)
+    monkeypatch.setattr("diaevo.qq_bridge._start_napcat_process", fake_start)
+    monkeypatch.setattr("diaevo.qq_bridge.time.sleep", lambda seconds: None)
+    config = QQBridgeConfig(
+        enabled=True,
+        allowed_users={"10001"},
+        onebot_ws_url="ws://127.0.0.1:3001",
+        onebot_http_url="http://127.0.0.1:3000",
+        event_log_path=tmp_path / "qq_remote_events.jsonl",
+        napcat_autostart=True,
+        napcat_command="napcat-start",
+        napcat_startup_wait_seconds=5,
+    )
+
+    result = prepare_onebot_service(config)
+
+    assert result["status"] == "started"
+    assert started == ["napcat-start"]
+    assert result["pid"] == 42
+
+
+def test_prepare_onebot_service_uses_discovered_napcat_command(monkeypatch, tmp_path) -> None:
+    class FakeProcess:
+        pid = 43
+        returncode = None
+
+        def poll(self):
+            return None
+
+    checks = {"count": 0}
+    started = []
+
+    def fake_available(config):
+        checks["count"] += 1
+        return checks["count"] >= 2
+
+    monkeypatch.setattr("diaevo.qq_bridge.onebot_service_available", fake_available)
+    monkeypatch.setattr("diaevo.qq_bridge.discover_napcat_command", lambda: "discovered-napcat")
+    monkeypatch.setattr("diaevo.qq_bridge._start_napcat_process", lambda command: started.append(command) or FakeProcess())
+    monkeypatch.setattr("diaevo.qq_bridge.time.sleep", lambda seconds: None)
+    config = QQBridgeConfig(
+        enabled=True,
+        allowed_users={"10001"},
+        onebot_ws_url="ws://127.0.0.1:3001",
+        onebot_http_url="http://127.0.0.1:3000",
+        event_log_path=tmp_path / "qq_remote_events.jsonl",
+        napcat_autostart=True,
+        napcat_command="",
+        napcat_startup_wait_seconds=5,
+    )
+
+    result = prepare_onebot_service(config)
+
+    assert result["status"] == "started"
+    assert result["command"] == "discovered-napcat"
+    assert started == ["discovered-napcat"]
+
+
+def test_discover_napcat_command_uses_path(monkeypatch, tmp_path) -> None:
+    fake = tmp_path / "napcat.cmd"
+    fake.write_text("@echo off\n", encoding="utf-8")
+    monkeypatch.setenv("PATH", str(tmp_path))
+    monkeypatch.setattr("diaevo.qq_bridge._npm_global_bin", lambda: None)
+
+    command = discover_napcat_command()
+
+    assert str(fake).lower() in command.lower()
 
 
 def test_parse_onebot_private_text_message() -> None:

@@ -250,8 +250,8 @@ def test_flow_input_shows_same_command_menu_as_prompt_bar(monkeypatch) -> None:
     controller.show_prompt()
 
     rendered = "".join(writes)
-    assert "/mine" in rendered
     assert "/model" in rendered
+    assert "/mine" not in rendered
     assert "Enter 发送" in rendered
 
 
@@ -277,12 +277,12 @@ def test_flow_input_command_enter_clears_prompt_until_command_output(monkeypatch
     monkeypatch.setattr("ui.prompt_bar._term_width", lambda: 80)
 
     controller.show_prompt()
-    controller.draft = "/generate C03"
+    controller.draft = "/learn"
     controller.cursor_index = len(controller.draft)
     controller._queue_enter()
     events = controller.drain()
 
-    assert events == [FlowInputEvent("/generate C03", interrupt=True)]
+    assert events == [FlowInputEvent("/learn", interrupt=True)]
     assert not controller.prompt_visible.is_set()
     assert controller._rendered_lines == 0
     assert "".join(writes).count("❯ ") == 1
@@ -544,6 +544,31 @@ def test_talk_command_starts_background_thread(monkeypatch) -> None:
 
     assert keep_running is True
     assert started == ["快速解释一下"]
+
+
+def test_help_hides_internal_pipeline_commands() -> None:
+    from ui import interactive_shell
+
+    assert "/learn" in interactive_shell.HELP_TEXT
+    assert "/debug" in interactive_shell.HELP_TEXT
+    assert "/mine" not in interactive_shell.HELP_TEXT
+    assert "/generate <cluster-id>" not in interactive_shell.HELP_TEXT
+    assert "/debug mine" in interactive_shell.DEBUG_HELP_TEXT
+
+
+def test_generate_without_cluster_points_to_learn(monkeypatch, capsys) -> None:
+    from ui import interactive_shell
+
+    calls = []
+    monkeypatch.setattr(interactive_shell, "_run", lambda argv: calls.append(argv))
+
+    keep_running = interactive_shell._dispatch_command("/generate", ChatConfigState(), messages=[])
+    captured = capsys.readouterr()
+
+    assert keep_running is True
+    assert calls == []
+    assert "/learn" in captured.out
+    assert "C03" not in captured.out
 
 
 def test_skill_selection_appends_context_message(monkeypatch) -> None:

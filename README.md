@@ -71,42 +71,42 @@ diaevo
 交互式命令示例：
 
 ```text
-/ingest
-/mine
-/recommend fix failing pytest import path
-/generate C03
-/verify outputs/candidate_skills/C03
-/kg_answer on
-/tools
-/tool read_file path=README.md limit=20
+/learn
+/skill
+/status
+/kg
+/talk 现在适合沉淀什么 skill？
 /model deepseek-v4-pro
 /image screenshots\stage1_desktop.png 这张页面还有哪些 AI 味？
-/baseurl https://api.deepseek.com
-/key
 /home
 /exit
 ```
 
 普通文本会按 `.env` 配置发送给 DeepSeek。模型可以请求本地工具；只读工具直接执行，写入、删除、补丁、shell 和网络工具会先显示预览并等待审批。
 
+内部流水线命令仍保留给调试和脚本兼容。交互式终端中运行 `/debug` 可查看 `ingest`、`mine`、`recommend`、`generate`、`verify` 等高级命令；日常不需要输入 cluster id。
+
 图片理解使用 `/image <图片路径或URL> <问题>`，走 OpenAI 兼容的 GLM 视觉配置。默认视觉模型是 `glm-4.6v-flash`，运行时读取 `GLM_VISION_API_KEY`、`GLM_VISION_BASE_URL`、`GLM_VISION_MODEL`、`GLM_VISION_MAX_TOKENS`、`GLM_VISION_TEMPERATURE` 和 `GLM_VISION_TIMEOUT`。进程内视觉请求会串行化，最高并发为 1。`diaevo chat-test --image <path> --prompt "..."` 可用于非交互式 smoke test。
 
 ## 常用脚本命令
 
 ```powershell
+diaevo learn
+diaevo status
+diaevo skills --query pytest
 diaevo ingest --input data/sample_traces.jsonl
 diaevo mine
 diaevo export-mining-snapshot --date 260513
 diaevo recommend --task "fix failing pytest import path" --language python --framework pytest
-diaevo generate --cluster-id C03
-diaevo generate --cluster-id C03 --with-code
-diaevo evolve --cluster-id C03 --budget 50
-diaevo verify --skill outputs/candidate_skills/C03/evolved
-diaevo validate --skill outputs/candidate_skills/C03/evolved --approve
-diaevo queue-promotion --skill outputs/candidate_skills/C03/evolved
+diaevo generate --cluster-id <cluster-id>
+diaevo generate --cluster-id <cluster-id> --with-code
+diaevo evolve --cluster-id <cluster-id> --budget 50
+diaevo verify --skill <candidate-skill-dir>\evolved
+diaevo validate --skill <candidate-skill-dir>\evolved --approve
+diaevo queue-promotion --skill <candidate-skill-dir>\evolved
 diaevo label-promotion --queue-id <id> --label merge-needed --note "merge with nearest skill"
 diaevo rewrite-promotion --queue-id <id> --action auto
-diaevo review-script --skill outputs/candidate_skills/C03 --status approved --note "只读脚本已审查" --reviewer <name> --approve
+diaevo review-script --skill <candidate-skill-dir> --status approved --note "只读脚本已审查" --reviewer <name> --approve
 diaevo promote --queue-id <id> --approve
 diaevo adapt-skill --source path\to\external-skill
 diaevo kg
@@ -116,8 +116,8 @@ diaevo kg --apply-edit path\to\DiaEvo_kg_edit_260513.json --approve
 diaevo answer-kg --query "which tools support pytest traces?" --strict
 diaevo feedback
 diaevo evaluate --variant evolved --top-k 3
-diaevo evaluate-gepa --cluster-id C03 --budget 50 --top-k 3
-diaevo evaluate-gepa-phase4 --cluster-id C03 --budgets 5,10 --top-k 3 --dry-run
+diaevo evaluate-gepa --cluster-id <cluster-id> --budget 50 --top-k 3
+diaevo evaluate-gepa-phase4 --cluster-id <cluster-id> --budgets 5,10 --top-k 3 --dry-run
 diaevo evaluate-code-evolution --task "fix failing pytest path"
 diaevo evaluate-code-evolution --task "fix failing pytest path" --test-command "python -m pytest -q" --collect-baseline
 diaevo evaluate-code-evolution --task "fix failing pytest path" --patch-file .tmp\candidate.patch --allowed-path diaevo --test-command "python -m pytest -q" --approve
@@ -131,7 +131,7 @@ diaevo-home
 
 ## QQ 远程入口
 
-普通 `diaevo` 启动时会读取 QQ 远程配置；当 `DIAEVO_QQ_ENABLED=true` 时，会在打开本地交互式终端的同时后台连接外置 OneBot 11 协议端，接收指定 QQ 号私聊。推荐协议端是 NapCatQQ；DiaEvo 不内嵌 QQ 登录逻辑，也不会默认启用远程控制。
+普通 `diaevo` 启动时会读取 QQ 远程配置；当 `DIAEVO_QQ_ENABLED=true` 时，会在打开本地交互式终端的同时后台连接 OneBot 11 协议端，接收指定 QQ 号私聊。推荐协议端是 NapCatQQ。DiaEvo 可以按 `.env` 中的启动命令自动拉起 NapCat，但不会内嵌 QQ 登录逻辑；二维码、登录窗口和账号状态仍由 NapCatQQ 负责。
 
 `.env` 示例：
 
@@ -143,6 +143,9 @@ DIAEVO_QQ_ONEBOT_HTTP_URL=http://127.0.0.1:3000
 DIAEVO_QQ_ACCESS_TOKEN=
 DIAEVO_QQ_APPROVAL_TTL_SECONDS=300
 DIAEVO_QQ_MAX_MESSAGE_CHARS=1800
+DIAEVO_QQ_NAPCAT_AUTOSTART=true
+DIAEVO_QQ_NAPCAT_COMMAND=
+DIAEVO_QQ_NAPCAT_STARTUP_WAIT_SECONDS=25
 ```
 
 安装可选依赖后，正常启动 `diaevo` 即可同时使用电脑终端和手机 QQ：
@@ -151,6 +154,8 @@ DIAEVO_QQ_MAX_MESSAGE_CHARS=1800
 pip install -e ".[qq]"
 diaevo
 ```
+
+如果 `DIAEVO_QQ_NAPCAT_AUTOSTART=true`，DiaEvo 会先检查 `DIAEVO_QQ_ONEBOT_WS_URL` 和 `DIAEVO_QQ_ONEBOT_HTTP_URL` 对应端口是否已经监听；没有监听时会自动从 PATH、npm 全局目录、当前 workspace、DiaEvo 安装目录和常见安装目录寻找 NapCat 启动项，再等待 OneBot 服务可连接。`DIAEVO_QQ_NAPCAT_COMMAND` 只是可选覆盖项，只有自动发现失败或你想指定自定义启动脚本时才需要填写。若启动后仍需要扫码登录，二维码会出现在 NapCatQQ 自己的窗口或控制台中。
 
 首版只响应 `DIAEVO_QQ_ALLOWED_USERS` 中的私聊 QQ 号。电脑终端输入和 QQ 私聊输入进入同一个交互式会话历史：在电脑前可以直接输入，不在电脑前可用手机继续当前任务。模型回复、工具预览、状态和命令输出会同步发给最近发消息的白名单 QQ。
 

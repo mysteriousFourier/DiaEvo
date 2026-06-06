@@ -29,6 +29,7 @@ from diaevo.qq_bridge import (
     QQBridgeError,
     QQInteractiveBridge,
     config_from_env_vars as qq_config_from_env,
+    prepare_onebot_service,
     run_interactive_bridge,
 )
 from diaevo.tool_chat import (
@@ -54,33 +55,37 @@ DEFAULT_RECOMMEND_TASK = "给当前项目生成测试修复 skill"
 HOME_PROMPT_GAP = "\n\n"
 
 HELP_TEXT = """
-命令：
-  /ingest                  导入 data/sample_traces.jsonl
-  /mine                    运行挖掘流程
+常用操作：
+  直接输入任务              让 DiaEvo 读代码、选工具并处理问题
+  /skill [名称]             查看或选择已有 skill
+  /learn                   从最近任务中总结一个候选 skill
+  /status                  查看工作区、模型和最近学习结果
   /kg                      打开可编辑知识图谱工作台
-  /kg_answer on|off        开关严格 KG 图向量检索回答模式
-  /skill                   选择并加载 skill，菜单显示 name 和简述
-  /recommend <任务>        按任务推荐技能
-  /generate <cluster-id>   生成候选 SKILL.md
-  /verify <cluster-id/path> 验证候选技能
-  /self-evolve [cluster]    直接运行本地自进化；默认选择最高优先级簇
-  /demo                    运行完整 MVP 演示
-  /feedback                将工具事件回灌为处理后的轨迹
-  /tools                   列出本地工具 schema
-  /tool <name> <json|key=value...> 运行本地工具；需要审批的工具请加 --approve
-  /talk <问题>              不打断主会话和工具流，向模型快速提问
-  /image <路径> <问题>      使用 GLM 视觉模型理解图片；默认模型 glm-4.6v-flash，并发 1
-  /model <name>            设置 DEEPSEEK_MODEL 并重绘仪表盘
-  /vision-model <name>     设置 GLM_VISION_MODEL
-  /vision-baseurl <url>    设置 GLM_VISION_BASE_URL
-  /vision-key <api-key>    设置 GLM_VISION_API_KEY，后续不回显密钥
-  /baseurl <url>           设置 DEEPSEEK_BASE_URL
-  /key <api-key>           设置 DEEPSEEK_API_KEY，后续不回显密钥
-  /home                    重绘仪表盘
-  /help                    显示帮助
+  /talk <问题>              不打断主任务，快速问一句
+  /image <路径> <问题>      让视觉模型理解图片
+  /home                    回到首页
+  /help                    显示这份说明
   /exit                    退出
 
+高级调试：
+  /debug                   查看内部流水线命令
+  /debug <命令> [参数]      运行内部命令，例如 /debug mine
+
 其他输入会作为普通聊天消息发送给 DeepSeek。
+""".strip()
+
+DEBUG_HELP_TEXT = """
+高级调试命令：
+  /debug ingest [参数]       导入 data/sample_traces.jsonl
+  /debug mine [参数]         运行挖掘流程
+  /debug recommend <任务>    按任务推荐技能
+  /debug generate <簇ID>     生成候选 SKILL.md；必须显式提供簇 ID
+  /debug verify <路径>       验证候选技能
+  /debug self-evolve [簇ID]  运行本地自进化
+  /debug feedback [参数]     将工具事件回灌为轨迹
+  /debug demo [参数]         运行完整演示
+
+这些命令保留给排查和脚本兼容。日常直接描述任务，或运行 /learn。
 """.strip()
 
 APPROVAL_ALLOW_ONCE = "allow_once"
@@ -304,6 +309,16 @@ def _start_qq_interactive_bridge() -> None:
         return
     if not config.enabled:
         return
+    try:
+        startup = prepare_onebot_service(config)
+    except QQBridgeError as exc:
+        print(f"{DIM}QQ 远程入口启动失败：{exc}{RESET}")
+        return
+    startup_status = str(startup.get("status") or "")
+    if startup_status == "started":
+        print(f"{DIM}{startup.get('message')}{RESET}")
+    elif startup_status in {"not_running", "missing_command", "exited", "timeout"}:
+        print(f"{DIM}QQ 远程入口提示：{startup.get('message')}{RESET}")
     QQ_INTERACTIVE_BRIDGE = QQInteractiveBridge(config, enqueue_text=_enqueue_qq_text)
 
     def worker() -> None:
@@ -598,23 +613,42 @@ def _dispatch_command(
 
     name, rest = parts[0].lower().removeprefix("/"), parts[1:]
     shortcuts: dict[str, Callable[[list[str]], list[str]]] = {
+        "learn": lambda args: ["learn", *args],
+        "status": lambda args: ["status", *args],
+        "kg": lambda args: ["kg", *args],
+        "chat": lambda args: ["chat-test", "--interactive", *args],
+    }
+    debug_shortcuts: dict[str, Callable[[list[str]], list[str]]] = {
         "ingest": lambda args: ["ingest", "--input", "data/sample_traces.jsonl", *args],
         "mine": lambda args: ["mine", *args],
-        "kg": lambda args: ["kg", *args],
         "recommend": lambda args: ["recommend", "--task", " ".join(args) if args else DEFAULT_RECOMMEND_TASK],
-        "generate": lambda args: ["generate", "--cluster-id", args[0] if args else "C03"],
-        "verify": lambda args: ["verify", "--skill", args[0] if args else "outputs/candidate_skills/C03"],
+        "generate": lambda args: ["generate", "--cluster-id", args[0], *args[1:]],
+        "verify": lambda args: ["verify", "--skill", args[0], *args[1:]],
         "self-evolve": lambda args: ["self-evolve", *args],
         "self_evolve": lambda args: ["self-evolve", *args],
         "demo": lambda args: ["demo", *args],
         "feedback": lambda args: ["feedback", *args],
-        "chat": lambda args: ["chat-test", "--interactive", *args],
     }
 
     if name in {"exit", "quit", "q"}:
         return False
     if name in {"help", "?"}:
         print(HELP_TEXT)
+        return True
+    if name == "debug":
+        if not rest:
+            print(DEBUG_HELP_TEXT)
+            return True
+        debug_name = rest[0].lower().removeprefix("/")
+        debug_args = rest[1:]
+        if debug_name not in debug_shortcuts:
+            print(f"未知调试命令：{debug_name}")
+            print(DEBUG_HELP_TEXT)
+            return True
+        if debug_name in {"generate", "verify"} and not debug_args:
+            print(f"usage: /debug {debug_name} <cluster-id/path>")
+            return True
+        _run(debug_shortcuts[debug_name](debug_args))
         return True
     if name in {"home", "dashboard"}:
         print(render_plain())
@@ -726,6 +760,15 @@ def _dispatch_command(
         return True
     if name in shortcuts:
         _run(shortcuts[name](rest))
+        return True
+    if name in debug_shortcuts:
+        if name == "generate" and not rest:
+            print("请使用 /learn 自动选择任务，或用 /debug generate <簇ID> 显式指定。")
+            return True
+        if name == "verify" and not rest:
+            print("请提供候选 skill 路径，例如 /debug verify outputs/candidate_skills/C01。")
+            return True
+        _run(debug_shortcuts[name](rest))
         return True
 
     print(f"未知命令：/{name}")
@@ -1108,9 +1151,9 @@ def main() -> int:
                 "不要在任何对话、代码、注释、列表或工具说明中使用 emoji。"
                 "如果任务可能受益于专门工作流，先调用 recommend_skills；需要使用某个 skill 时调用 load_skill_context 并遵循其 SKILL.md。"
                 "调用任何写入、删除、补丁、shell 执行或网络工具前，必须先用一句话说明为什么做、将影响什么。"
-                "当前交互式斜杠命令包括：/ingest、/mine、/kg、/skill、/recommend <task>、"
-                "/kg_answer on|off、/generate <cluster-id>、/verify <cluster-id/path>、/demo、/tools、/tool、/model <name>、"
-                "/talk <问题>、/image <path> <问题>、/baseurl <url>、/key <api-key>、/home、/help、/exit。"
+                "当前常用斜杠命令包括：/learn、/skill、/status、/kg、/talk <问题>、"
+                "/image <path> <问题>、/model <name>、/baseurl <url>、/key <api-key>、/home、/help、/exit。"
+                "内部流水线命令只作为高级调试入口保留在 /debug 中；不要把 cluster id 当作普通用户必须理解的步骤。"
                 "你可以通过工具调用请求 list_files、read_file、write_file、edit_file、delete_file、apply_patch、run_shell、web_search、web_fetch、arxiv_search、recommend_skills 或 load_skill_context。"
                 "不要自行选择知识图谱约束回答；严格 KG 回答是用户手动模式，只有用户运行 answer-kg --strict 或明确要求 KG 严格回答时才使用。"
                 "需要审批的工具会先显示预览，只有用户同意后才会执行。"

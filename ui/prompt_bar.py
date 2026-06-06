@@ -10,30 +10,46 @@ except ImportError:  # pragma: no cover - Windows is the primary target.
     msvcrt = None
 
 COMMANDS = [
-    ("/ingest", "导入 data/sample_traces.jsonl"),
-    ("/mine", "运行挖掘流程"),
+    ("/learn", "从最近任务中总结候选 skill"),
+    ("/skill", "查看或选择已有 skill"),
+    ("/status", "查看工作区和最近学习结果"),
     ("/kg", "打开可编辑知识图谱"),
-    ("/kg_answer", "开关 KG 图向量检索回答"),
-    ("/skill", "选择并加载 skill"),
-    ("/recommend", "按任务推荐技能"),
-    ("/generate", "生成候选 SKILL.md"),
-    ("/verify", "验证候选技能"),
-    ("/self-evolve", "直接运行本地自进化"),
-    ("/demo", "运行完整 MVP 演示"),
-    ("/feedback", "将工具事件回灌为轨迹"),
-    ("/tools", "列出本地工具说明"),
-    ("/tool", "用 JSON 参数运行本地工具"),
     ("/talk", "不中断主会话快速提问"),
+    ("/image", "让视觉模型理解图片"),
+    ("/debug", "查看高级调试命令"),
     ("/model", "设置本项目的 DEEPSEEK_MODEL"),
-    ("/baseurl", "设置本项目的 DEEPSEEK_BASE_URL"),
-    ("/key", "设置本项目的 DEEPSEEK_API_KEY"),
     ("/home", "重绘仪表盘"),
     ("/help", "显示本地命令"),
     ("/exit", "退出"),
 ]
-COMMAND_NAMES = tuple(name for name, _ in COMMANDS)
+HIDDEN_COMMAND_NAMES = (
+    "/ingest",
+    "/mine",
+    "/kg_answer",
+    "/recommend",
+    "/generate",
+    "/verify",
+    "/self-evolve",
+    "/self_evolve",
+    "/demo",
+    "/feedback",
+    "/tools",
+    "/tool",
+    "/baseurl",
+    "/key",
+    "/vision-model",
+    "/vision_model",
+    "/visionmodel",
+    "/vision-baseurl",
+    "/vision_baseurl",
+    "/visionbaseurl",
+    "/vision-key",
+    "/vision_key",
+    "/visionkey",
+)
+COMMAND_NAMES = tuple(name for name, _ in COMMANDS) + HIDDEN_COMMAND_NAMES
 COMMAND_MENU_PAGE_SIZE = 9
-COMMANDS_REQUIRING_ARGUMENTS = {"/skill", "/tool"}
+COMMANDS_REQUIRING_ARGUMENTS = {"/skill"}
 _SKILL_MENU_CACHE: list[tuple[str, str]] | None = None
 
 

@@ -11,7 +11,7 @@ from .evaluation import baseline_report
 from .code_evolution import run_code_evolution
 from .evolution import evolve_skill
 from .gepa_adapter import evaluate_gepa, evaluate_gepa_phase4
-from .generator import generate_skill
+from .generator import generate_skill, generation_diagnostic, semantic_skill_name
 from .ingest import ingest_traces
 from .knowledge_graph import (
     KG_REVIEW_STATUSES,
@@ -25,13 +25,13 @@ from .knowledge_graph import (
 )
 from .miner import mine
 from .mining_snapshot import export_mining_snapshot
-from .paths import DATA_DIR, REPORTS_DIR, bootstrap_workspace
+from .paths import CANDIDATE_SKILLS_DIR, DATA_DIR, REPORTS_DIR, WORKSPACE_ROOT, bootstrap_workspace
 from .promotion import PROMOTION_LABELS, label_promotion, promote, queue_promotion, rewrite_promotion
 from .recommender import recommend
 from .script_artifacts import SCRIPT_REVIEW_STATUSES, review_script
 from .skill_adapter import adapt_external_skill
 from .skill_context import discover_skill_sources, load_skill_context
-from .storage import write_json
+from .storage import read_json, write_json
 from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
 from .validation_runner import run_validation
 from .verifier import verify_skill
@@ -39,6 +39,8 @@ from .deepseek_chat import run_chat_test
 
 
 PUBLIC_COMMANDS = (
+    "learn",
+    "status",
     "ingest",
     "mine",
     "export-mining-snapshot",
@@ -70,6 +72,22 @@ PUBLIC_COMMANDS = (
     "chat-test",
     "qq-bridge",
 )
+
+USER_COMMANDS = (
+    "learn",
+    "status",
+    "skills",
+    "list-skills",
+    "kg",
+    "answer-kg",
+    "home",
+    "tools",
+    "tool",
+    "chat-test",
+    "qq-bridge",
+)
+
+DEBUG_COMMANDS = tuple(command for command in PUBLIC_COMMANDS if command not in USER_COMMANDS)
 
 
 class DiaEvoArgumentParser(argparse.ArgumentParser):
@@ -104,7 +122,7 @@ def _cli_output_mode(args: argparse.Namespace) -> str:
         return "json"
     if env_value in {"plain", "terminal"}:
         return "plain"
-    return "plain" if sys.stdout.isatty() else "json"
+    return "plain"
 
 
 _TOOL_LABELS = {
@@ -311,6 +329,69 @@ def _render_generate_result(result: dict[str, Any]) -> str:
     return "\n".join(line for line in lines if line).rstrip()
 
 
+def _render_learn_result(result: dict[str, Any]) -> str:
+    status = str(result.get("status") or "")
+    lines = ["学习结果"]
+    if status in {"no_candidate", "skipped"}:
+        lines.append(str(result.get("message") or "暂时没有适合沉淀成 skill 的任务。"))
+        next_step = str(result.get("next_step") or "")
+        if next_step:
+            lines.extend(["", f"下一步建议：{next_step}"])
+        return "\n".join(lines).rstrip()
+
+    selected = result.get("selected_task") if isinstance(result.get("selected_task"), dict) else {}
+    generated = result.get("generated") if isinstance(result.get("generated"), dict) else {}
+    verified = result.get("verify") if isinstance(result.get("verify"), dict) else {}
+    if status == "preview":
+        lines.extend(
+            [
+                "做了什么：找到了一个适合沉淀的任务候选；本次没有写入文件。",
+                f"任务名：{selected.get('title', '')}",
+                f"它解决什么：{selected.get('solves', '')}",
+                f"为什么：{selected.get('reason', '')}",
+            ]
+        )
+        report_path = str(result.get("report_path") or "")
+        if report_path:
+            lines.append(f"详细报告：{report_path}")
+        lines.extend(["", "下一步建议：运行 /learn 生成候选 skill，或继续完成更多真实任务再学习。"])
+        return "\n".join(line for line in lines if line).rstrip()
+    lines.extend(
+        [
+            f"做了什么：从最近任务轨迹中沉淀了一个候选 skill。",
+            f"任务名：{selected.get('title', '')}",
+            f"它解决什么：{selected.get('solves', '')}",
+            f"为什么：{selected.get('reason', '')}",
+            f"产物在哪：{generated.get('skill_path', '')}",
+        ]
+    )
+    if generated.get("name_hint"):
+        lines.append(f"Skill 名称：{generated.get('name_hint')}")
+    if verified:
+        passed = "通过" if verified.get("passed") else "未通过"
+        lines.append(f"验证：{passed}")
+    report_path = str(result.get("report_path") or "")
+    if report_path:
+        lines.append(f"详细报告：{report_path}")
+    lines.extend(["", "下一步建议：打开 SKILL.md 快速检查；满意后再走验证和晋升。"])
+    return "\n".join(line for line in lines if line).rstrip()
+
+
+def _render_status_result(result: dict[str, Any]) -> str:
+    lines = [
+        "当前状态",
+        f"工作区：{result.get('workspace', '')}",
+        f"模型：{result.get('model', '')}",
+        f"最近学习：{result.get('last_learn_status', '无')}",
+    ]
+    if result.get("last_skill"):
+        lines.append(f"最近生成：{result.get('last_skill')}")
+    lines.append(f"待处理候选：{result.get('pending_candidates', 0)}")
+    if result.get("report_path"):
+        lines.append(f"详细报告：{result.get('report_path')}")
+    return "\n".join(lines).rstrip()
+
+
 def render_cli_result(command: str | None, result: dict[str, Any]) -> str:
     if command == "tools":
         return _render_tools_result(result)
@@ -324,6 +405,10 @@ def render_cli_result(command: str | None, result: dict[str, Any]) -> str:
         return _render_tool_result_plain(result)
     if command == "generate":
         return _render_generate_result(result)
+    if command == "learn":
+        return _render_learn_result(result)
+    if command == "status":
+        return _render_status_result(result)
     return json.dumps(result, ensure_ascii=False, indent=2, sort_keys=True)
 
 
@@ -354,6 +439,18 @@ def build_parser() -> argparse.ArgumentParser:
             action for action in subparsers._choices_actions if action.dest != name  # type: ignore[attr-defined]
         ]
         return hidden
+
+    learn_parser = subparsers.add_parser("learn", help="从最近任务轨迹中自动沉淀一个候选 skill。")
+    learn_parser.add_argument("--input", default=str(DATA_DIR / "sample_traces.jsonl"), help="基础 JSONL 轨迹文件。")
+    learn_parser.add_argument("--processed", default=str(DATA_DIR / "processed_traces.jsonl"), help="处理后 JSONL 输出路径。")
+    learn_parser.add_argument("--tool-events", default=None, help="可选：工具事件 JSONL 路径。")
+    learn_parser.add_argument("--no-tool-events", action="store_true", help="不合并 .diaevo/tool_events.jsonl。")
+    learn_parser.add_argument("--clusters", type=int, default=None, help="可选：固定聚类数量。")
+    learn_parser.add_argument("--output-dir", default=None, help="可选：候选 skill 输出目录。")
+    learn_parser.add_argument("--with-code", action="store_true", help="为候选 skill 生成只读 helper code。")
+    learn_parser.add_argument("--dry-run", action="store_true", help="只显示会学习哪个任务，不写入候选 skill。")
+
+    subparsers.add_parser("status", help="显示当前工作区、模型和最近学习结果。")
 
     ingest_parser = subparsers.add_parser("ingest", help="校验并规范化 JSONL 任务轨迹。")
     ingest_parser.add_argument("--input", required=True, help="输入 JSONL 轨迹文件。")
@@ -786,6 +883,156 @@ def run_self_evolve(
     return result
 
 
+def _candidate_score(cluster: dict[str, Any]) -> float:
+    return (
+        float(cluster.get("coverage_gap") or 0.0) * 3.0
+        + float(cluster.get("failure_rate") or 0.0) * 1.5
+        + min(float(cluster.get("tool_reuse_count") or 0.0), 10.0) / 10.0
+        + min(float(cluster.get("size") or 0.0), 10.0) / 20.0
+    )
+
+
+def _task_card(cluster: dict[str, Any]) -> dict[str, Any]:
+    diagnostic = generation_diagnostic(cluster)
+    representative = str(cluster.get("representative_task") or "未命名任务").strip()
+    terms = diagnostic.get("meaningful_terms") if isinstance(diagnostic.get("meaningful_terms"), list) else []
+    tools = cluster.get("top_tools") if isinstance(cluster.get("top_tools"), list) else []
+    reason_parts = []
+    if float(cluster.get("coverage_gap") or 0.0) >= 0.25:
+        reason_parts.append("已有能力覆盖不足")
+    if int(cluster.get("tool_reuse_count") or 0) > 0:
+        reason_parts.append("相似工具流程反复出现")
+    if float(cluster.get("failure_rate") or 0.0) > 0:
+        reason_parts.append("历史任务里出现过失败，需要固定排查步骤")
+    reason = "，".join(reason_parts) or "任务信号足够清晰，适合沉淀成可复用流程"
+    solves = representative
+    if terms:
+        solves = f"{representative}（关键词：{', '.join(str(term) for term in terms[:4])}）"
+    return {
+        "title": representative[:80],
+        "solves": solves[:180],
+        "reason": reason,
+        "will_update": "候选 skill",
+        "cluster_id": str(cluster.get("id") or ""),
+        "score": round(_candidate_score(cluster), 4),
+        "tools": [str(item) for item in tools[:5]],
+    }
+
+
+def run_learn(
+    *,
+    input_path: str = str(DATA_DIR / "sample_traces.jsonl"),
+    processed_path: str = str(DATA_DIR / "processed_traces.jsonl"),
+    tool_events_path: str | None = None,
+    include_tool_events: bool = True,
+    clusters: int | None = None,
+    output_dir: str | None = None,
+    with_code: bool = False,
+    dry_run: bool = False,
+) -> dict[str, Any]:
+    ingest_result = ingest_traces(
+        input_path,
+        processed_path,
+        tool_events_path=tool_events_path,
+        include_tool_events=include_tool_events,
+    )
+    mine_result = mine(processed_path, k=clusters)
+    eligible: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    for cluster in mine_result.get("clusters", []):
+        if not isinstance(cluster, dict):
+            continue
+        diagnostic = generation_diagnostic(cluster)
+        card = _task_card(cluster)
+        if diagnostic.get("eligible"):
+            eligible.append({**card, "cluster": cluster})
+        else:
+            skipped.append({**card, "reason_code": diagnostic.get("reason")})
+    eligible.sort(key=lambda item: (-float(item.get("score") or 0.0), str(item.get("cluster_id") or "")))
+    visible_candidates = [{key: value for key, value in item.items() if key != "cluster"} for item in eligible[:3]]
+    if not eligible:
+        result = {
+            "status": "no_candidate",
+            "message": "暂时没有适合沉淀成 skill 的任务。已跳过纯工具事件或缺少任务上下文的候选。",
+            "next_step": "先用自然语言完成几个真实任务，或提供包含任务描述、文件和验证命令的轨迹。",
+            "workspace": str(WORKSPACE_ROOT),
+            "ingest": ingest_result,
+            "mine": {
+                "trace_count": mine_result.get("trace_count", 0),
+                "cluster_count": len(mine_result.get("clusters", []) or []),
+            },
+            "candidates": [],
+            "skipped_count": len(skipped),
+        }
+        report_path = REPORTS_DIR / "learn_report.json"
+        write_json(report_path, result)
+        result["report_path"] = str(report_path)
+        return result
+
+    selected = eligible[0]
+    selected_card = {key: value for key, value in selected.items() if key != "cluster"}
+    if dry_run:
+        result = {
+            "status": "preview",
+            "message": "已找到可学习的任务候选，但未写入候选 skill。",
+            "workspace": str(WORKSPACE_ROOT),
+            "selected_task": selected_card,
+            "candidates": visible_candidates,
+        }
+        report_path = REPORTS_DIR / "learn_report.json"
+        write_json(report_path, result)
+        result["report_path"] = str(report_path)
+        return result
+
+    learned_output_dir = output_dir
+    if learned_output_dir is None:
+        learned_output_dir = str(CANDIDATE_SKILLS_DIR / semantic_skill_name(selected["cluster"]))
+    generated = generate_skill(str(selected["cluster_id"]), output_dir=learned_output_dir, with_code=with_code)
+    verify_result = (
+        verify_skill(generated["skill_dir"])
+        if generated.get("status") == "candidate" and generated.get("skill_dir")
+        else {"passed": False, "status": "skipped", "message": generated.get("message")}
+    )
+    result = {
+        "status": "ok" if generated.get("status") == "candidate" else str(generated.get("status") or "skipped"),
+        "workspace": str(WORKSPACE_ROOT),
+        "selected_task": selected_card,
+        "candidates": visible_candidates,
+        "generated": generated,
+        "verify": verify_result,
+        "ingest": {
+            "trace_count": ingest_result.get("trace_count", 0),
+            "tool_events_ingested": ingest_result.get("tool_events_ingested", 0),
+        },
+        "mine": {
+            "trace_count": mine_result.get("trace_count", 0),
+            "cluster_count": len(mine_result.get("clusters", []) or []),
+        },
+    }
+    report_path = REPORTS_DIR / "learn_report.json"
+    write_json(report_path, result)
+    result["report_path"] = str(report_path)
+    return result
+
+
+def workspace_status() -> dict[str, Any]:
+    learn_report = read_json(REPORTS_DIR / "learn_report.json", default={}) or {}
+    generated = learn_report.get("generated") if isinstance(learn_report.get("generated"), dict) else {}
+    pending_candidates = 0
+    candidate_root = WORKSPACE_ROOT / "outputs" / "candidate_skills"
+    if candidate_root.exists():
+        pending_candidates = sum(1 for item in candidate_root.iterdir() if item.is_dir())
+    return {
+        "status": "ok",
+        "workspace": str(WORKSPACE_ROOT),
+        "model": os.environ.get("DEEPSEEK_MODEL", "deepseek-v4-pro").strip() or "deepseek-v4-pro",
+        "last_learn_status": learn_report.get("status") or "无",
+        "last_skill": generated.get("skill_path") or "",
+        "pending_candidates": pending_candidates,
+        "report_path": str(REPORTS_DIR / "learn_report.json") if learn_report else "",
+    }
+
+
 def list_skills(
     *,
     name: str = "",
@@ -845,7 +1092,20 @@ def main(argv: list[str] | None = None) -> int:
             from ui.interactive_shell import main as shell_main
 
             return shell_main()
-        if args.command == "ingest":
+        if args.command == "learn":
+            result = run_learn(
+                input_path=args.input,
+                processed_path=args.processed,
+                tool_events_path=args.tool_events,
+                include_tool_events=not args.no_tool_events,
+                clusters=args.clusters,
+                output_dir=args.output_dir,
+                with_code=args.with_code,
+                dry_run=args.dry_run,
+            )
+        elif args.command == "status":
+            result = workspace_status()
+        elif args.command == "ingest":
             result = ingest_traces(
                 args.input,
                 args.output,

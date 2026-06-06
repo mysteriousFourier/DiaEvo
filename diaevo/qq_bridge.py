@@ -6,6 +6,10 @@ import inspect
 import json
 import os
 import secrets
+import shutil
+import socket
+import subprocess
+import sys
 import time
 import urllib.error
 import urllib.parse
@@ -18,12 +22,13 @@ from typing import Any, Callable
 from .cli import main as cli_main
 from .deepseek_chat import chat_once, config_from_env
 from .env import load_env
-from .paths import DIAEVO_DIR
+from .paths import DIAEVO_DIR, INSTALL_ROOT, WORKSPACE_ROOT
 from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args
 
 
 DEFAULT_APPROVAL_TTL_SECONDS = 300
 DEFAULT_MAX_MESSAGE_CHARS = 1800
+DEFAULT_NAPCAT_STARTUP_WAIT_SECONDS = 25.0
 FORBIDDEN_REMOTE_COMMANDS = {"key", "vision-key", "vision_key", "visionkey"}
 
 
@@ -37,6 +42,9 @@ class QQBridgeConfig:
     approval_ttl_seconds: int = DEFAULT_APPROVAL_TTL_SECONDS
     max_message_chars: int = DEFAULT_MAX_MESSAGE_CHARS
     event_log_path: Path = DIAEVO_DIR / "qq_remote_events.jsonl"
+    napcat_autostart: bool = False
+    napcat_command: str = ""
+    napcat_startup_wait_seconds: float = DEFAULT_NAPCAT_STARTUP_WAIT_SECONDS
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +81,7 @@ def _split_csv(value: str | None) -> set[str]:
 
 def config_from_env_vars(env_path: str | Path | None = None) -> QQBridgeConfig:
     load_env(env_path)
+    autostart_value = os.environ.get("DIAEVO_QQ_NAPCAT_AUTOSTART")
     return QQBridgeConfig(
         enabled=_truthy(os.environ.get("DIAEVO_QQ_ENABLED")),
         allowed_users=_split_csv(os.environ.get("DIAEVO_QQ_ALLOWED_USERS")),
@@ -81,6 +90,14 @@ def config_from_env_vars(env_path: str | Path | None = None) -> QQBridgeConfig:
         access_token=os.environ.get("DIAEVO_QQ_ACCESS_TOKEN", "").strip(),
         approval_ttl_seconds=int(os.environ.get("DIAEVO_QQ_APPROVAL_TTL_SECONDS", DEFAULT_APPROVAL_TTL_SECONDS)),
         max_message_chars=int(os.environ.get("DIAEVO_QQ_MAX_MESSAGE_CHARS", DEFAULT_MAX_MESSAGE_CHARS)),
+        napcat_autostart=True if autostart_value is None else _truthy(autostart_value),
+        napcat_command=(
+            os.environ.get("DIAEVO_QQ_NAPCAT_COMMAND", "").strip()
+            or os.environ.get("DIAEVO_QQ_AUTOSTART_COMMAND", "").strip()
+        ),
+        napcat_startup_wait_seconds=float(
+            os.environ.get("DIAEVO_QQ_NAPCAT_STARTUP_WAIT_SECONDS", DEFAULT_NAPCAT_STARTUP_WAIT_SECONDS)
+        ),
     )
 
 
@@ -95,6 +112,166 @@ def validate_config(config: QQBridgeConfig) -> None:
         raise QQBridgeError("DIAEVO_QQ_ONEBOT_HTTP_URL is required")
     if config.approval_ttl_seconds <= 0:
         raise QQBridgeError("DIAEVO_QQ_APPROVAL_TTL_SECONDS must be positive")
+    if config.napcat_startup_wait_seconds < 0:
+        raise QQBridgeError("DIAEVO_QQ_NAPCAT_STARTUP_WAIT_SECONDS must be non-negative")
+
+
+def onebot_service_available(config: QQBridgeConfig, *, timeout: float = 0.5) -> bool:
+    return _endpoint_available(config.onebot_ws_url, timeout=timeout) and _endpoint_available(
+        config.onebot_http_url,
+        timeout=timeout,
+    )
+
+
+def prepare_onebot_service(config: QQBridgeConfig) -> dict[str, Any]:
+    if not config.enabled:
+        return {"status": "disabled"}
+    validate_config(config)
+    if onebot_service_available(config):
+        return {"status": "already_running"}
+    if not config.napcat_autostart:
+        return {
+            "status": "not_running",
+            "message": "OneBot 服务未监听；如需自动拉起 NapCat，请设置 DIAEVO_QQ_NAPCAT_AUTOSTART=true。",
+        }
+    napcat_command = config.napcat_command or discover_napcat_command()
+    if not napcat_command:
+        return {
+            "status": "missing_command",
+            "message": "已启用 NapCat 自动启动，但没有在 PATH、npm 全局目录或常见安装目录找到 NapCat。",
+        }
+
+    process = _start_napcat_process(napcat_command)
+    deadline = time.monotonic() + config.napcat_startup_wait_seconds
+    while time.monotonic() <= deadline:
+        if onebot_service_available(config):
+            return {
+                "status": "started",
+                "pid": process.pid,
+                "command": napcat_command,
+                "message": "NapCat 已启动，OneBot 服务已可连接。",
+            }
+        if process.poll() is not None:
+            return {
+                "status": "exited",
+                "pid": process.pid,
+                "returncode": process.returncode,
+                "command": napcat_command,
+                "message": "NapCat 启动命令已退出，但 OneBot 服务仍不可连接。",
+            }
+        time.sleep(0.5)
+    return {
+        "status": "timeout",
+        "pid": process.pid,
+        "command": napcat_command,
+        "message": "已启动 NapCat，但等待 OneBot 服务可连接超时；可能仍在等待扫码登录。",
+    }
+
+
+def discover_napcat_command() -> str:
+    for command_name in ("NapCatQQ", "NapCatQQ.exe", "napcat", "napcat.cmd", "napcat.bat"):
+        found = shutil.which(command_name)
+        if found:
+            return _shell_command_for_path(Path(found))
+
+    npm_bin = _npm_global_bin()
+    for path in _candidate_napcat_paths(npm_bin=npm_bin):
+        if path.exists() and path.is_file():
+            return _shell_command_for_path(path)
+    return ""
+
+
+def _npm_global_bin() -> Path | None:
+    appdata = os.environ.get("APPDATA", "").strip()
+    if not appdata:
+        return None
+    target = Path(appdata) / "npm"
+    return target if target.exists() else None
+
+
+def _candidate_napcat_paths(*, npm_bin: Path | None = None) -> list[Path]:
+    roots = [WORKSPACE_ROOT, INSTALL_ROOT]
+    for env_name in ("LOCALAPPDATA", "APPDATA", "ProgramFiles", "ProgramFiles(x86)"):
+        value = os.environ.get(env_name, "").strip()
+        if value:
+            roots.append(Path(value))
+    if npm_bin is not None:
+        roots.insert(0, npm_bin)
+
+    direct_names = (
+        "NapCatQQ.exe",
+        "NapCat.exe",
+        "napcat.exe",
+        "napcat.cmd",
+        "napcat.bat",
+    )
+    napcat_dir_names = (*direct_names, "start.bat", "start.cmd")
+    subdirs = (
+        "",
+        "NapCat",
+        "NapCatQQ",
+        "NapCat.Shell",
+        "LiteLoaderQQNT/NapCat",
+        "node_modules/napcat",
+        "node_modules/@napcat/napcat",
+    )
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    for root in roots:
+        for subdir in subdirs:
+            base = root / subdir if subdir else root
+            names = napcat_dir_names if subdir else direct_names
+            for name in names:
+                path = base / name
+                key = str(path).lower()
+                if key not in seen:
+                    seen.add(key)
+                    candidates.append(path)
+    return candidates
+
+
+def _shell_command_for_path(path: Path) -> str:
+    text = str(path)
+    if sys.platform.startswith("win"):
+        return f'start "" "{text}"'
+    return f'"{text}"'
+
+
+def _start_napcat_process(command: str) -> subprocess.Popen:
+    kwargs: dict[str, Any] = {
+        "shell": True,
+        "stdin": subprocess.DEVNULL,
+    }
+    if sys.platform.startswith("win"):
+        kwargs["creationflags"] = getattr(subprocess, "CREATE_NEW_CONSOLE", 0)
+    else:
+        kwargs["start_new_session"] = True
+    return subprocess.Popen(command, **kwargs)
+
+
+def _endpoint_available(url: str, *, timeout: float = 0.5) -> bool:
+    host_port = _endpoint_host_port(url)
+    if host_port is None:
+        return False
+    host, port = host_port
+    try:
+        with socket.create_connection((host, port), timeout=timeout):
+            return True
+    except OSError:
+        return False
+
+
+def _endpoint_host_port(url: str) -> tuple[str, int] | None:
+    parsed = urllib.parse.urlparse(url)
+    if not parsed.hostname:
+        return None
+    try:
+        port = parsed.port
+    except ValueError:
+        return None
+    if port is None:
+        port = 443 if parsed.scheme in {"https", "wss"} else 80
+    return parsed.hostname, port
 
 
 def parse_onebot_private_message(event: dict[str, Any]) -> RemoteMessage | None:
@@ -523,6 +700,7 @@ async def run_onebot_event_loop(config: QQBridgeConfig, handler: Callable[[Remot
 
 def run_bridge_from_env(env_path: str | Path | None = None) -> int:
     config = config_from_env_vars(env_path)
+    prepare_onebot_service(config)
     try:
         asyncio.run(run_bridge(config))
     except KeyboardInterrupt:
@@ -564,12 +742,14 @@ def _split_shell_like(text: str) -> list[str]:
 
 def _remote_command_to_cli_argv(command_name: str, rest: list[str]) -> list[str] | None:
     shortcuts: dict[str, Callable[[list[str]], list[str]]] = {
+        "learn": lambda args: ["learn", *args],
+        "status": lambda args: ["status", *args],
         "ingest": lambda args: ["ingest", "--input", "data/sample_traces.jsonl", *args],
         "mine": lambda args: ["mine", *args],
         "kg": lambda args: ["kg", "--no-open", *args],
         "recommend": lambda args: ["recommend", "--task", " ".join(args) if args else "给当前项目生成测试修复 skill"],
-        "generate": lambda args: ["generate", "--cluster-id", args[0] if args else "C03"],
-        "verify": lambda args: ["verify", "--skill", args[0] if args else "outputs/candidate_skills/C03"],
+        "generate": lambda args: ["generate", "--cluster-id", args[0], *args[1:]] if args else ["learn"],
+        "verify": lambda args: ["verify", "--skill", args[0], *args[1:]] if args else ["status"],
         "feedback": lambda args: ["feedback", *args],
         "tools": lambda args: ["tools", *args],
         "answer-kg": lambda args: ["answer-kg", *args],

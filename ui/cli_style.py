@@ -221,7 +221,7 @@ def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
 
     lines = [
         f"{BLUE}{BOLD}开始使用{RESET}",
-        "先运行 /ingest 导入轨迹，再运行 /mine 构建技能记忆",
+        "直接描述任务；需要总结经验时运行 /learn",
         "",
         f"{BLUE}{BOLD}当前工作区{RESET}",
         "  ".join(
@@ -237,9 +237,9 @@ def _feed_lines(ingest: dict, mining: dict, recommendations: dict) -> list[str]:
         f"工具 {top_tools}" if top_tools else "工具 --",
         "",
         f"{BLUE}{BOLD}下一步{RESET}",
-        "/mine 刷新挖掘报告",
-        "/recommend <任务> 推荐可复用技能",
-        "/tools 查看本地工具说明",
+        "/learn 从最近任务中总结候选 skill",
+        "/skill 查看或选择已有 skill",
+        "/status 查看当前工作区状态",
     ]
     return lines
 

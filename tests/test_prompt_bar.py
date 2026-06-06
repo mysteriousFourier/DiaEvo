@@ -9,18 +9,19 @@ def test_slash_menu_scrolls_past_first_page() -> None:
 
     assert len(lines) == prompt_bar.COMMAND_MENU_PAGE_SIZE
     assert "/kg" in menu
-    assert "/exit" not in menu
+    assert "/learn" not in menu
+    assert "/exit" in menu
 
 
 def test_submit_can_select_command_after_first_page() -> None:
     assert prompt_bar._submit_value("/", selected_index=len(prompt_bar.COMMANDS) - 1) == "/exit"
 
 
-def test_tool_menu_selection_requires_arguments_before_submit() -> None:
-    selected_index = next(index for index, command in enumerate(prompt_bar.COMMANDS) if command[0] == "/tool")
+def test_skill_menu_selection_requires_arguments_before_submit() -> None:
+    selected_index = next(index for index, command in enumerate(prompt_bar.COMMANDS) if command[0] == "/skill")
 
     assert prompt_bar._should_complete_menu_selection("/", selected_index) is True
-    assert prompt_bar._menu_completion_value("/", selected_index) == "/tool "
+    assert prompt_bar._menu_completion_value("/", selected_index) == "/skill "
 
 
 def test_skill_menu_lists_name_and_summary(monkeypatch) -> None:
@@ -59,13 +60,23 @@ def test_kg_is_single_user_facing_command() -> None:
     assert not any(name.startswith("/kg-") for name in names)
 
 
+def test_default_slash_menu_hides_internal_pipeline_commands() -> None:
+    names = [name for name, _ in prompt_bar.COMMANDS]
+
+    assert "/learn" in names
+    assert "/debug" in names
+    for hidden in {"/ingest", "/mine", "/recommend", "/generate", "/verify", "/self-evolve", "/feedback"}:
+        assert hidden not in names
+        assert hidden in prompt_bar.COMMAND_NAMES
+
+
 def test_menu_window_returns_to_top_after_last_selection() -> None:
     matches = prompt_bar._matching_commands("/")
     selected_index = prompt_bar._move_menu_selection(len(matches) - 1, len(matches), 1)
     menu = prompt_bar.render_command_menu("/", selected_index=selected_index)
 
     assert selected_index == 0
-    assert "/ingest" in menu
+    assert "/learn" in menu
     assert "/exit" not in menu
 
 
@@ -150,7 +161,7 @@ def test_read_prompt_erases_menu_and_footer_on_submit(monkeypatch) -> None:
 
     value = prompt_bar.read_prompt()
 
-    assert value == "/ingest"
+    assert value == "/learn"
     writes = "".join(fake_stdout.writes)
     assert "Enter 发送" in writes
     assert writes.rstrip().endswith("\033[2K")
