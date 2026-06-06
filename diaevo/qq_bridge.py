@@ -33,6 +33,7 @@ DEFAULT_NAPCAT_STARTUP_WAIT_SECONDS = 25.0
 DEFAULT_NAPCAT_DOWNLOAD_URL = (
     "https://github.com/NapNeko/NapCatQQ/releases/latest/download/NapCat.Shell.Windows.OneKey.zip"
 )
+QQ_COMPLETION_NOTICE = "已完成，请在电脑查看结果。"
 FORBIDDEN_REMOTE_COMMANDS = {"key", "vision-key", "vision_key", "visionkey"}
 
 
@@ -745,7 +746,7 @@ class QQRemoteSession:
             self._create_pending_approval(user_id, tool_name, args, result)
             return
         if _result_should_send_to_qq(result):
-            self._send(user_id, _format_tool_result(result, self.config.max_message_chars))
+            self._send(user_id, QQ_COMPLETION_NOTICE)
 
     def _handle_cli_command(self, user_id: str, text: str) -> None:
         try:
@@ -777,7 +778,7 @@ class QQRemoteSession:
             return
         code, output, errors = _capture_cli(argv)
         if code == 0:
-            self._send(user_id, _truncate(output.strip() or "命令已完成。", self.config.max_message_chars))
+            self._send(user_id, QQ_COMPLETION_NOTICE)
         else:
             append_remote_event(
                 "command_failed",
@@ -874,7 +875,7 @@ class QQRemoteSession:
             path=self.config.event_log_path,
         )
         if _result_should_send_to_qq(result):
-            self._send(user_id, _format_tool_result(result, self.config.max_message_chars))
+            self._send(user_id, QQ_COMPLETION_NOTICE)
 
     def _handle_deny(self, user_id: str, text: str) -> None:
         parts = text.split(maxsplit=2)

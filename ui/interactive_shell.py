@@ -53,6 +53,7 @@ from .window_title import set_title_state, start_title_monitor, stop_title_monit
 
 DEFAULT_RECOMMEND_TASK = "给当前项目生成测试修复 skill"
 HOME_PROMPT_GAP = "\n\n"
+QQ_COMPLETION_NOTICE = "已完成，请在电脑查看结果。"
 
 HELP_TEXT = """
 常用操作：
@@ -263,7 +264,7 @@ def _print_tool_result(result: dict[str, object]) -> None:
     rendered = render_tool_result(result)
     print(rendered)
     if _tool_result_should_send_to_qq(result):
-        _qq_send(rendered)
+        _qq_send(QQ_COMPLETION_NOTICE)
     _show_flow_prompt(force=True)
 
 
@@ -523,7 +524,7 @@ def _run(argv: list[str]) -> None:
         _begin_flow_output()
         print(output)
         if code == 0:
-            _qq_send(output)
+            _qq_send(QQ_COMPLETION_NOTICE)
     if error_output:
         _begin_flow_output()
         print(error_output, file=sys.stderr)

@@ -534,6 +534,20 @@ def test_remote_tool_error_is_logged_without_qq_message(monkeypatch, tmp_path) -
     assert sent == []
 
 
+def test_remote_tool_success_sends_completion_notice_without_result(monkeypatch, tmp_path) -> None:
+    sent: list[tuple[str, str]] = []
+
+    def fake_execute_tool(name, args, *, approve=False, event_log_path=None):
+        return {"status": "ok", "tool": name, "stdout": "secret output"}
+
+    monkeypatch.setattr("diaevo.qq_bridge.execute_tool", fake_execute_tool)
+    session = QQRemoteSession(_config(tmp_path), send_message=lambda user, text: sent.append((user, text)))
+
+    session.handle_message(RemoteMessage(user_id="10001", text="/tool read_file path=README.md"))
+
+    assert sent == [("10001", "已完成，请在电脑查看结果。")]
+
+
 def test_remote_chat_error_is_logged_without_qq_message(monkeypatch, tmp_path) -> None:
     sent: list[tuple[str, str]] = []
 
@@ -600,7 +614,8 @@ def test_tool_requires_approval_then_executes_after_code(monkeypatch, tmp_path) 
     session.handle_message(RemoteMessage(user_id="10001", text=f"/approve {code}"))
 
     assert calls[-1] == ("run_shell", {"command": "pytest"}, True)
-    assert "done" in sent[-1][1]
+    assert sent[-1][1] == "已完成，请在电脑查看结果。"
+    assert "done" not in sent[-1][1]
     assert session.pending == {}
 
     events = [
@@ -610,6 +625,21 @@ def test_tool_requires_approval_then_executes_after_code(monkeypatch, tmp_path) 
     assert any(item["action"] == "approval_requested" for item in events)
     assert any(item["action"] == "approval_accepted" for item in events)
     assert all("approval_code_hash" not in item or code not in json.dumps(item) for item in events)
+
+
+def test_remote_cli_success_sends_completion_notice_without_output(monkeypatch, tmp_path) -> None:
+    sent: list[tuple[str, str]] = []
+
+    def fake_cli_main(argv):
+        print("workspace details")
+        return 0
+
+    monkeypatch.setattr("diaevo.qq_bridge.cli_main", fake_cli_main)
+    session = QQRemoteSession(_config(tmp_path), send_message=lambda user, text: sent.append((user, text)))
+
+    session.handle_message(RemoteMessage(user_id="10001", text="/tools"))
+
+    assert sent == [("10001", "已完成，请在电脑查看结果。")]
 
 
 def test_expired_approval_code_does_not_execute(monkeypatch, tmp_path) -> None:
