@@ -65,6 +65,8 @@ HELP_TEXT = """
   /learn                   从最近任务中总结一个候选 skill
   /status                  查看工作区、模型和最近学习结果
   /kg                      打开可编辑知识图谱工作台
+  /qq                      启用 QQ 远程入口并允许登录
+  /qqquit                  退出 QQ 远程入口
   /talk <问题>              不打断主任务，快速问一句
   /image <路径> <问题>      让视觉模型理解图片
   /home                    回到首页
@@ -108,6 +110,7 @@ _TALK_THREADS: set[threading.Thread] = set()
 _TALK_THREADS_LOCK = threading.Lock()
 QQ_INTERACTIVE_BRIDGE: QQInteractiveBridge | None = None
 QQ_INTERACTIVE_THREAD: threading.Thread | None = None
+QQ_INTERACTIVE_STOP_EVENT: threading.Event | None = None
 SEARCH_CONTEXT_TOOLS = {"web_search", "arxiv_search"}
 RAW_INPUT_ENV_VALUES = {"1", "true", "yes", "on"}
 
@@ -347,32 +350,38 @@ def _enqueue_qq_text(text: str, user_id: str = "") -> None:
     FLOW_INPUT.queue_external_text(text, source="QQ", reply_to_user_id=user_id)
 
 
-def _start_qq_interactive_bridge() -> None:
-    global QQ_INTERACTIVE_BRIDGE, QQ_INTERACTIVE_THREAD
+def _start_qq_interactive_bridge() -> bool:
+    global QQ_INTERACTIVE_BRIDGE, QQ_INTERACTIVE_THREAD, QQ_INTERACTIVE_STOP_EVENT
     if QQ_INTERACTIVE_THREAD is not None and QQ_INTERACTIVE_THREAD.is_alive():
-        return
+        print(f"{DIM}QQ 远程入口已在运行。{RESET}")
+        return True
     try:
         config = qq_config_from_env()
     except Exception as exc:
         print(f"{DIM}QQ 远程配置读取失败：{exc}{RESET}")
-        return
+        return False
     if not config.enabled:
-        return
+        print(f"{DIM}QQ 远程入口未启用：请在 .env 设置 DIAEVO_QQ_ENABLED=true。{RESET}")
+        return False
     try:
         startup = prepare_onebot_service(config)
     except QQBridgeError as exc:
         print(f"{DIM}QQ 远程入口启动失败：{exc}{RESET}")
-        return
+        return False
     startup_status = str(startup.get("status") or "")
     if startup_status == "started":
         print(f"{DIM}{startup.get('message')}{RESET}")
     elif startup_status in {"not_running", "missing_command", "exited", "timeout"}:
         print(f"{DIM}QQ 远程入口提示：{startup.get('message')}{RESET}")
+        if startup_status in {"not_running", "missing_command", "exited"}:
+            return False
+    stop_event = threading.Event()
+    QQ_INTERACTIVE_STOP_EVENT = stop_event
     QQ_INTERACTIVE_BRIDGE = QQInteractiveBridge(config, enqueue_text=_enqueue_qq_text)
 
     def worker() -> None:
         try:
-            asyncio.run(run_interactive_bridge(config, QQ_INTERACTIVE_BRIDGE))
+            asyncio.run(run_interactive_bridge(config, QQ_INTERACTIVE_BRIDGE, stop_event=stop_event))
         except QQBridgeError as exc:
             _print_status_flow(f"QQ 远程入口启动失败：{exc}", send_to_qq=False)
         except Exception as exc:
@@ -381,6 +390,20 @@ def _start_qq_interactive_bridge() -> None:
     QQ_INTERACTIVE_THREAD = threading.Thread(target=worker, name="diaevo-qq-bridge", daemon=True)
     QQ_INTERACTIVE_THREAD.start()
     print(f"{DIM}QQ 远程入口已启用：{', '.join(sorted(config.allowed_users))}{RESET}")
+    return True
+
+
+def _stop_qq_interactive_bridge() -> bool:
+    global QQ_INTERACTIVE_BRIDGE, QQ_INTERACTIVE_THREAD, QQ_INTERACTIVE_STOP_EVENT
+    running = QQ_INTERACTIVE_THREAD is not None and QQ_INTERACTIVE_THREAD.is_alive()
+    if QQ_INTERACTIVE_STOP_EVENT is not None:
+        QQ_INTERACTIVE_STOP_EVENT.set()
+    if QQ_INTERACTIVE_THREAD is not None:
+        QQ_INTERACTIVE_THREAD.join(timeout=2)
+    QQ_INTERACTIVE_BRIDGE = None
+    QQ_INTERACTIVE_THREAD = None
+    QQ_INTERACTIVE_STOP_EVENT = None
+    return running
 
 
 def _event_to_command(event: FlowInputEvent, chat_state: ChatConfigState) -> str:
@@ -910,6 +933,16 @@ def _dispatch_command(
 
     if name in {"exit", "quit", "q"}:
         return False
+    if name == "qq":
+        _start_qq_interactive_bridge()
+        return True
+    if name in {"qqquit", "qq-quit", "qqlogout", "qq_logout"}:
+        stopped = _stop_qq_interactive_bridge()
+        if stopped:
+            print(f"{DIM}QQ 远程入口已退出。{RESET}")
+        else:
+            print(f"{DIM}QQ 远程入口未在运行。{RESET}")
+        return True
     if name in {"help", "?"}:
         print(HELP_TEXT)
         return True
@@ -1437,7 +1470,6 @@ def main() -> int:
 
     print(render_plain())
     print(HOME_PROMPT_GAP, end="")
-    _start_qq_interactive_bridge()
     messages = [
         {
             "role": "system",
@@ -1450,7 +1482,7 @@ def main() -> int:
                 "如果任务可能受益于专门工作流，先调用 recommend_skills；需要使用某个 skill 时调用 load_skill_context 并遵循其 SKILL.md。"
                 "调用任何写入、删除、补丁、shell 执行或网络工具前，必须先用一句话说明为什么做、将影响什么。"
                 "当前常用斜杠命令包括：/learn、/skill、/status、/kg、/talk <问题>、"
-                "/image <path> <问题>、/model <name>、/baseurl <url>、/key <api-key>、/home、/help、/exit。"
+                "/image <path> <问题>、/qq、/qqquit、/model <name>、/baseurl <url>、/key <api-key>、/home、/help、/exit。"
                 "内部流水线命令只作为高级调试入口保留在 /debug 中；不要把 cluster id 当作普通用户必须理解的步骤。"
                 "你可以通过工具调用请求 list_files、read_file、write_file、edit_file、delete_file、apply_patch、run_shell、web_search、web_fetch、arxiv_search、recommend_skills 或 load_skill_context。"
                 "不要自行选择知识图谱约束回答；严格 KG 回答是用户手动模式，只有用户运行 answer-kg --strict 或明确要求 KG 严格回答时才使用。"
@@ -1473,12 +1505,14 @@ def main() -> int:
                 print("输入 /exit 退出。")
                 continue
             print()
+            _stop_qq_interactive_bridge()
             stop_title_monitor()
             return 0
         if not command:
             continue
         if is_command_input(command):
             if not _dispatch_command(command, chat_state, kg_mode, messages):
+                _stop_qq_interactive_bridge()
                 stop_title_monitor()
                 return 0
             continue

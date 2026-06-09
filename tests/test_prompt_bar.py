@@ -4,11 +4,11 @@ from diaevo import __version__
 
 
 def test_slash_menu_scrolls_past_first_page() -> None:
-    menu = prompt_bar.render_command_menu("/", selected_index=10)
+    menu = prompt_bar.render_command_menu("/", selected_index=len(prompt_bar.COMMANDS) - 1)
     lines = menu.splitlines()
 
     assert len(lines) == prompt_bar.COMMAND_MENU_PAGE_SIZE
-    assert "/kg" in menu
+    assert "/qq" in menu
     assert "/learn" not in menu
     assert "/exit" in menu
 

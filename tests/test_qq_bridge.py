@@ -1,7 +1,9 @@
 import json
 import sys
+import threading
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import diaevo.qq_bridge as qq_bridge
 from diaevo.qq_bridge import (
@@ -371,6 +373,40 @@ def test_prepare_onebot_service_uses_discovered_napcat_command(monkeypatch, tmp_
     assert result["status"] == "started"
     assert result["command"] == "discovered-napcat"
     assert started == ["discovered-napcat"]
+
+
+def test_run_onebot_event_loop_stops_with_event(monkeypatch, tmp_path) -> None:
+    async def fake_sleep(seconds):
+        stop_event.set()
+
+    class FakeConnection:
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, exc_type, exc, tb):
+            return False
+
+        async def recv(self):
+            stop_event.set()
+            raise TimeoutError()
+
+    def fake_connect(*args, **kwargs):
+        return FakeConnection()
+
+    stop_event = threading.Event()
+    monkeypatch.setitem(sys.modules, "websockets", SimpleNamespace(connect=fake_connect))
+    monkeypatch.setattr(qq_bridge.asyncio, "sleep", fake_sleep)
+    config = _config(tmp_path)
+
+    qq_bridge.asyncio.run(
+        qq_bridge.run_onebot_event_loop(
+            config,
+            lambda message: None,
+            stop_event=stop_event,
+        )
+    )
+
+    assert stop_event.is_set()
 
 
 def test_discover_napcat_command_uses_path(monkeypatch, tmp_path) -> None:

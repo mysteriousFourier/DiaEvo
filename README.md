@@ -131,7 +131,7 @@ diaevo-home
 
 ## QQ 远程入口
 
-普通 `diaevo` 启动时会读取 QQ 远程配置；当 `DIAEVO_QQ_ENABLED=true` 时，会在打开本地交互式终端的同时后台连接 OneBot 11 协议端，接收指定 QQ 号私聊。推荐协议端是 NapCatQQ。DiaEvo 可以按 `.env` 中的启动命令自动拉起 NapCat，但不会内嵌 QQ 登录逻辑；二维码、登录窗口和账号状态仍由 NapCatQQ 负责。
+普通 `diaevo` 启动时只打开本地交互式终端，不会自动连接 QQ。需要远程入口时，在终端输入 `/qq`；当 `DIAEVO_QQ_ENABLED=true` 时，DiaEvo 会连接 OneBot 11 协议端，接收指定 QQ 号私聊。输入 `/qqquit` 会退出 DiaEvo 的 QQ 远程入口。推荐协议端是 NapCatQQ。DiaEvo 可以按 `.env` 中的启动命令自动拉起 NapCat，但不会内嵌 QQ 登录逻辑；二维码、登录窗口和账号状态仍由 NapCatQQ 负责。
 
 `.env` 示例：
 
@@ -151,16 +151,17 @@ DIAEVO_QQ_NAPCAT_COMMAND=
 DIAEVO_QQ_NAPCAT_STARTUP_WAIT_SECONDS=25
 ```
 
-安装可选依赖后，正常启动 `diaevo` 即可同时使用电脑终端和手机 QQ：
+安装可选依赖后，启动 `diaevo`，再在交互式终端输入 `/qq` 即可同时使用电脑终端和手机 QQ：
 
 ```powershell
 pip install -e ".[qq]"
 diaevo
+/qq
 ```
 
 如果 `DIAEVO_QQ_NAPCAT_AUTOSTART=true`，DiaEvo 会先检查 `DIAEVO_QQ_ONEBOT_WS_URL` 和 `DIAEVO_QQ_ONEBOT_HTTP_URL` 对应端口是否已经监听；没有监听时会自动从 PATH、npm 全局目录、DiaEvo clone/安装目录、当前 workspace 和常见安装目录寻找 NapCat 启动项。若仍未找到且 `DIAEVO_QQ_NAPCAT_AUTO_INSTALL=true`，Windows 下会下载 NapCat 一键包到 DiaEvo clone/安装目录的 `.tmp\napcat` 并从那里启动，再等待 OneBot 服务可连接。`DIAEVO_QQ_NAPCAT_INSTALL_DIR` 可覆盖下载目录；相对路径按 DiaEvo clone/安装目录解析，不按当前 workspace 解析。`DIAEVO_QQ_NAPCAT_COMMAND` 只是可选覆盖项，只有自动发现/自动安装失败或你想指定自定义启动脚本时才需要填写。若启动后仍需要扫码登录，二维码会出现在 NapCatQQ 自己的窗口或控制台中。
 
-别人 clone 项目后，按常规 Python 依赖安装、复制 `.env.example` 为 `.env` 并填好 QQ 白名单和 API key 即可直接启动；NapCat 下载产物在 clone 目录的 `.tmp/napcat`，不会提交到 git。非 Windows 环境请自行安装 NapCat 并设置 `DIAEVO_QQ_NAPCAT_COMMAND`。
+别人 clone 项目后，按常规 Python 依赖安装、复制 `.env.example` 为 `.env` 并填好 QQ 白名单和 API key，即可在本机终端用 `/qq` 显式启用；NapCat 下载产物在 clone 目录的 `.tmp/napcat`，不会提交到 git。非 Windows 环境请自行安装 NapCat 并设置 `DIAEVO_QQ_NAPCAT_COMMAND`。
 
 首版只响应 `DIAEVO_QQ_ALLOWED_USERS` 中的私聊 QQ 号。电脑终端输入和 QQ 私聊输入进入同一个交互式会话历史：在电脑前可以直接输入，不在电脑前可用手机继续当前任务。主模型最终回复、工具审批预览、状态和命令输出会同步发给最近发消息的白名单 QQ；工具成功后的中间结果不会额外发送“已完成”占位提示，等主任务最终回复即可。
 
@@ -176,7 +177,7 @@ diaevo
 | --- | --- |
 | 交互式工作台 | 默认 `diaevo` 打开终端首页，包含可信工作区确认、仪表盘、斜杠菜单、多行输入、`/home`、`/tools` 和 `/tool`。 |
 | 模型聊天 | 通过 `.env` 和运行时 `/model`、`/baseurl`、`/key` 配置 DeepSeek 或 OpenAI 兼容接口；普通文本进入带工具调用的聊天循环。 |
-| QQ 远程入口 | 可选配置启用后，普通 `diaevo` 会通过 OneBot 11/NapCatQQ 接收白名单 QQ 私聊，与本地终端共享同一个交互式会话。 |
+| QQ 远程入口 | 可选配置启用后，交互式终端输入 `/qq` 会通过 OneBot 11/NapCatQQ 接收白名单 QQ 私聊，`/qqquit` 退出远程入口，与本地终端共享同一个交互式会话。 |
 | 图像理解 | `/image <path|url> <问题>` 使用 GLM 视觉模型理解图片，默认 `glm-4.6v-flash`，并发上限为 1，结果会写回主会话历史。 |
 | 本地工具层 | `list_files`、`read_file`、`write_file`、`edit_file`、`delete_file`、`apply_patch`、`run_shell`、`web_search`、`web_fetch`，带工作区边界、只读/写入分级和审批门；`web_search` 和 `arxiv_search` 的原始结果只用于终端展示，进入主模型上下文前会先由旁路筛选器压缩成相关摘要。 |
 | 轨迹捕获与反馈 | 本地工具调用会写入 `.diaevo/tool_events.jsonl`；`ingest` 规范化样例/真实轨迹，`feedback` 将工具事件折叠回可挖掘轨迹。 |

@@ -796,6 +796,51 @@ def test_generate_without_cluster_points_to_learn(monkeypatch, capsys) -> None:
     assert "C03" not in captured.out
 
 
+def test_qq_command_starts_bridge(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    calls = []
+    monkeypatch.setattr(interactive_shell, "_start_qq_interactive_bridge", lambda: calls.append("start") or True)
+
+    keep_running = interactive_shell._dispatch_command("/qq", ChatConfigState(), messages=[])
+
+    assert keep_running is True
+    assert calls == ["start"]
+
+
+def test_qqquit_command_stops_bridge(monkeypatch, capsys) -> None:
+    from ui import interactive_shell
+
+    calls = []
+    monkeypatch.setattr(interactive_shell, "_stop_qq_interactive_bridge", lambda: calls.append("stop") or True)
+
+    keep_running = interactive_shell._dispatch_command("/qqquit", ChatConfigState(), messages=[])
+    captured = capsys.readouterr()
+
+    assert keep_running is True
+    assert calls == ["stop"]
+    assert "已退出" in captured.out
+
+
+def test_main_does_not_autostart_qq(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    starts = []
+    stops = []
+    reads = iter(["/exit"])
+    monkeypatch.setattr(interactive_shell, "start_title_monitor", lambda: None)
+    monkeypatch.setattr(interactive_shell, "stop_title_monitor", lambda: None)
+    monkeypatch.setattr(interactive_shell, "maybe_show_trust_dialog", lambda: True)
+    monkeypatch.setattr(interactive_shell, "render_plain", lambda: "")
+    monkeypatch.setattr(interactive_shell, "_read_next_command", lambda state: next(reads))
+    monkeypatch.setattr(interactive_shell, "_start_qq_interactive_bridge", lambda: starts.append("start") or True)
+    monkeypatch.setattr(interactive_shell, "_stop_qq_interactive_bridge", lambda: stops.append("stop") or False)
+
+    assert interactive_shell.main() == 0
+    assert starts == []
+    assert stops == ["stop"]
+
+
 def test_skill_selection_appends_context_message(monkeypatch) -> None:
     from ui import interactive_shell
 

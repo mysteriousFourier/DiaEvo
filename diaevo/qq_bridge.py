@@ -10,6 +10,7 @@ import shutil
 import socket
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.parse
@@ -1003,12 +1004,22 @@ async def run_bridge(config: QQBridgeConfig) -> None:
     await run_onebot_event_loop(config, session.handle_message)
 
 
-async def run_interactive_bridge(config: QQBridgeConfig, bridge: QQInteractiveBridge) -> None:
+async def run_interactive_bridge(
+    config: QQBridgeConfig,
+    bridge: QQInteractiveBridge,
+    *,
+    stop_event: threading.Event | None = None,
+) -> None:
     validate_config(config)
-    await run_onebot_event_loop(config, bridge.handle_message)
+    await run_onebot_event_loop(config, bridge.handle_message, stop_event=stop_event)
 
 
-async def run_onebot_event_loop(config: QQBridgeConfig, handler: Callable[[RemoteMessage], None]) -> None:
+async def run_onebot_event_loop(
+    config: QQBridgeConfig,
+    handler: Callable[[RemoteMessage], None],
+    *,
+    stop_event: threading.Event | None = None,
+) -> None:
     try:
         import websockets
     except ImportError as exc:
@@ -1018,11 +1029,15 @@ async def run_onebot_event_loop(config: QQBridgeConfig, handler: Callable[[Remot
     if config.access_token:
         headers["Authorization"] = f"Bearer {config.access_token}"
 
-    while True:
+    while stop_event is None or not stop_event.is_set():
         try:
             connect_kwargs = _websocket_header_kwargs(websockets.connect, headers)
             async with websockets.connect(config.onebot_ws_url, **connect_kwargs) as websocket:
-                async for raw in websocket:
+                while stop_event is None or not stop_event.is_set():
+                    try:
+                        raw = await asyncio.wait_for(websocket.recv(), timeout=0.5)
+                    except asyncio.TimeoutError:
+                        continue
                     try:
                         event = json.loads(raw)
                     except json.JSONDecodeError:
@@ -1031,8 +1046,14 @@ async def run_onebot_event_loop(config: QQBridgeConfig, handler: Callable[[Remot
                     if message is not None:
                         handler(message)
         except Exception as exc:
+            if stop_event is not None and stop_event.is_set():
+                break
             append_remote_event("bridge_reconnect", {"error": str(exc)}, path=config.event_log_path)
-            await asyncio.sleep(3)
+            reconnect_deadline = time.monotonic() + 3
+            while time.monotonic() < reconnect_deadline:
+                if stop_event is not None and stop_event.is_set():
+                    break
+                await asyncio.sleep(0.1)
 
 
 def run_bridge_from_env(env_path: str | Path | None = None) -> int:
