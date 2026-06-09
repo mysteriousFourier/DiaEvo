@@ -20,7 +20,13 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from diaevo.deepseek_chat import DeepSeekConfig, chat_completion, config_from_env, extract_assistant_text
+from diaevo.deepseek_chat import (
+    DeepSeekConfig,
+    chat_completion,
+    chat_completion_stream_text,
+    config_from_env,
+    extract_assistant_text,
+)
 from diaevo.paths import REPORTS_DIR, ensure_project_dirs
 from diaevo.skill_adapter import adapt_external_skill
 from diaevo.storage import read_json, read_jsonl, write_json, write_jsonl
@@ -31,6 +37,13 @@ REFERENCE_URL = "https://github.com/ConardLi/garden-skills.git"
 REFERENCE_COMMIT = "242324434eef1ab76850bc62358b57081f7d3749"
 REFERENCE_SUBDIR = "skills/web-design-engineer"
 DEFAULT_REFERENCE_REPO_DIR = ROOT / ".diaevo" / "reference_repos" / "garden-skills"
+LIVE_OUTPUT = os.environ.get("DIAEVO_LIVE_OUTPUT", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _write_stream_text(text: str) -> None:
+    for char in text:
+        sys.stdout.write(char)
+        sys.stdout.flush()
 
 
 @dataclass(frozen=True)
@@ -1075,8 +1088,15 @@ class DeepSeekLLMClient:
         trace_system_prompt: str,
         trace_user_prompt: str,
     ) -> dict[str, Any]:
-        response = chat_completion(messages, self.config)
-        text = extract_assistant_text(response)
+        if LIVE_OUTPUT:
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] model stream start: {stage.key}", flush=True)
+            text, response = chat_completion_stream_text(messages, self.config, on_text=_write_stream_text)
+            if text:
+                print(flush=True)
+            print(f"[{datetime.now().strftime('%H:%M:%S')}] model stream done: {stage.key}", flush=True)
+        else:
+            response = chat_completion(messages, self.config)
+            text = extract_assistant_text(response)
         usage = response.get("usage") if isinstance(response, dict) else None
         return {
             "status": "ok",

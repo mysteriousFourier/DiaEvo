@@ -8,6 +8,7 @@ import re
 import shutil
 import subprocess
 import sys
+import threading
 import time
 import urllib.error
 import urllib.request
@@ -22,6 +23,7 @@ if str(ROOT) not in sys.path:
 
 from diaevo.deepseek_chat import (
     chat_completion,
+    chat_completion_stream_text,
     config_from_env,
     extract_assistant_text,
     multimodal_user_message,
@@ -38,6 +40,7 @@ from diaevo.verifier import verify_skill
 
 REPORTS_DIR = ROOT / "outputs" / "reports"
 EDGE = Path(r"C:\Program Files (x86)\Microsoft\Edge\Application\msedge.exe")
+LIVE_OUTPUT = os.environ.get("DIAEVO_LIVE_OUTPUT", "1").strip().lower() not in {"0", "false", "no", "off"}
 GEPA_BUDGET = 50
 USER_PROMPT = (
     "我想做一个网页，给我们客服主管每天早上看物流工单情况用。她不懂技术，只想一眼知道今天哪些客户比较急、"
@@ -91,6 +94,10 @@ def write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
             handle.write(json.dumps(row, ensure_ascii=False, sort_keys=True) + "\n")
 
 
+def log(message: str) -> None:
+    print(f"[{datetime.now().strftime('%H:%M:%S')}] {message}", flush=True)
+
+
 def read_text(path: Path, default: str = "") -> str:
     try:
         return path.read_text(encoding="utf-8")
@@ -111,32 +118,82 @@ def safe_copy(src: Path, dst: Path) -> None:
         shutil.copy2(src, dst)
 
 
+def _forward_pipe(pipe: Any, sink: list[str], stream: Any) -> None:
+    try:
+        for line in iter(pipe.readline, ""):
+            sink.append(line)
+            if LIVE_OUTPUT:
+                stream.write(line)
+                stream.flush()
+    finally:
+        pipe.close()
+
+
+def _write_stream_text(text: str) -> None:
+    for char in text:
+        sys.stdout.write(char)
+        sys.stdout.flush()
+
+
 def run_cmd(command: list[str], *, timeout: int = 120) -> dict[str, Any]:
     started = time.perf_counter()
+    log("run: " + " ".join(str(part) for part in command))
     try:
-        completed = subprocess.run(
+        process = subprocess.Popen(
             command,
             cwd=ROOT,
             text=True,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             encoding="utf-8",
             errors="replace",
-            timeout=timeout,
         )
+        stdout_parts: list[str] = []
+        stderr_parts: list[str] = []
+        stdout_thread = threading.Thread(target=_forward_pipe, args=(process.stdout, stdout_parts, sys.stdout), daemon=True)
+        stderr_thread = threading.Thread(target=_forward_pipe, args=(process.stderr, stderr_parts, sys.stderr), daemon=True)
+        stdout_thread.start()
+        stderr_thread.start()
+        timed_out = False
+        while process.poll() is None:
+            if time.perf_counter() - started >= timeout:
+                timed_out = True
+                process.kill()
+                break
+            time.sleep(0.1)
+        process.wait()
+        stdout_thread.join(timeout=2)
+        stderr_thread.join(timeout=2)
+        elapsed = round(time.perf_counter() - started, 3)
+        stdout = "".join(stdout_parts)
+        stderr = "".join(stderr_parts)
+        if timed_out:
+            stderr += f"\nTIMEOUT after {timeout}s"
+            log(f"timeout after {timeout}s: " + " ".join(str(part) for part in command))
+            return {
+                "command": command,
+                "returncode": 124,
+                "stdout": stdout,
+                "stderr": stderr,
+                "elapsed_sec": elapsed,
+            }
+        log(f"done rc={process.returncode} elapsed={elapsed}s: " + " ".join(str(part) for part in command))
         return {
             "command": command,
-            "returncode": completed.returncode,
-            "stdout": completed.stdout,
-            "stderr": completed.stderr,
-            "elapsed_sec": round(time.perf_counter() - started, 3),
+            "returncode": process.returncode,
+            "stdout": stdout,
+            "stderr": stderr,
+            "elapsed_sec": elapsed,
         }
-    except subprocess.TimeoutExpired as exc:
+    except FileNotFoundError as exc:
+        elapsed = round(time.perf_counter() - started, 3)
+        log(f"failed command not found elapsed={elapsed}s: {exc}")
         return {
             "command": command,
-            "returncode": 124,
-            "stdout": exc.stdout or "",
-            "stderr": (exc.stderr or "") + f"\nTIMEOUT after {timeout}s",
-            "elapsed_sec": round(time.perf_counter() - started, 3),
+            "returncode": 127,
+            "stdout": "",
+            "stderr": str(exc),
+            "elapsed_sec": elapsed,
         }
 
 
@@ -236,9 +293,15 @@ def model_call(system: str, prompt: str, config: Any, label: str, tool_logs: Pat
         {"role": "user", "content": prompt + "\n\n请直接给完整单文件 HTML，代码必须包含 </html> 结束标签。"},
     ]
     started = time.perf_counter()
-    response = chat_completion(messages, config)
-    answer = extract_assistant_text(response)
-    log = {
+    log(f"model start: {label}")
+    if LIVE_OUTPUT:
+        answer, response = chat_completion_stream_text(messages, config, on_text=_write_stream_text)
+        if answer:
+            print(flush=True)
+    else:
+        response = chat_completion(messages, config)
+        answer = extract_assistant_text(response)
+    call_log = {
         "label": label,
         "messages": messages,
         "response_usage": response.get("usage", {}),
@@ -246,8 +309,9 @@ def model_call(system: str, prompt: str, config: Any, label: str, tool_logs: Pat
         "finish_reason": ((response.get("choices") or [{}])[0] or {}).get("finish_reason"),
     }
     with tool_logs.open("a", encoding="utf-8") as handle:
-        handle.write(json.dumps(log, ensure_ascii=False, sort_keys=True) + "\n")
-    return answer, log
+        handle.write(json.dumps(call_log, ensure_ascii=False, sort_keys=True) + "\n")
+    log(f"model done: {label} elapsed={call_log['elapsed_sec']}s")
+    return answer, call_log
 
 
 def screenshot(html_path: Path, out_path: Path, width: int, height: int) -> dict[str, Any]:
@@ -382,8 +446,10 @@ def call_vision_json(config: Any | None, prompt: str, image_paths: list[Path], f
         multimodal_user_message(prompt, existing),
     ]
     try:
+        log(f"vision start: {fallback_label}")
         response = chat_completion(messages, config)
         text = extract_assistant_text(response)
+        log(f"vision done: {fallback_label}")
         parsed = parse_json_object(text)
         if parsed is None:
             return {"status": "parse_failed", "label": fallback_label, "raw": text[:2000], "score": None}
@@ -507,14 +573,20 @@ def harvest_references(root: Path, text_config: Any, vision_config: Any | None) 
         f"视觉理解 JSON：\n{json.dumps(ref_analysis, ensure_ascii=False)[:8000]}"
     )
     try:
-        response = chat_completion(
-            [
-                {"role": "system", "content": "只输出 Markdown，标题为“# 参考设计原则提炼”。禁止 emoji。"},
-                {"role": "user", "content": extraction_prompt},
-            ],
-            text_config,
-        )
-        principles = extract_assistant_text(response).strip()
+        messages = [
+            {"role": "system", "content": "只输出 Markdown，标题为“# 参考设计原则提炼”。禁止 emoji。"},
+            {"role": "user", "content": extraction_prompt},
+        ]
+        if LIVE_OUTPUT:
+            log("model stream start: reference_principles")
+            principles, _response = chat_completion_stream_text(messages, text_config, on_text=_write_stream_text)
+            if principles:
+                print(flush=True)
+            log("model stream done: reference_principles")
+            principles = principles.strip()
+        else:
+            response = chat_completion(messages, text_config)
+            principles = extract_assistant_text(response).strip()
     except Exception as exc:
         principles = (
             "# 参考设计原则提炼\n\n"
@@ -625,6 +697,7 @@ def make_stage(
     skill_path: Path | None,
     tool_log: Path,
 ) -> dict[str, Any]:
+    log(f"stage start: {stage_key} {stage_title}")
     output_dir = root / "frontend_outputs" / stage_title
     output_path = output_dir / "index.html"
     answer, model_log = model_call(system, USER_PROMPT, config, stage_key, tool_log)
@@ -639,6 +712,7 @@ def make_stage(
     eval_result = evaluate_html(stage_key, html_text)
     md_path = root / "conversation_md" / f"{stage_title}_完整对话.md"
     write_text(md_path, conversation_md(stage_title, system, answer, output_path, [shot_desktop, shot_mobile], eval_result, skill_path))
+    log(f"stage done: {stage_key} {stage_title}")
     return {
         "stage": stage_key,
         "title": stage_title,
@@ -970,6 +1044,7 @@ def main() -> int:
     args = parse_args()
     stamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     root = Path(args.resume_root).resolve() if args.resume_root else ROOT / "experiments" / f"chinese_de_ai_frontend_evolution_full_{stamp}"
+    log(f"experiment root: {root}")
     for sub in ["conversation_md", "tool_logs", "frontend_outputs", "screenshots", "traces", "skills", "reports", "references", "vision_evaluations", "archive"]:
         (root / sub).mkdir(parents=True, exist_ok=True)
 
@@ -977,6 +1052,7 @@ def main() -> int:
     status.update({"experiment_root": str(root), "started_at": status.get("started_at") or stamp, "resumed_at": datetime.now().isoformat() if args.resume_root else None})
     write_json(root / "reports" / "experiment_status.json", status)
     if not args.skip_initial_reset and not args.resume_root:
+        log("runtime cleanup start")
         initial_cleanup = archive_and_reset_runtime(root, "runtime_reset_before")
         write_json(root / "reports" / "runtime_reset_before.json", initial_cleanup)
     tool_log = root / "tool_logs" / "model_and_tool_calls.jsonl"
@@ -995,7 +1071,9 @@ def main() -> int:
     }
     write_json(root / "reports" / "api_provider_summary.json", provider_summary)
 
+    log("reference harvest start")
     reference_artifacts = harvest_references(root, config, vision_config)
+    log("reference harvest done")
     design_principles = read_text(Path(reference_artifacts["design_principles"]))
 
     stage0_system = (
@@ -1010,23 +1088,30 @@ def main() -> int:
     raw_trace_path = root / "traces" / "raw_traces.jsonl"
     processed_path = root / "traces" / "processed_traces.jsonl"
     if not trace_path.exists() or not processed_path.exists():
+        log("trace ingest start")
         traces = build_trace_rows(stage0, reference_artifacts)
         write_jsonl(raw_trace_path, traces)
         write_jsonl(trace_path, traces)
         ingest_summary = ingest_traces(trace_path, processed_path, include_tool_events=False)
         write_json(root / "reports" / "ingest_summary.json", ingest_summary)
+        log("trace ingest done")
+    log("mining start")
     mine_report = read_json(root / "reports" / "mining_report.json", None) or mine(processed_path, k=2)
     mining_report_path = root / "reports" / "mining_report.json"
     write_json(mining_report_path, mine_report)
     cluster_id = select_cluster(mine_report)
+    log(f"selected cluster: {cluster_id}")
 
     mined_skill = root / "skills" / "去AI味前端设计_mined" / "SKILL.md"
     generated_dir = root / "skills" / "mined_generated"
     generated_skill_path = generated_dir / "SKILL.md"
     if not mined_skill.exists():
+        log("skill generation start")
         generated = generate_skill(cluster_id, output_dir=generated_dir, with_code=True)
         generated_skill_path = Path(generated["skill_path"])
+        log("skill generation done")
     enrich_skill(generated_skill_path, mined_skill, cluster_id)
+    log("mined skill validation start")
     verify_mined = verify_skill(mined_skill.parent)
     validation_mined = run_validation(mined_skill.parent, approve=True)
     write_json(root / "reports" / "verify_mined_skill.json", verify_mined)
@@ -1046,11 +1131,14 @@ def main() -> int:
     stage1 = make_stage(root, "stage1", "阶段1_挖掘skill后", stage1_system, config, mined_skill, tool_log)
     evaluate_stage_vision(root, stage1, vision_config)
 
+    log("local evolution start")
     local_evolved_report = evolve_skill(cluster_id, budget=GEPA_BUDGET, output_dir=root / "skills" / "local_evolved_raw", memory_path=root / "reports" / "local_evolution_memory.json")
+    log("local evolution done")
     write_json(root / "reports" / "local_evolution_report.json", local_evolved_report)
     local_skill_raw = Path(local_evolved_report["runs"][0]["output"]["skill_path"])
     local_skill = root / "skills" / "去AI味前端设计_local_evolved" / "SKILL.md"
     enrich_skill(local_skill_raw, local_skill, cluster_id)
+    log("local evolved skill validation start")
     verify_local = verify_skill(local_skill.parent)
     validate_local = run_validation(local_skill.parent, approve=True)
     write_json(root / "reports" / "verify_local_evolved_skill.json", verify_local)
@@ -1060,6 +1148,7 @@ def main() -> int:
     gepa_skill = root / "skills" / "去AI味前端设计_GEPA_evolved" / "SKILL.md"
     gepa_conclusion = ""
     try:
+        log("GEPA start")
         gepa_report = evaluate_gepa(
             cluster_id,
             budget=GEPA_BUDGET,
@@ -1074,6 +1163,7 @@ def main() -> int:
             racing_policy="cheap_gates",
             judge_policy="none",
         )
+        log("GEPA done")
         write_json(root / "reports" / "gepa_skill_optimization.json", gepa_report)
         gepa_output = ((gepa_report.get("comparison") or {}).get("gepa") or {}).get("output") or {}
         gepa_raw = Path(str(gepa_output.get("skill_path") or ""))
@@ -1090,11 +1180,13 @@ def main() -> int:
             shutil.copy2(local_skill, gepa_skill)
             gepa_conclusion = "GEPA 报告生成但未发现 skill_path，Stage 2 降级使用 local evolved skill，并在 GEPA 报告中保留原因。"
     except Exception as exc:
+        log(f"GEPA failed: {exc}")
         gepa_report = {"status": "failed", "error": str(exc), "budget": GEPA_BUDGET}
         write_json(root / "reports" / "gepa_skill_optimization.json", gepa_report)
         gepa_skill.parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(local_skill, gepa_skill)
         gepa_conclusion = f"GEPA 正式运行失败，未伪造成成功；失败原因：{exc}。Stage 2 使用 local evolved skill 作为降级输入。"
+    log("GEPA skill validation start")
     verify_gepa = verify_skill(gepa_skill.parent)
     validate_gepa = run_validation(gepa_skill.parent, approve=True)
     write_json(root / "reports" / "verify_gepa_skill.json", verify_gepa)
@@ -1133,6 +1225,7 @@ def main() -> int:
     else:
         gepa_conclusion += " 最终采纳门结论：GEPA skill adopted。"
 
+    log("related pytest start")
     pytest_report = run_cmd([
         str(ROOT / ".venv" / "Scripts" / "python.exe"),
         "-m",
@@ -1144,6 +1237,7 @@ def main() -> int:
         "tests/test_validation_runner.py",
         "tests/test_gepa_adapter.py",
     ], timeout=300)
+    log("related pytest done")
     write_json(root / "reports" / "pytest_related.json", pytest_report)
 
     artifacts = {
@@ -1175,13 +1269,14 @@ def main() -> int:
     write_json(root / "reports" / "stage_summary.json", {"stages": stages, "artifacts": artifacts, "final_report": str(report)})
     status.update({"status": "completed", "final_report": str(report), "completed_at": datetime.now().isoformat()})
     write_json(root / "reports" / "experiment_status.json", status)
+    log("final cleanup start")
     final_cleanup = archive_and_reset_runtime(root, "runtime_cleanup_after")
     artifacts["final_cleanup_manifest"] = str(Path(final_cleanup["archive_root"]) / "cleanup_manifest.json")
     write_json(root / "reports" / "stage_summary.json", {"stages": stages, "artifacts": artifacts, "final_report": str(report)})
     report = final_report(root, stages, artifacts)
     status.update({"final_report": str(report), "final_cleanup_manifest": artifacts["final_cleanup_manifest"]})
     write_json(root / "reports" / "experiment_status.json", status)
-    print(json.dumps({"experiment_root": str(root), "final_report": str(report), "stages": stages, "gepa_conclusion": gepa_conclusion}, ensure_ascii=False, indent=2))
+    print(json.dumps({"experiment_root": str(root), "final_report": str(report), "stages": stages, "gepa_conclusion": gepa_conclusion}, ensure_ascii=False, indent=2), flush=True)
     return 0
 
 

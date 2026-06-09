@@ -786,6 +786,7 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser.add_argument("--no-thinking", action="store_true", help="本次测试禁用 DeepSeek thinking 字段。")
     chat_parser.add_argument("--image", action="append", default=[], help="附加图片路径或 URL，并使用 GLM 视觉配置。")
     chat_parser.add_argument("--interactive", action="store_true", help="本地保留对话历史，持续聊天直到 /exit。")
+    chat_parser.add_argument("--no-stream", action="store_true", help="关闭实时 token 输出，等待完整响应后一次性打印。")
 
     qq_parser = subparsers.add_parser("qq-bridge", help="通过 OneBot 11 QQ 私聊白名单远程控制 DiaEvo。")
     qq_parser.add_argument("--env", default=None, help=".env 路径；默认使用当前 workspace 或安装目录 .env。")
@@ -1334,6 +1335,7 @@ def main(argv: list[str] | None = None) -> int:
                 no_thinking=args.no_thinking,
                 interactive=args.interactive,
                 image_paths=args.image,
+                stream=not args.no_stream,
             )
         elif args.command == "qq-bridge":
             from .qq_bridge import run_bridge_from_env

@@ -17,6 +17,7 @@ from diaevo.deepseek_chat import (
     DeepSeekRequestTimeout,
     NO_EMOJI_SYSTEM_RULE,
     chat_completion,
+    chat_completion_stream_text,
     chat_once,
     image_file_to_data_url,
     multimodal_user_message,
@@ -172,6 +173,46 @@ def test_chat_completion_disables_timeout_by_default(monkeypatch) -> None:
     assert captured["timeout"] is None
 
 
+def test_chat_completion_stream_text_yields_chunks(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            return iter(
+                [
+                    b'data: {"choices":[{"delta":{"content":"hello "}}]}\n\n',
+                    b'data: {"choices":[{"delta":{"content":"world"},"finish_reason":"stop"}]}\n\n',
+                    b"data: [DONE]\n\n",
+                ]
+            )
+
+    def fake_urlopen(request, timeout):
+        captured["timeout"] = timeout
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    chunks = []
+
+    answer, response = chat_completion_stream_text(
+        [{"role": "user", "content": "hello"}],
+        DeepSeekConfig(api_key="sk-test"),
+        on_text=chunks.append,
+    )
+
+    assert captured["payload"]["stream"] is True
+    assert captured["timeout"] is None
+    assert chunks == ["hello ", "world"]
+    assert answer == "hello world"
+    assert response["choices"][0]["finish_reason"] == "stop"
+
+
 def test_vision_config_defaults_to_glm_flash(monkeypatch) -> None:
     monkeypatch.setenv("GLM_VISION_API_KEY", "glm-test")
     monkeypatch.delenv("GLM_VISION_MODEL", raising=False)
@@ -258,3 +299,12 @@ def test_chat_test_parser_accepts_image_option() -> None:
     assert args.command == "chat-test"
     assert args.image == ["shot.png"]
     assert args.prompt == "看图"
+
+
+def test_chat_test_parser_accepts_no_stream() -> None:
+    from diaevo.cli import build_parser
+
+    args = build_parser().parse_args(["chat-test", "--no-stream"])
+
+    assert args.command == "chat-test"
+    assert args.no_stream is True

@@ -11,7 +11,7 @@ import urllib.request
 import base64
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .env import load_env
 from ui.output_policy import print_assistant, sanitize_no_emoji
@@ -66,6 +66,14 @@ def _env_timeout(name: str, default: float | None) -> float | None:
 def _format_seconds(value: float) -> str:
     value = float(value)
     return str(int(value)) if value.is_integer() else f"{value:g}"
+
+
+def _timeout_message(config: DeepSeekConfig) -> str:
+    timeout = _format_seconds(config.timeout or 0)
+    return (
+        f"DeepSeek API request timed out after {timeout}s. "
+        "Set DEEPSEEK_TIMEOUT=0 in .env to disable the request timeout, or reduce DEEPSEEK_MAX_TOKENS."
+    )
 
 
 def config_from_env(
@@ -204,26 +212,107 @@ def chat_completion(
             with urllib.request.urlopen(request, timeout=config.timeout) as response:
                 raw = response.read().decode("utf-8")
     except (TimeoutError, socket.timeout) as exc:
-        timeout = _format_seconds(config.timeout or 0)
-        raise DeepSeekRequestTimeout(
-            f"DeepSeek API request timed out after {timeout}s. "
-            "Set DEEPSEEK_TIMEOUT=0 in .env to disable the request timeout, or reduce DEEPSEEK_MAX_TOKENS."
-        ) from exc
+        raise DeepSeekRequestTimeout(_timeout_message(config)) from exc
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         raise RuntimeError(f"DeepSeek API HTTP {exc.code}: {body}") from exc
     except urllib.error.URLError as exc:
         if isinstance(exc.reason, (TimeoutError, socket.timeout)):
-            timeout = _format_seconds(config.timeout or 0)
-            raise DeepSeekRequestTimeout(
-                f"DeepSeek API request timed out after {timeout}s. "
-                "Set DEEPSEEK_TIMEOUT=0 in .env to disable the request timeout, or reduce DEEPSEEK_MAX_TOKENS."
-            ) from exc
+            raise DeepSeekRequestTimeout(_timeout_message(config)) from exc
         raise RuntimeError(f"DeepSeek API request failed: {exc.reason}") from exc
     data = json.loads(raw)
     if "error" in data:
         raise RuntimeError(f"DeepSeek API error: {data['error']}")
     return data
+
+
+def _stream_delta_text(event: dict[str, Any]) -> str:
+    choices = event.get("choices") or []
+    if not choices:
+        return ""
+    first = choices[0] or {}
+    delta = first.get("delta")
+    if isinstance(delta, dict):
+        content = delta.get("content")
+        if isinstance(content, str):
+            return content
+        if isinstance(content, list):
+            return "".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
+    message = first.get("message")
+    if isinstance(message, dict) and isinstance(message.get("content"), str):
+        return str(message.get("content") or "")
+    return ""
+
+
+def chat_completion_stream_text(
+    messages: list[Message],
+    config: DeepSeekConfig,
+    *,
+    on_text: Callable[[str], None] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    payload: dict[str, Any] = {
+        "model": config.model,
+        "messages": messages,
+        "stream": True,
+        "max_tokens": config.max_tokens,
+        "temperature": config.temperature,
+    }
+    if config.reasoning_effort:
+        payload["reasoning_effort"] = config.reasoning_effort
+    if config.thinking:
+        payload["thinking"] = {"type": config.thinking}
+    request = urllib.request.Request(
+        config.endpoint,
+        data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
+        headers={
+            "Authorization": f"Bearer {config.api_key}",
+            "Content-Type": "application/json",
+            "Accept": "text/event-stream",
+        },
+        method="POST",
+    )
+    chunks: list[str] = []
+    finish_reason = None
+    usage: dict[str, Any] | None = None
+    try:
+        with urllib.request.urlopen(request, timeout=config.timeout) as response:
+            for raw_line in response:
+                line = raw_line.decode("utf-8", errors="replace").strip()
+                if not line or line.startswith(":"):
+                    continue
+                if not line.startswith("data:"):
+                    continue
+                data = line[5:].strip()
+                if data == "[DONE]":
+                    break
+                event = json.loads(data)
+                if "error" in event:
+                    raise RuntimeError(f"DeepSeek API error: {event['error']}")
+                if isinstance(event.get("usage"), dict):
+                    usage = event["usage"]
+                choices = event.get("choices") or []
+                if choices and isinstance(choices[0], dict) and choices[0].get("finish_reason"):
+                    finish_reason = choices[0].get("finish_reason")
+                text = sanitize_no_emoji(_stream_delta_text(event))
+                if not text:
+                    continue
+                chunks.append(text)
+                if on_text is not None:
+                    on_text(text)
+    except (TimeoutError, socket.timeout) as exc:
+        raise DeepSeekRequestTimeout(_timeout_message(config)) from exc
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"DeepSeek API HTTP {exc.code}: {body}") from exc
+    except urllib.error.URLError as exc:
+        if isinstance(exc.reason, (TimeoutError, socket.timeout)):
+            raise DeepSeekRequestTimeout(_timeout_message(config)) from exc
+        raise RuntimeError(f"DeepSeek API request failed: {exc.reason}") from exc
+    answer = "".join(chunks)
+    response: dict[str, Any] = {"choices": [{"message": {"content": answer}, "finish_reason": finish_reason}]}
+    if usage:
+        response["usage"] = usage
+    return answer, response
 
 
 def extract_assistant_text(response: dict[str, Any]) -> str:
@@ -287,12 +376,16 @@ def interactive_chat(system: str, config: DeepSeekConfig) -> int:
         if prompt in {"/exit", "/quit"}:
             return 0
         messages.append({"role": "user", "content": prompt})
-        with status("正在请求模型"):
-            response = chat_completion(messages, config)
-        answer = extract_assistant_text(response)
-        messages.append({"role": "assistant", "content": answer})
         print("\nassistant>")
-        print_assistant(answer)
+        answer, _response = chat_completion_stream_text(messages, config, on_text=_write_stream_text)
+        print()
+        messages.append({"role": "assistant", "content": answer})
+
+
+def _write_stream_text(text: str) -> None:
+    for char in text:
+        sys.stdout.write(char)
+        sys.stdout.flush()
 
 
 def run_chat_test(
@@ -306,6 +399,7 @@ def run_chat_test(
     no_thinking: bool = False,
     interactive: bool = False,
     image_paths: list[str] | None = None,
+    stream: bool = True,
 ) -> int:
     if image_paths:
         config = vision_config_from_env(
@@ -328,6 +422,20 @@ def run_chat_test(
         if image_paths:
             raise ValueError("chat-test --interactive does not support --image; use a single prompt with --image.")
         return interactive_chat(system, config)
+    if stream and not image_paths:
+        messages: list[Message] = []
+        if system:
+            messages.append({"role": "system", "content": f"{system}\n\n{NO_EMOJI_SYSTEM_RULE}"})
+        else:
+            messages.append({"role": "system", "content": NO_EMOJI_SYSTEM_RULE})
+        messages.append({"role": "user", "content": prompt})
+        answer, response = chat_completion_stream_text(messages, config, on_text=_write_stream_text)
+        if answer:
+            print()
+        usage = response.get("usage")
+        if usage:
+            print(f"\nusage: {json.dumps(usage, ensure_ascii=False, sort_keys=True)}", file=sys.stderr)
+        return 0
     with status("正在请求模型"):
         if image_paths:
             answer, response = vision_chat_once(prompt, image_paths, system, config)
