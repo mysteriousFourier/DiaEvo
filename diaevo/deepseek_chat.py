@@ -244,12 +244,63 @@ def _stream_delta_text(event: dict[str, Any]) -> str:
     return ""
 
 
-def chat_completion_stream_text(
+def _delta_content_text(delta: dict[str, Any]) -> str:
+    content = delta.get("content")
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return "".join(str(item.get("text", "")) for item in content if isinstance(item, dict))
+    return ""
+
+
+def _merge_tool_call_delta(message: dict[str, Any], tool_call_delta: dict[str, Any]) -> None:
+    calls = message.setdefault("tool_calls", [])
+    if not isinstance(calls, list):
+        calls = []
+        message["tool_calls"] = calls
+    index = tool_call_delta.get("index")
+    if not isinstance(index, int):
+        index = len(calls)
+    while len(calls) <= index:
+        calls.append({"id": "", "type": "function", "function": {"name": "", "arguments": ""}})
+    target = calls[index]
+    if not isinstance(target, dict):
+        target = {"id": "", "type": "function", "function": {"name": "", "arguments": ""}}
+        calls[index] = target
+    if tool_call_delta.get("id"):
+        target["id"] = tool_call_delta["id"]
+    if tool_call_delta.get("type"):
+        target["type"] = tool_call_delta["type"]
+    function_delta = tool_call_delta.get("function")
+    if isinstance(function_delta, dict):
+        function = target.setdefault("function", {})
+        if not isinstance(function, dict):
+            function = {}
+            target["function"] = function
+        if function_delta.get("name"):
+            function["name"] = str(function.get("name") or "") + str(function_delta["name"])
+        if "arguments" in function_delta and function_delta["arguments"] is not None:
+            function["arguments"] = str(function.get("arguments") or "") + str(function_delta["arguments"])
+
+
+def _merge_function_call_delta(message: dict[str, Any], function_delta: dict[str, Any]) -> None:
+    function_call = message.setdefault("function_call", {"name": "", "arguments": ""})
+    if not isinstance(function_call, dict):
+        function_call = {"name": "", "arguments": ""}
+        message["function_call"] = function_call
+    if function_delta.get("name"):
+        function_call["name"] = str(function_call.get("name") or "") + str(function_delta["name"])
+    if "arguments" in function_delta and function_delta["arguments"] is not None:
+        function_call["arguments"] = str(function_call.get("arguments") or "") + str(function_delta["arguments"])
+
+
+def _streaming_payload(
     messages: list[Message],
     config: DeepSeekConfig,
     *,
-    on_text: Callable[[str], None] | None = None,
-) -> tuple[str, dict[str, Any]]:
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+) -> dict[str, Any]:
     payload: dict[str, Any] = {
         "model": config.model,
         "messages": messages,
@@ -257,10 +308,26 @@ def chat_completion_stream_text(
         "max_tokens": config.max_tokens,
         "temperature": config.temperature,
     }
+    if tools:
+        payload["tools"] = tools
+        payload["tool_choice"] = tool_choice or "auto"
     if config.reasoning_effort:
         payload["reasoning_effort"] = config.reasoning_effort
     if config.thinking:
         payload["thinking"] = {"type": config.thinking}
+    return payload
+
+
+def chat_completion_stream(
+    messages: list[Message],
+    config: DeepSeekConfig,
+    *,
+    tools: list[dict[str, Any]] | None = None,
+    tool_choice: str | dict[str, Any] | None = None,
+    on_text: Callable[[str], None] | None = None,
+    on_delta: Callable[[dict[str, Any]], None] | None = None,
+) -> dict[str, Any]:
+    payload = _streaming_payload(messages, config, tools=tools, tool_choice=tool_choice)
     request = urllib.request.Request(
         config.endpoint,
         data=json.dumps(payload, ensure_ascii=False).encode("utf-8"),
@@ -271,9 +338,12 @@ def chat_completion_stream_text(
         },
         method="POST",
     )
-    chunks: list[str] = []
+    response_id = ""
+    response_model = config.model
+    created = None
     finish_reason = None
     usage: dict[str, Any] | None = None
+    message: dict[str, Any] = {"role": "assistant", "content": ""}
     try:
         with urllib.request.urlopen(request, timeout=config.timeout) as response:
             for raw_line in response:
@@ -288,17 +358,36 @@ def chat_completion_stream_text(
                 event = json.loads(data)
                 if "error" in event:
                     raise RuntimeError(f"DeepSeek API error: {event['error']}")
+                if on_delta is not None:
+                    on_delta(event)
+                response_id = str(event.get("id") or response_id)
+                response_model = str(event.get("model") or response_model)
+                created = event.get("created", created)
                 if isinstance(event.get("usage"), dict):
                     usage = event["usage"]
                 choices = event.get("choices") or []
-                if choices and isinstance(choices[0], dict) and choices[0].get("finish_reason"):
-                    finish_reason = choices[0].get("finish_reason")
-                text = sanitize_no_emoji(_stream_delta_text(event))
-                if not text:
+                if not choices or not isinstance(choices[0], dict):
                     continue
-                chunks.append(text)
-                if on_text is not None:
-                    on_text(text)
+                first = choices[0]
+                if first.get("finish_reason"):
+                    finish_reason = first.get("finish_reason")
+                delta = first.get("delta")
+                if isinstance(delta, dict):
+                    if delta.get("role"):
+                        message["role"] = delta["role"]
+                    text = sanitize_no_emoji(_delta_content_text(delta))
+                    if text:
+                        message["content"] = str(message.get("content") or "") + text
+                        if on_text is not None:
+                            on_text(text)
+                    for tool_call in delta.get("tool_calls") or []:
+                        if isinstance(tool_call, dict):
+                            _merge_tool_call_delta(message, tool_call)
+                    if isinstance(delta.get("function_call"), dict):
+                        _merge_function_call_delta(message, delta["function_call"])
+                full_message = first.get("message")
+                if isinstance(full_message, dict):
+                    message.update(full_message)
     except (TimeoutError, socket.timeout) as exc:
         raise DeepSeekRequestTimeout(_timeout_message(config)) from exc
     except urllib.error.HTTPError as exc:
@@ -308,11 +397,35 @@ def chat_completion_stream_text(
         if isinstance(exc.reason, (TimeoutError, socket.timeout)):
             raise DeepSeekRequestTimeout(_timeout_message(config)) from exc
         raise RuntimeError(f"DeepSeek API request failed: {exc.reason}") from exc
-    answer = "".join(chunks)
-    response: dict[str, Any] = {"choices": [{"message": {"content": answer}, "finish_reason": finish_reason}]}
+    response_payload: dict[str, Any] = {
+        "choices": [{"message": message, "finish_reason": finish_reason}],
+    }
+    if response_id:
+        response_payload["id"] = response_id
+    if response_model:
+        response_payload["model"] = response_model
+    if created is not None:
+        response_payload["created"] = created
     if usage:
-        response["usage"] = usage
-    return answer, response
+        response_payload["usage"] = usage
+    return response_payload
+
+
+def chat_completion_stream_text(
+    messages: list[Message],
+    config: DeepSeekConfig,
+    *,
+    on_text: Callable[[str], None] | None = None,
+) -> tuple[str, dict[str, Any]]:
+    chunks: list[str] = []
+
+    def capture(text: str) -> None:
+        chunks.append(text)
+        if on_text is not None:
+            on_text(text)
+
+    response = chat_completion_stream(messages, config, on_text=capture)
+    return "".join(chunks), response
 
 
 def extract_assistant_text(response: dict[str, Any]) -> str:

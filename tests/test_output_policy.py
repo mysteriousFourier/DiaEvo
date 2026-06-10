@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import time
+
 from ui import prompt_bar
 from ui.cli_style import ANSI_RE
 from ui.interactive_shell import (
@@ -636,6 +638,40 @@ def test_tool_loop_continues_until_model_returns_text(monkeypatch) -> None:
     assert calls[-1]["tools"] is not None
 
 
+def test_model_request_stream_updates_status_line_without_printing_progress(monkeypatch) -> None:
+    from ui import interactive_shell
+    from diaevo.deepseek_chat import DeepSeekConfig
+
+    status_lines: list[str] = []
+    printed_status: list[str] = []
+
+    def fake_chat_completion_stream(messages, config, *, tools=None, tool_choice=None, on_text=None, on_delta=None):
+        event = {"choices": [{"delta": {"tool_calls": [{"index": 0, "function": {"name": "list_files"}}]}}]}
+        if on_delta is not None:
+            on_delta(event)
+        return {"choices": [{"message": {"content": "done"}}]}
+
+    monkeypatch.setattr(interactive_shell, "chat_completion_stream", fake_chat_completion_stream)
+    monkeypatch.setattr(interactive_shell.FLOW_INPUT, "update_status_line", lambda text: status_lines.append(text))
+    monkeypatch.setattr(interactive_shell.FLOW_INPUT, "set_status_line_renderer", lambda renderer: None)
+    monkeypatch.setattr(interactive_shell.FLOW_INPUT, "clear_status_line", lambda: status_lines.append(""))
+    monkeypatch.setattr(interactive_shell, "_print_status_flow", lambda text, **kwargs: printed_status.append(text))
+
+    state = ChatConfigState()
+    state.value = DeepSeekConfig(api_key="sk-test")
+    response = interactive_shell._chat_completion_interruptible(
+        [{"role": "user", "content": "long task"}],
+        state,
+        tools=[{"type": "function"}],
+        round_index=2,
+    )
+
+    assert response["choices"][0]["message"]["content"] == "done"
+    assert printed_status == []
+    assert any("正在请求模型" in item for item in status_lines)
+    assert any("第 3 轮" in item and "tool_delta=1" in item for item in status_lines)
+
+
 def test_tool_loop_sends_queued_input_after_tool_finishes(monkeypatch) -> None:
     from ui import interactive_shell
 
@@ -757,6 +793,31 @@ def test_flow_talk_starts_background_thread_without_main_history(monkeypatch) ->
     assert started == ["旁路问题"]
 
 
+def test_flow_talk_pump_drains_talk_without_waiting_for_main_turn(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    while not FLOW_INPUT_QUEUE.empty():
+        FLOW_INPUT_QUEUE.get_nowait()
+    started: list[str] = []
+
+    def fake_start(event, state, messages):
+        started.append(event.text)
+
+    monkeypatch.setattr(interactive_shell, "_start_contextual_talk_thread", fake_start)
+
+    state = ChatConfigState()
+    messages = [{"role": "user", "content": "main"}]
+    FLOW_INPUT_QUEUE.put(FlowInputEvent("旁路问题", talk=True))
+
+    with interactive_shell._flow_talk_pump(messages, state):
+        deadline = time.monotonic() + 1
+        while not started and time.monotonic() < deadline:
+            time.sleep(0.02)
+
+    assert started == ["旁路问题"]
+    assert FLOW_INPUT_QUEUE.empty()
+
+
 def test_talk_command_starts_background_thread(monkeypatch) -> None:
     from ui import interactive_shell
 
@@ -769,6 +830,44 @@ def test_talk_command_starts_background_thread(monkeypatch) -> None:
 
     assert keep_running is True
     assert started == ["快速解释一下"]
+
+
+def test_interrupted_turn_keeps_existing_messages_when_continuing(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    while not FLOW_INPUT_QUEUE.empty():
+        FLOW_INPUT_QUEUE.get_nowait()
+    messages = [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "old context"},
+        {"role": "user", "content": "current task"},
+        {"role": "assistant", "content": "partial context"},
+    ]
+    started_talk: list[tuple[str, str]] = []
+
+    monkeypatch.setattr(
+        interactive_shell,
+        "_start_talk_thread",
+        lambda text, state, **kwargs: started_talk.append((text, kwargs.get("context", ""))),
+    )
+    FLOW_INPUT_QUEUE.put(FlowInputEvent("旁路问题", talk=True))
+    FLOW_INPUT_QUEUE.put(FlowInputEvent("new requirement", interrupt=True))
+
+    appended = interactive_shell._append_interrupted_flow_inputs(
+        messages,
+        ChatConfigState(),
+        talk_context="saved context",
+    )
+
+    assert appended is True
+    assert started_talk == [("旁路问题", "saved context")]
+    assert messages == [
+        {"role": "system", "content": "system"},
+        {"role": "user", "content": "old context"},
+        {"role": "user", "content": "current task"},
+        {"role": "assistant", "content": "partial context"},
+        {"role": "user", "content": "new requirement"},
+    ]
 
 
 def test_help_hides_internal_pipeline_commands() -> None:

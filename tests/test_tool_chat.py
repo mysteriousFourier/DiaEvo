@@ -17,6 +17,7 @@ from diaevo.deepseek_chat import (
     DeepSeekRequestTimeout,
     NO_EMOJI_SYSTEM_RULE,
     chat_completion,
+    chat_completion_stream,
     chat_completion_stream_text,
     chat_once,
     image_file_to_data_url,
@@ -211,6 +212,54 @@ def test_chat_completion_stream_text_yields_chunks(monkeypatch) -> None:
     assert chunks == ["hello ", "world"]
     assert answer == "hello world"
     assert response["choices"][0]["finish_reason"] == "stop"
+
+
+def test_chat_completion_stream_reassembles_tool_call_deltas(monkeypatch) -> None:
+    captured = {}
+
+    class FakeResponse:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, exc_type, exc, tb):
+            return False
+
+        def __iter__(self):
+            return iter(
+                [
+                    b'data: {"id":"chatcmpl-1","choices":[{"delta":{"role":"assistant"}}]}\n\n',
+                    b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","type":"function","function":{"name":"list_"}}]}}]}\n\n',
+                    b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"name":"files","arguments":"{\\"path\\":\\"."}}]}}]}\n\n',
+                    b'data: {"choices":[{"delta":{"tool_calls":[{"index":0,"function":{"arguments":"\\"}"}}]},"finish_reason":"tool_calls"}]}\n\n',
+                    b"data: [DONE]\n\n",
+                ]
+            )
+
+    def fake_urlopen(request, timeout):
+        captured["payload"] = json.loads(request.data.decode("utf-8"))
+        return FakeResponse()
+
+    monkeypatch.setattr(urllib.request, "urlopen", fake_urlopen)
+    events = []
+
+    response = chat_completion_stream(
+        [{"role": "user", "content": "list files"}],
+        DeepSeekConfig(api_key="sk-test"),
+        tools=[{"type": "function", "function": {"name": "list_files", "parameters": {"type": "object"}}}],
+        on_delta=events.append,
+    )
+
+    message = response["choices"][0]["message"]
+    calls = requested_tool_calls(message)
+
+    assert captured["payload"]["stream"] is True
+    assert captured["payload"]["tools"]
+    assert response["id"] == "chatcmpl-1"
+    assert response["choices"][0]["finish_reason"] == "tool_calls"
+    assert len(events) == 4
+    assert calls[0].id == "call_1"
+    assert calls[0].name == "list_files"
+    assert calls[0].args == {"path": "."}
 
 
 def test_vision_config_defaults_to_glm_flash(monkeypatch) -> None:

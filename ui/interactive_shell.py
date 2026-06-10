@@ -3,7 +3,6 @@ from __future__ import annotations
 import getpass
 import asyncio
 import json
-import multiprocessing
 import os
 import queue
 import shlex
@@ -16,7 +15,9 @@ from typing import Callable
 
 from diaevo.cli import main as cli_main
 from diaevo.deepseek_chat import (
+    DeepSeekConfig,
     chat_completion,
+    chat_completion_stream,
     config_from_env,
     extract_assistant_text,
     vision_chat_once,
@@ -562,6 +563,28 @@ def _drain_flow_inputs() -> list[FlowInputEvent]:
     return FLOW_INPUT.drain()
 
 
+def _append_interrupted_flow_inputs(
+    messages: list[dict[str, object]],
+    chat_state: ChatConfigState,
+    *,
+    talk_context: str,
+) -> bool:
+    appended = False
+    for event in _drain_flow_inputs():
+        if event.talk and event.text:
+            _start_talk_thread(
+                event.text,
+                chat_state,
+                context=talk_context,
+                reply_to_user_id=event.reply_to_user_id,
+            )
+            continue
+        if event.text:
+            messages.append({"role": "user", "content": event.text})
+            appended = True
+    return appended
+
+
 def _start_contextual_talk_thread(
     event: FlowInputEvent,
     chat_state: ChatConfigState,
@@ -575,6 +598,24 @@ def _start_contextual_talk_thread(
 
 def _handle_flow_inputs(messages: list[dict[str, object]], chat_state: ChatConfigState) -> bool:
     return FLOW_INPUT.handle_queued(messages, lambda event: _start_contextual_talk_thread(event, chat_state, messages))
+
+
+@contextmanager
+def _flow_talk_pump(messages: list[dict[str, object]], chat_state: ChatConfigState) -> object:
+    stopped = threading.Event()
+
+    def pump() -> None:
+        while not stopped.wait(0.1):
+            FLOW_INPUT.handle_talk_queued(lambda event: _start_contextual_talk_thread(event, chat_state, messages))
+
+    thread = threading.Thread(target=pump, name="diaevo-talk-pump", daemon=True)
+    thread.start()
+    try:
+        yield
+    finally:
+        stopped.set()
+        thread.join(timeout=0.5)
+        FLOW_INPUT.handle_talk_queued(lambda event: _start_contextual_talk_thread(event, chat_state, messages))
 
 
 def _interrupted_tool_result(call: RequestedToolCall) -> dict[str, object]:
@@ -821,58 +862,76 @@ def _run(argv: list[str]) -> None:
         _print_status_flow(f"命令退出，状态码：{code}")
 
 
-def _model_request_worker(
-    output: "multiprocessing.Queue[dict[str, object]]",
-    messages: list[dict[str, object]],
-    config,
-    tools: list[dict[str, object]],
-) -> None:
-    try:
-        response = chat_completion(messages, config, tools=tools)
-    except BaseException as exc:
-        output.put({"status": "error", "error": repr(exc)})
-        return
-    output.put({"status": "ok", "response": response})
-
-
 def _chat_completion_interruptible(
     messages: list[dict[str, object]],
     chat_state: ChatConfigState,
     *,
     tools: list[dict[str, object]],
+    round_index: int = 0,
 ):
-    if msvcrt is None or not sys.stdin.isatty():
+    if not isinstance(chat_state.value, DeepSeekConfig):
         return chat_completion(messages, chat_state.value, tools=tools)
 
+    started_at = time.monotonic()
+    stats = {"events": 0, "text_chars": 0, "tool_deltas": 0}
+    stopped = threading.Event()
     FLOW_FORCE_TERMINATE_EVENT.clear()
-    output: "multiprocessing.Queue[dict[str, object]]" = multiprocessing.Queue(maxsize=1)
-    process = multiprocessing.Process(target=_model_request_worker, args=(output, messages, chat_state.value, tools))
-    process.start()
+
+    def progress_text() -> str:
+        elapsed = _fmt_elapsed_compact(int(time.monotonic() - started_at))
+        detail = f"stream={stats['events']}"
+        if stats["text_chars"]:
+            detail += f"，chars={stats['text_chars']}"
+        if stats["tool_deltas"]:
+            detail += f"，tool_delta={stats['tool_deltas']}"
+        return (
+            f"~ 正在请求模型 ({elapsed} • esc to interrupt) · "
+            f"第 {round_index + 1} 轮，messages={len(messages)}，tools={len(tools)}，{detail}"
+        )
+
+    def check_interrupt() -> None:
+        FLOW_INPUT.handle_talk_queued(lambda event: _start_contextual_talk_thread(event, chat_state, messages))
+        if FLOW_FORCE_TERMINATE_EVENT.is_set():
+            FLOW_FORCE_TERMINATE_EVENT.clear()
+            raise ModelTurnInterrupted("model request terminated")
+
+    def update_status() -> None:
+        FLOW_INPUT.update_status_line(progress_text())
+
+    def refresh_status() -> None:
+        while not stopped.wait(0.25):
+            check_interrupt()
+            update_status()
+
+    def on_delta(event: dict[str, object]) -> None:
+        stats["events"] += 1
+        choices = event.get("choices") if isinstance(event, dict) else None
+        if isinstance(choices, list) and choices and isinstance(choices[0], dict):
+            delta = choices[0].get("delta")
+            if isinstance(delta, dict):
+                tool_calls = delta.get("tool_calls")
+                if isinstance(tool_calls, list):
+                    stats["tool_deltas"] += len(tool_calls)
+        check_interrupt()
+        update_status()
+
+    def on_text(text: str) -> None:
+        stats["text_chars"] += len(text)
+        update_status()
+
+    FLOW_INPUT.set_status_line_renderer(progress_text)
+    update_status()
+    thread = threading.Thread(target=refresh_status, name="diaevo-model-stream-status", daemon=True)
+    thread.start()
     try:
-        while process.is_alive():
-            FLOW_INPUT.handle_talk_queued(lambda event: _start_contextual_talk_thread(event, chat_state, messages))
-            if FLOW_FORCE_TERMINATE_EVENT.is_set():
-                process.terminate()
-                process.join(timeout=2)
-                if process.is_alive():
-                    process.kill()
-                    process.join(timeout=2)
-                FLOW_FORCE_TERMINATE_EVENT.clear()
-                raise ModelTurnInterrupted("model request terminated")
-            time.sleep(0.05)
-        process.join()
-        try:
-            payload = output.get_nowait()
-        except queue.Empty as exc:
-            raise RuntimeError("model request process exited without a response") from exc
-        if payload.get("status") == "error":
-            raise RuntimeError(str(payload.get("error") or "model request failed"))
-        return payload["response"]
+        check_interrupt()
+        response = chat_completion_stream(messages, chat_state.value, tools=tools, on_text=on_text, on_delta=on_delta)
+        return response
     finally:
-        if process.is_alive():
-            process.terminate()
-            process.join(timeout=2)
-        output.close()
+        stopped.set()
+        thread.join(timeout=0.5)
+        FLOW_INPUT.set_status_line_renderer(None)
+        FLOW_INPUT.clear_status_line()
 
 
 def _set_env_command(
@@ -1359,44 +1418,44 @@ def _chat_turn_with_tools(messages: list[dict[str, object]], chat_state: ChatCon
     listener_enabled = _start_flow_input_listener()
     set_title_state("running")
     try:
-        while True:
-            _show_flow_prompt()
-            _handle_flow_inputs(messages, chat_state)
-            _print_turn_preamble(messages, round_index)
-            with _flow_status("正在请求模型"):
-                response = _chat_completion_interruptible(messages, chat_state, tools=tools)
-            message = extract_assistant_message(response)
-            calls = requested_tool_calls(message)
-            if not calls:
-                answer = extract_assistant_text(response)
-                messages.append({"role": "assistant", "content": answer})
-                return answer
-
-            messages.append(assistant_message_for_history(message))
-            content = str(message.get("content") or "").strip()
-            if content:
-                _print_assistant_flow(content)
-            if _handle_flow_inputs_before_pending_tool_calls(messages, chat_state, calls):
-                round_index += 1
-                continue
-            turn_id = str(response.get("id") or f"chat-turn-{round_index}")
-            interrupted = False
-            for call_index, call in enumerate(calls):
-                FLOW_INTERRUPT_EVENT.clear()
-                _print_tool_reason(call)
+        with _flow_talk_pump(messages, chat_state):
+            while True:
                 _show_flow_prompt()
-                result = _execute_model_tool_call(call, turn_id=turn_id, chat_state=chat_state)
-                messages.append(
-                    _tool_result_message_for_main_context(call, result, messages=messages, chat_state=chat_state)
-                )
-                interrupted = _handle_flow_inputs_before_pending_tool_calls(
-                    messages,
-                    chat_state,
-                    calls[call_index + 1 :],
-                )
-                if interrupted:
-                    break
-            round_index += 1
+                _handle_flow_inputs(messages, chat_state)
+                _print_turn_preamble(messages, round_index)
+                response = _chat_completion_interruptible(messages, chat_state, tools=tools, round_index=round_index)
+                message = extract_assistant_message(response)
+                calls = requested_tool_calls(message)
+                if not calls:
+                    answer = extract_assistant_text(response)
+                    messages.append({"role": "assistant", "content": answer})
+                    return answer
+
+                messages.append(assistant_message_for_history(message))
+                content = str(message.get("content") or "").strip()
+                if content:
+                    _print_assistant_flow(content)
+                if _handle_flow_inputs_before_pending_tool_calls(messages, chat_state, calls):
+                    round_index += 1
+                    continue
+                turn_id = str(response.get("id") or f"chat-turn-{round_index}")
+                interrupted = False
+                for call_index, call in enumerate(calls):
+                    FLOW_INTERRUPT_EVENT.clear()
+                    _print_tool_reason(call)
+                    _show_flow_prompt()
+                    result = _execute_model_tool_call(call, turn_id=turn_id, chat_state=chat_state)
+                    messages.append(
+                        _tool_result_message_for_main_context(call, result, messages=messages, chat_state=chat_state)
+                    )
+                    interrupted = _handle_flow_inputs_before_pending_tool_calls(
+                        messages,
+                        chat_state,
+                        calls[call_index + 1 :],
+                    )
+                    if interrupted:
+                        break
+                round_index += 1
     finally:
         _stop_flow_input_listener(listener_enabled)
         set_title_state("completed")
@@ -1530,22 +1589,20 @@ def main() -> int:
         except ModelTurnInterrupted:
             _print_status_flow("当前任务已中断")
             interrupted_talk_context = _talk_context_snapshot(messages)
-            del messages[history_len:]
-            drained = _drain_flow_inputs()
-            for event in drained:
-                if event.talk and event.text:
-                    _start_talk_thread(
-                        event.text,
-                        chat_state,
-                        context=interrupted_talk_context,
-                        reply_to_user_id=event.reply_to_user_id,
-                    )
+            if _append_interrupted_flow_inputs(messages, chat_state, talk_context=interrupted_talk_context):
+                try:
+                    answer = _chat_turn_with_tools(messages, chat_state)
+                except ModelTurnInterrupted:
                     continue
-                if event.text and pending_command is None:
-                    pending_command = event.text
+                except Exception as exc:
+                    print(f"chat error: {exc}")
+                    continue
+                if answer:
+                    _print_assistant_flow(answer)
             continue
         except Exception as exc:
             print(f"chat error: {exc}")
             del messages[history_len:]
             continue
-        _print_assistant_flow(answer)
+        if answer:
+            _print_assistant_flow(answer)
