@@ -259,3 +259,38 @@ def test_home_workspace_and_title_stay_inside_card_content() -> None:
     assert title_index == workspace_index + 1
     assert not lines[workspace_index].lstrip().startswith(str(cli_style.WORKSPACE_ROOT))
     assert not lines[title_index].lstrip().startswith("DiaEvo")
+
+
+def test_trust_dialog_choice_can_use_arrow_keys(monkeypatch) -> None:
+    class FakeStdout:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+
+        def write(self, value: str) -> int:
+            self.writes.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+    class FakeStdin:
+        def isatty(self) -> bool:
+            return True
+
+    class FakeMsvcrt:
+        def __init__(self) -> None:
+            self.chars = iter(["\xe0", "P", "\r"])
+
+        def getwch(self) -> str:
+            return next(self.chars)
+
+    fake_stdout = FakeStdout()
+    monkeypatch.setattr(cli_style.sys, "stdout", fake_stdout)
+    monkeypatch.setattr(cli_style.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(cli_style, "msvcrt", FakeMsvcrt())
+
+    assert cli_style._read_trust_dialog_choice() == "2"
+
+    writes = "".join(fake_stdout.writes)
+    assert "❯ 2. 否，退出" in cli_style.ANSI_RE.sub("", writes)
+    assert "上下键选择" in writes

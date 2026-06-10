@@ -41,8 +41,8 @@ generate --with-code
 ```text
 traces + tool_events + web_search/web_fetch + 可选 conversation log
   -> 待审核 KG 候选
-  -> 已审核 active KG
-  -> 可编辑 KG workbench
+  -> 已审核 active KG + 多领域 KG registry/domains
+  -> 可编辑 KG workbench（总体或指定领域）
   -> 可选 /kg_answer on 或 answer-kg --strict
 ```
 
@@ -111,9 +111,11 @@ diaevo promote --queue-id <id> --approve
 diaevo adapt-skill --source path\to\external-skill
 diaevo kg
 diaevo kg --no-open --port 8910
+diaevo kg --domain domain:testing
 diaevo export-kg-snapshot --date 260513
 diaevo kg --apply-edit path\to\DiaEvo_kg_edit_260513.json --approve
 diaevo answer-kg --query "which tools support pytest traces?" --strict
+diaevo answer-kg --domain domain:testing --query "which tools support pytest traces?" --strict
 diaevo feedback
 diaevo evaluate --variant evolved --top-k 3
 diaevo evaluate-gepa --cluster-id <cluster-id> --budget 50 --top-k 3
@@ -190,9 +192,9 @@ diaevo
 | 沙盒校验 | `validate` 在用户 `--approve` 后，把候选复制到 `.tmp/validation-runs/<id>/workspace` 一次性沙盒中执行 `validation.json` 命令，记录 stdout/stderr/exit code/duration/touched files/diff，并把脚本 validation 摘要写回 `code_artifacts.json`。 |
 | 脚本审查 | `review-script` 显式标注 helper 脚本为 `pending`、`approved` 或 `rejected`；脚本未 approved 时，skill 仍可按 `SKILL.md` 回退使用。 |
 | 晋升治理 | `queue-promotion`、`label-promotion`、`rewrite-promotion`、`review-script` 和 `promote --approve` 组成显式人工审核链，只更新本地注册表，不自动安装外部技能。 |
-| 知识图谱治理 | `build-kg-delta`、`review-kg-delta`、`apply-kg-delta` 是隐藏底层命令；accepted 实体、三元组、声明和证据路径写入 `data/knowledge_graph/current/`。 |
-| 可编辑总体 KG | `kg` / `/kg` 绑定本地端口并自动打开 active KG 的总体可视化 URL，默认不生成日期快照；只有显式 `export-kg-snapshot` 或 `kg --output-dir ...` 才导出快照。 |
-| 严格 KG 回答 | 交互式终端可用 `/kg_answer on` 进入图谱约束回答模式，`/kg_answer off` 退出；CLI 可用 `answer-kg --strict`，工具层可手动调用 `kg_answer(strict=true)`。 |
+| 知识图谱治理 | `build-kg-delta`、`review-kg-delta`、`apply-kg-delta` 是隐藏底层命令；accepted 实体、三元组、声明和证据路径写入 `data/knowledge_graph/current/`，conversation 候选会用本地 TF-IDF 分类沉淀到多个领域图谱。 |
+| 可编辑 KG | `kg` / `/kg` 绑定本地端口并自动打开 active KG 的总体可视化 URL，`kg --domain <domain-id>` 打开指定领域图谱；默认不生成日期快照。 |
+| 严格 KG 回答 | 交互式终端可用 `/kg_answer on` 进入图谱约束回答模式，`/kg_answer off` 退出；CLI 可用 `answer-kg --strict`，`answer-kg --domain <domain-id>` 只检索指定领域，工具层可手动调用 `kg_answer(strict=true, domain="...")`。 |
 | 图结构向量检索 | accepted KG 节点、三元组和声明会转换成可检索文档；默认使用可复现 TF-IDF，`answer-kg --vector-backend dense` 使用 `sentence-transformers` dense embedding 召回种子，再扩展图证据子图。默认 HF 镜像是 `https://hf-mirror.com`。 |
 | 评估报告 | `evaluate`、`evaluate-gepa`、`evaluate-gepa-phase4` 输出 baseline/evolved、held-out、重复率、安全 holdout、人工反馈记忆和 GEPA 对比报告。 |
 | Phase 7 代码演化研究 | `evaluate-code-evolution` 默认只生成 patch strategy；`--collect-baseline` 在沙盒中收集失败/通过测试证据；提供 patch 时只在沙盒中应用和验证，不直接改真实工作区。 |
@@ -210,6 +212,8 @@ diaevo
 | `outputs/candidate_skills/<cluster>/code_artifacts.json` | code-backed skill 的脚本入口、审查状态、validation 摘要和回退策略。 |
 | `data/mining_snapshots/YYMMDD/` | 可读挖掘快照。 |
 | `data/knowledge_graph/current/` | 已审核 active KG 和总体可编辑 HTML 工作台；`kg` 会通过本地 `127.0.0.1` URL 打开它。 |
+| `data/knowledge_graph/domain_registry.jsonl` | 已审核 conversation 沉淀出的领域索引，记录领域名、关键词、来源和 fact 数。 |
+| `data/knowledge_graph/domains/<domain>/` | 指定领域的已审核 KG 分区；`kg --domain` 和 `answer-kg --domain` 会读取这里。 |
 | `data/knowledge_graph/YYMMDD/` | 显式导出的知识图谱快照。 |
 | `.diaevo/tool_events.jsonl` | 本地工具事件日志，默认不提交。 |
 | `outputs/reports/*.json` | ingest、mining、recommendation、validation、promotion、evolution、evaluation 报告。 |

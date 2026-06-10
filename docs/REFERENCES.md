@@ -36,26 +36,20 @@
 
 [18] LiteLLM. LiteLLM Documentation and Python package metadata[EB/OL]. [2026-05-13]. https://docs.litellm.ai/; https://pypi.org/project/litellm/.
 
-[19] DeepSeek-AI. DeepSeek-R1 README and model notes[CP/OL]. GitHub, 2025[2026-05-13]. https://github.com/deepseek-ai/DeepSeek-R1.
+[19] AGRAWAL Lakshya A., TAN Shangyin, SOYLU Dilara, et al. GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning[J/OL]. arXiv:2507.19457v2, 2026-02-14[2026-05-14]. DOI:10.48550/arXiv.2507.19457. https://arxiv.org/abs/2507.19457.
 
-[20] DeepSeek-AI. DeepSeek-V3 README and benchmark notes[CP/OL]. GitHub, 2025[2026-05-13]. https://github.com/deepseek-ai/DeepSeek-V3.
+[20] ZEHLE Tom, SCHLAGER Moritz, HEISS Timo, FEURER Matthias. CAPO: Cost-Aware Prompt Optimization[C/OL]//Proceedings of the Fourth International Conference on Automated Machine Learning. PMLR, 2025, 293:18/1-45[2026-05-14]. https://proceedings.mlr.press/v293/zehle25a.html.
 
-[21] AGRAWAL Lakshya A., TAN Shangyin, SOYLU Dilara, et al. GEPA: Reflective Prompt Evolution Can Outperform Reinforcement Learning[J/OL]. arXiv:2507.19457v2, 2026-02-14[2026-05-14]. DOI:10.48550/arXiv.2507.19457. https://arxiv.org/abs/2507.19457.
+[21] LIANG Guanbao, BEI Yuanchen, ZHOU Sheng, et al. Generalizable Self-Evolving Memory for Automatic Prompt Optimization[J/OL]. arXiv:2603.21520v1, 2026-03-23[2026-05-14]. DOI:10.48550/arXiv.2603.21520. https://arxiv.org/abs/2603.21520.
 
-[22] ZEHLE Tom, SCHLAGER Moritz, HEISS Timo, FEURER Matthias. CAPO: Cost-Aware Prompt Optimization[C/OL]//Proceedings of the Fourth International Conference on Automated Machine Learning. PMLR, 2025, 293:18/1-45[2026-05-14]. https://proceedings.mlr.press/v293/zehle25a.html.
+[22] ZHAO ChenZhuo, LIU Ziqian, WANG Xinda, LU Junting, RUAN Chaoyi. PMPO: Probabilistic Metric Prompt Optimization for Small and Large Language Models[C/OL]//Findings of the Association for Computational Linguistics: EMNLP 2025. Suzhou: ACL, 2025-11:14728-14761[2026-05-14]. DOI:10.18653/v1/2025.findings-emnlp.795. https://aclanthology.org/2025.findings-emnlp.795/.
 
-[23] LIANG Guanbao, BEI Yuanchen, ZHOU Sheng, et al. Generalizable Self-Evolving Memory for Automatic Prompt Optimization[J/OL]. arXiv:2603.21520v1, 2026-03-23[2026-05-14]. DOI:10.48550/arXiv.2603.21520. https://arxiv.org/abs/2603.21520.
+[23] HUANG Qian, et al. A Self-Improving Coding Agent[J/OL]. arXiv:2504.15228, 2025[2026-05-15]. https://arxiv.org/abs/2504.15228.
 
-[24] ZHAO ChenZhuo, LIU Ziqian, WANG Xinda, LU Junting, RUAN Chaoyi. PMPO: Probabilistic Metric Prompt Optimization for Small and Large Language Models[C/OL]//Findings of the Association for Computational Linguistics: EMNLP 2025. Suzhou: ACL, 2025-11:14728-14761[2026-05-14]. DOI:10.18653/v1/2025.findings-emnlp.795. https://aclanthology.org/2025.findings-emnlp.795/.
+[24] KUMAR Aviral, et al. Iterative Self-Repair for Code Generation[J/OL]. arXiv:2604.10508, 2026[2026-05-15]. https://arxiv.org/abs/2604.10508.
 
-[25] HUANG Qian, et al. A Self-Improving Coding Agent[J/OL]. arXiv:2504.15228, 2025[2026-05-15]. https://arxiv.org/abs/2504.15228.
+[25] SecureVibeBench contributors. SecureVibeBench: Evaluating Security of AI Coding Agents[J/OL]. arXiv:2509.22097, 2025[2026-05-15]. https://arxiv.org/abs/2509.22097.
 
-[26] KUMAR Aviral, et al. Iterative Self-Repair for Code Generation[J/OL]. arXiv:2604.10508, 2026[2026-05-15]. https://arxiv.org/abs/2604.10508.
+[26] SmellBench contributors. SmellBench: Evaluating LLM Agents on Architectural Smell Refactoring[J/OL]. arXiv:2605.07001, 2026[2026-05-15]. https://arxiv.org/abs/2605.07001.
 
-[27] SecureVibeBench contributors. SecureVibeBench: Evaluating Security of AI Coding Agents[J/OL]. arXiv:2509.22097, 2025[2026-05-15]. https://arxiv.org/abs/2509.22097.
-
-[28] SmellBench contributors. SmellBench: Evaluating LLM Agents on Architectural Smell Refactoring[J/OL]. arXiv:2605.07001, 2026[2026-05-15]. https://arxiv.org/abs/2605.07001.
-
-[29] trycua. CUA: Computer-Use Agent sandbox and SDK[CP/OL]. GitHub, 2026[2026-05-15]. https://github.com/trycua/cua.
-
-[30] Sandrun. Sandrun sandbox benchmark and execution environment comparison[EB/OL]. 2026[2026-05-15]. https://sandrun.dev/.
+[27] trycua. CUA: Computer-Use Agent sandbox and SDK[CP/OL]. GitHub, 2026[2026-05-15]. https://github.com/trycua/cua.

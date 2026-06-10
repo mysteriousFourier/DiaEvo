@@ -1193,6 +1193,7 @@ def _kg_answer(args: dict[str, Any], approved: bool) -> dict[str, Any]:
     include_pending = bool(args.get("include_pending", False))
     max_paths = max(1, min(int(args.get("max_paths") or 5), 20))
     current_dir = args.get("current_dir") or None
+    domain = args.get("domain") or None
     queue_path = args.get("queue_path") or None
     vector_backend = args.get("vector_backend") or None
     embedding_model = args.get("embedding_model") or None
@@ -1202,6 +1203,7 @@ def _kg_answer(args: dict[str, Any], approved: bool) -> dict[str, Any]:
         strict=strict,
         include_pending=include_pending,
         current_dir=current_dir,
+        domain=domain,
         queue_path=queue_path,
         max_paths=max_paths,
         vector_backend=vector_backend,
@@ -1469,6 +1471,7 @@ _register(
                 "include_pending": {"type": "boolean", "default": False},
                 "max_paths": {"type": "integer", "default": 5},
                 "current_dir": {"type": "string", "default": ""},
+                "domain": {"type": "string", "default": ""},
                 "queue_path": {"type": "string", "default": ""},
                 "vector_backend": {"type": "string", "enum": ["auto", "dense", "tfidf"], "default": "auto"},
                 "embedding_model": {"type": "string", "default": ""},

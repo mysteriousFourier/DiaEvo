@@ -17,6 +17,7 @@ __pycache__/
 QQ.exe
 docs/FINAL_PROJECT_REPORT.md
 docs/HANDOFF*.md
+docs/presentation/
 data/processed_traces.jsonl
 data/evolution_memory.json
 data/knowledge_graph/current/graph_visualization.html

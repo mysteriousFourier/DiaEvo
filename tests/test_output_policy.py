@@ -16,7 +16,7 @@ from ui.interactive_shell import (
 from ui.action_report import build_turn_report
 from ui.flow_input import FlowInputController
 from diaevo.tool_chat import RequestedToolCall
-from ui.output_policy import render_assistant_text, sanitize_no_emoji, strip_markdown
+from ui.output_policy import print_assistant, render_assistant_text, sanitize_no_emoji, strip_markdown
 from ui.progress import status
 from ui.tool_render import render_tool_result
 
@@ -52,6 +52,16 @@ def test_render_assistant_text_plain_removes_markdown_and_emoji() -> None:
     rendered = render_assistant_text("## Done ✅\n- **Run tests**", mode="plain")
 
     assert rendered == "Done\nRun tests"
+
+
+def test_print_assistant_rich_uses_connected_horizontal_rule(monkeypatch, capsys) -> None:
+    monkeypatch.setattr("ui.output_policy.sys.stdout.isatty", lambda: True)
+
+    print_assistant("# 标题\n\n---", mode="terminal")
+
+    rendered = capsys.readouterr().out
+    assert "─" in rendered
+    assert "--------------------------------" not in rendered
 
 
 def test_tool_result_rendering_removes_emoji() -> None:
@@ -584,6 +594,106 @@ def test_qq_text_reply_is_consumed_by_transient_text_when_raw_disabled(monkeypat
     FLOW_INPUT_QUEUE.put(FlowInputEvent("改成只读方案", interrupt=True, source="QQ"))
 
     assert interactive_shell._read_transient_text("换方案：") == "改成只读方案"
+
+
+def test_transient_menu_choice_can_use_arrow_keys(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    class FakeStdout:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+
+        def write(self, value: str) -> int:
+            self.writes.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+    class FakeStdin:
+        def isatty(self) -> bool:
+            return True
+
+    class FakeMsvcrt:
+        def __init__(self) -> None:
+            self.chars = iter(["\xe0", "P", "\r"])
+
+        def kbhit(self) -> bool:
+            return True
+
+        def getwch(self) -> str:
+            return next(self.chars)
+
+    fake_stdout = FakeStdout()
+    monkeypatch.setattr(interactive_shell.sys, "stdout", fake_stdout)
+    monkeypatch.setattr(interactive_shell.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(interactive_shell, "msvcrt", FakeMsvcrt())
+    monkeypatch.setattr(interactive_shell, "_qq_send", lambda *args, **kwargs: None)
+
+    value = interactive_shell._read_transient_menu_choice(
+        "确认  run_shell 需要授权",
+        interactive_shell._approval_options(),
+        default_value="3",
+    )
+
+    writes = "".join(fake_stdout.writes)
+    assert value == "\t"
+    assert "让模型换方案" in writes
+    assert "上下键选择" in writes
+
+
+def test_transient_menu_choice_accepts_tab_shortcut() -> None:
+    from ui import interactive_shell
+
+    assert (
+        interactive_shell._transient_menu_value_from_text("\t", interactive_shell._approval_options(), default_value="3")
+        == "\t"
+    )
+
+
+def test_transient_multi_choice_uses_arrows_and_space(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    class FakeStdout:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+
+        def write(self, value: str) -> int:
+            self.writes.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+    class FakeStdin:
+        def isatty(self) -> bool:
+            return True
+
+    class FakeMsvcrt:
+        def __init__(self) -> None:
+            self.chars = iter(["\xe0", "P", " ", "\r"])
+
+        def kbhit(self) -> bool:
+            return True
+
+        def getwch(self) -> str:
+            return next(self.chars)
+
+    fake_stdout = FakeStdout()
+    options = [
+        interactive_shell.TransientChoiceOption("1", "alpha"),
+        interactive_shell.TransientChoiceOption("2", "beta"),
+    ]
+    monkeypatch.setattr(interactive_shell.sys, "stdout", fake_stdout)
+    monkeypatch.setattr(interactive_shell.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(interactive_shell, "msvcrt", FakeMsvcrt())
+    monkeypatch.setattr(interactive_shell, "_qq_send", lambda *args, **kwargs: None)
+
+    assert interactive_shell._read_transient_multi_choice("选择 skill", options) == ["2"]
+
+    writes = "".join(fake_stdout.writes)
+    assert "[x] 2. beta" in writes
+    assert "空格勾选" in writes
 
 
 def test_chat_config_state_tracks_session_tool_approvals() -> None:

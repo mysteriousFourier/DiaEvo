@@ -96,6 +96,35 @@ def _sample_tool_events_path(tmp_path):
     return events
 
 
+def _empty_tool_events_path(tmp_path):
+    events = tmp_path / "empty_tool_events.jsonl"
+    _write_jsonl(events, [])
+    return events
+
+
+def _conversation_path(tmp_path, name, messages):
+    path = tmp_path / f"{name}.jsonl"
+    _write_jsonl(
+        path,
+        [
+            {
+                "id": f"{name}-{index}",
+                "role": role,
+                "content": content,
+                "created_at": f"2026-05-13T00:00:0{index}+00:00",
+            }
+            for index, (role, content) in enumerate(messages, start=1)
+        ],
+    )
+    return path
+
+
+def _accept_pending_domain_items(queue, domain_id):
+    for entry in read_jsonl(queue):
+        if entry.get("status") == "pending" and entry.get("primary_domain_id") == domain_id:
+            review_kg_delta(entry["review_id"], status="accepted", queue_path=queue)
+
+
 class _FakeSentenceTransformer:
     def __init__(self, model_name):
         self.model_name = model_name
@@ -221,6 +250,104 @@ def test_graph_vector_search_returns_seed_hits_and_graph_expansion(tmp_path):
     assert result["subgraph"]["triples"]
     predicates = {item["predicate"] for item in result["subgraph"]["triples"]}
     assert "USES_TOOL" in predicates or "DESCRIBES_TASK" in predicates
+
+
+def test_conversation_kg_accumulates_into_domain_graphs_and_filters_answers(tmp_path):
+    queue = tmp_path / "review_queue.jsonl"
+    current = tmp_path / "current"
+    trace_path = _sample_trace_path(tmp_path)
+    tool_events = _empty_tool_events_path(tmp_path)
+
+    first = build_kg_delta(
+        traces_path=trace_path,
+        tool_events_path=tool_events,
+        conversation_path=_conversation_path(
+            tmp_path,
+            "conv_pytest_a",
+            [("user", "Repair pytest fixture failures and add CLI regression tests for Python command parsing.")],
+        ),
+        include_mining=False,
+        queue_path=queue,
+        current_dir=current,
+        delta_dir=tmp_path / "deltas",
+    )
+    pytest_domain = first["domains"][0]["id"]
+    _accept_pending_domain_items(queue, pytest_domain)
+    applied_first = apply_kg_delta(queue_path=queue, current_dir=current)
+
+    assert applied_first["touched_domains"] == [pytest_domain]
+    registry = read_jsonl(tmp_path / "domain_registry.jsonl")
+    assert [item["id"] for item in registry] == [pytest_domain]
+
+    second = build_kg_delta(
+        traces_path=trace_path,
+        tool_events_path=tool_events,
+        conversation_path=_conversation_path(
+            tmp_path,
+            "conv_pytest_b",
+            [("user", "Add pytest coverage for CLI parser errors and fixture setup regression cases.")],
+        ),
+        include_mining=False,
+        queue_path=queue,
+        current_dir=current,
+        delta_dir=tmp_path / "deltas",
+    )
+    assert second["domains"][0]["id"] == pytest_domain
+    _accept_pending_domain_items(queue, pytest_domain)
+    apply_kg_delta(queue_path=queue, current_dir=current)
+    assert [item["id"] for item in read_jsonl(tmp_path / "domain_registry.jsonl")] == [pytest_domain]
+
+    third = build_kg_delta(
+        traces_path=trace_path,
+        tool_events_path=tool_events,
+        conversation_path=_conversation_path(
+            tmp_path,
+            "conv_portfolio",
+            [("user", "Design a photography portfolio gallery with responsive image curation and visual layout.")],
+        ),
+        include_mining=False,
+        queue_path=queue,
+        current_dir=current,
+        delta_dir=tmp_path / "deltas",
+    )
+    portfolio_domain = third["domains"][0]["id"]
+    assert portfolio_domain != pytest_domain
+    _accept_pending_domain_items(queue, portfolio_domain)
+    apply_kg_delta(queue_path=queue, current_dir=current)
+
+    registry = read_jsonl(tmp_path / "domain_registry.jsonl")
+    assert {item["id"] for item in registry} == {pytest_domain, portfolio_domain}
+    pytest_dir = tmp_path / "domains" / pytest_domain.split(":", 1)[1]
+    portfolio_dir = tmp_path / "domains" / portfolio_domain.split(":", 1)[1]
+    assert pytest_dir.exists()
+    assert portfolio_dir.exists()
+    assert len(read_jsonl(pytest_dir / "claims.jsonl")) >= 2
+    assert len(read_jsonl(portfolio_dir / "claims.jsonl")) >= 1
+
+    pytest_answer = answer_kg("fixture regression pytest CLI parser", current_dir=current, domain=pytest_domain, strict=True)
+    assert pytest_answer["status"] == "ok"
+    assert pytest_answer["domain"] == pytest_domain
+    assert pytest_answer["retrieval"]["current_dir"] == str(pytest_dir)
+
+    isolated = answer_kg("fixture regression pytest CLI parser", current_dir=current, domain=portfolio_domain, strict=True)
+    assert isolated["status"] == "insufficient"
+
+    opened = kg_workbench(
+        current_dir=current,
+        domain=pytest_domain,
+        open_browser=False,
+        server_starter=lambda root, relative_path, *, port=None: {
+            "url": "http://127.0.0.1:8765/graph_visualization.html",
+            "host": "127.0.0.1",
+            "port": 8765,
+            "server_pid": 789,
+            "server_ready": True,
+            "served_dir": str(root),
+        },
+    )
+    assert opened["current_dir"] == str(pytest_dir)
+    assert opened["domain"] == pytest_domain
+    assert "领域 KG" in opened["message"]
 
 
 def test_dense_graph_vector_search_uses_embedding_backend_and_hf_mirror(tmp_path, monkeypatch):
@@ -503,6 +630,9 @@ def test_cli_accepts_kg_commands_and_tool_schema_exposes_switch():
     args = build_parser().parse_args(["answer-kg", "--query", "pytest tools", "--strict"])
     assert args.strict is True
 
+    args = build_parser().parse_args(["answer-kg", "--query", "pytest tools", "--domain", "domain:testing"])
+    assert args.domain == "domain:testing"
+
     args = build_parser().parse_args(["review-kg-delta", "--review-id", "triple:abc", "--status", "needs_source"])
     assert args.command == "review-kg-delta"
     assert args.status == "needs_source"
@@ -511,9 +641,10 @@ def test_cli_accepts_kg_commands_and_tool_schema_exposes_switch():
     assert args.command == "visualize-kg"
     assert args.date == "260513"
 
-    args = build_parser().parse_args(["kg", "--date", "260513"])
+    args = build_parser().parse_args(["kg", "--date", "260513", "--domain", "domain:testing"])
     assert args.command == "kg"
     assert args.date == "260513"
+    assert args.domain == "domain:testing"
     assert args.no_open is False
 
     args = build_parser().parse_args(["kg", "--port", "8910", "--no-open"])
@@ -528,6 +659,7 @@ def test_cli_accepts_kg_commands_and_tool_schema_exposes_switch():
     schemas = {item["name"]: item for item in tool_schemas()}
     assert schemas["kg_answer"]["read_only"] is True
     assert schemas["kg_answer"]["approval_required"] is False
+    assert "domain" in schemas["kg_answer"]["input_schema"]["properties"]
     chat_names = {item["function"]["name"] for item in chat_tool_schemas()}
     assert "kg_answer" not in chat_names
 

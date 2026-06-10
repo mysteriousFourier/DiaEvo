@@ -6,7 +6,7 @@ SUBTITLE = "Self-evolving Agent Skill Mining"
 
 COLORS = {
     "primary": "cyan",
-    "accent": "magenta",
+    "accent": "bright_blue",
     "ok": "green",
     "warn": "yellow",
     "danger": "red",

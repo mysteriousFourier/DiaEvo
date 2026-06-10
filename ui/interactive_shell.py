@@ -46,7 +46,7 @@ from diaevo.tool_chat import (
 )
 
 from .action_report import active_skill_names, build_turn_report, short_value, tool_reason
-from .cli_style import DIM, RESET, maybe_show_trust_dialog
+from .cli_style import ANSI_RE, CYAN, DIM, GLYPHS, RESET, maybe_show_trust_dialog
 from .flow_input import FlowInputController, FlowInputEvent, msvcrt
 from .output_policy import print_assistant, print_status
 from .prompt_bar import _erase_lines, is_command_input, read_prompt
@@ -120,6 +120,13 @@ RAW_INPUT_ENV_VALUES = {"1", "true", "yes", "on"}
 class ApprovalDecision:
     action: str
     feedback: str = ""
+
+
+@dataclass(frozen=True)
+class TransientChoiceOption:
+    value: str
+    label: str
+    aliases: tuple[str, ...] = ()
 
 
 class ModelTurnInterrupted(RuntimeError):
@@ -1193,6 +1200,169 @@ def _read_transient_choice(
                 return char
 
 
+def _read_transient_menu_choice(
+    title: str,
+    options: list[TransientChoiceOption],
+    *,
+    default_value: str = "",
+    send_to_qq: bool = True,
+) -> str:
+    if not options:
+        return default_value
+
+    selected_index = _transient_default_index(options, default_value)
+    rendered = _render_transient_choice_menu(title, options, selected_index, default_value=default_value)
+    if send_to_qq:
+        _qq_send(_plain_transient_prompt(rendered))
+
+    if not _should_poll_transient_menu_input():
+        print(rendered)
+        while True:
+            raw = input("选择：").strip()
+            if not raw and default_value:
+                return default_value
+            value = _transient_menu_value_from_text(raw, options, default_value=default_value)
+            if value:
+                return value
+            print("请输入有效选项。")
+
+    with _pause_flow_input():
+        rendered_lines = 0
+
+        def redraw() -> None:
+            nonlocal rendered_lines
+            if rendered_lines:
+                _erase_lines(rendered_lines)
+            menu = _render_transient_choice_menu(title, options, selected_index, default_value=default_value)
+            rendered_lines = menu.count("\n") + 1
+            sys.stdout.write(menu)
+            sys.stdout.flush()
+
+        def finish(value: str) -> str:
+            if rendered_lines:
+                _erase_lines(rendered_lines)
+            sys.stdout.flush()
+            return value
+
+        redraw()
+        while True:
+            queued = _read_qq_transient_text()
+            if queued:
+                value = _transient_menu_value_from_text(queued, options, default_value=default_value)
+                if value:
+                    return finish(value)
+            if not msvcrt.kbhit():
+                time.sleep(0.05)
+                continue
+            char = msvcrt.getwch()
+            if char == "\003":
+                continue
+            if char == "\x1b":
+                if default_value:
+                    return finish(default_value)
+                continue
+            if char in {"\x00", "\xe0"}:
+                key = msvcrt.getwch()
+                if key == "H":
+                    selected_index = (selected_index - 1) % len(options)
+                    redraw()
+                elif key == "P":
+                    selected_index = (selected_index + 1) % len(options)
+                    redraw()
+                continue
+            if char in {"\r", "\n"}:
+                return finish(options[selected_index].value)
+            value = _transient_menu_value_from_text(char, options, default_value=default_value)
+            if value:
+                return finish(value)
+
+
+def _read_transient_multi_choice(
+    title: str,
+    options: list[TransientChoiceOption],
+    *,
+    send_to_qq: bool = True,
+) -> list[str]:
+    if not options:
+        return []
+
+    selected_index = 0
+    selected_values: set[str] = set()
+    rendered = _render_transient_multi_choice_menu(title, options, selected_index, selected_values)
+    if send_to_qq:
+        _qq_send(_plain_transient_prompt(rendered))
+
+    if not _should_poll_transient_menu_input():
+        print(rendered)
+        raw = input("选择编号（可用逗号分隔，回车跳过）：").strip()
+        return [options[index].value for index in _parse_transient_indices(raw, len(options))]
+
+    with _pause_flow_input():
+        rendered_lines = 0
+
+        def redraw() -> None:
+            nonlocal rendered_lines
+            if rendered_lines:
+                _erase_lines(rendered_lines)
+            menu = _render_transient_multi_choice_menu(title, options, selected_index, selected_values)
+            rendered_lines = menu.count("\n") + 1
+            sys.stdout.write(menu)
+            sys.stdout.flush()
+
+        def finish() -> list[str]:
+            if rendered_lines:
+                _erase_lines(rendered_lines)
+            sys.stdout.flush()
+            return [option.value for option in options if option.value in selected_values]
+
+        redraw()
+        while True:
+            queued = _read_qq_transient_text()
+            if queued:
+                values = [options[index].value for index in _parse_transient_indices(queued, len(options))]
+                if rendered_lines:
+                    _erase_lines(rendered_lines)
+                sys.stdout.flush()
+                return values
+            if not msvcrt.kbhit():
+                time.sleep(0.05)
+                continue
+            char = msvcrt.getwch()
+            if char == "\003":
+                continue
+            if char == "\x1b":
+                selected_values.clear()
+                return finish()
+            if char in {"\x00", "\xe0"}:
+                key = msvcrt.getwch()
+                if key == "H":
+                    selected_index = (selected_index - 1) % len(options)
+                    redraw()
+                elif key == "P":
+                    selected_index = (selected_index + 1) % len(options)
+                    redraw()
+                continue
+            if char in {"\r", "\n"}:
+                return finish()
+            if char in {" ", "\t"}:
+                value = options[selected_index].value
+                if value in selected_values:
+                    selected_values.remove(value)
+                else:
+                    selected_values.add(value)
+                redraw()
+                continue
+            indices = _parse_transient_indices(char, len(options))
+            if indices:
+                value = options[indices[0]].value
+                if value in selected_values:
+                    selected_values.remove(value)
+                else:
+                    selected_values.add(value)
+                selected_index = indices[0]
+                redraw()
+
+
 def _read_transient_text(prompt: str, *, send_to_qq: bool = True) -> str:
     if send_to_qq:
         _qq_send(_plain_transient_prompt(prompt))
@@ -1247,6 +1417,10 @@ def _should_poll_transient_input(*, send_to_qq: bool) -> bool:
     return send_to_qq and QQ_INTERACTIVE_BRIDGE is not None
 
 
+def _should_poll_transient_menu_input() -> bool:
+    return msvcrt is not None and sys.stdin.isatty()
+
+
 def _read_qq_transient_text() -> str:
     with FLOW_INPUT_QUEUE.mutex:
         if not FLOW_INPUT_QUEUE.queue:
@@ -1269,6 +1443,8 @@ def _transient_choice_from_text(text: str, *, default_on_enter: str) -> str:
         return "1"
     if normalized.startswith("/deny"):
         return "3"
+    if normalized in {"tab", "propose", "different", "换方案", "换成别的方案"}:
+        return "\t"
     if normalized in {"approve", "allow", "yes", "y", "确认", "同意", "允许"}:
         return "1"
     if normalized in {"session", "always", "本轮", "一直允许"}:
@@ -1279,47 +1455,127 @@ def _transient_choice_from_text(text: str, *, default_on_enter: str) -> str:
 
 
 def _plain_transient_prompt(prompt: str) -> str:
-    clean = prompt.replace(DIM, "").replace(RESET, "")
+    clean = ANSI_RE.sub("", prompt.replace(DIM, "").replace(RESET, ""))
     return "\n".join(line.rstrip() for line in clean.splitlines()).strip()
 
 
+def _transient_default_index(options: list[TransientChoiceOption], default_value: str) -> int:
+    if default_value:
+        for index, option in enumerate(options):
+            if option.value == default_value:
+                return index
+    return 0
+
+
+def _render_transient_choice_menu(
+    title: str,
+    options: list[TransientChoiceOption],
+    selected_index: int,
+    *,
+    default_value: str = "",
+) -> str:
+    selected_index = max(0, min(selected_index, len(options) - 1))
+    lines = [title.rstrip(), ""]
+    for index, option in enumerate(options):
+        marker = GLYPHS["prompt"] if index == selected_index else " "
+        option_number = index + 1
+        suffix = " [默认]" if option.value == default_value else ""
+        line = f"{marker} {option_number}. {option.label}{suffix}"
+        if index == selected_index:
+            line = f"{CYAN}{line}{RESET}"
+        else:
+            line = f"  {line}"
+        lines.append(line)
+    lines.append("")
+    lines.append(f"{DIM}上下键选择 {GLYPHS['dot']} Enter 确认 {GLYPHS['dot']} 数字仍可直选{RESET}")
+    return "\n".join(lines)
+
+
+def _render_transient_multi_choice_menu(
+    title: str,
+    options: list[TransientChoiceOption],
+    selected_index: int,
+    selected_values: set[str],
+) -> str:
+    selected_index = max(0, min(selected_index, len(options) - 1))
+    lines = [title.rstrip(), ""]
+    for index, option in enumerate(options):
+        marker = GLYPHS["prompt"] if index == selected_index else " "
+        checked = "x" if option.value in selected_values else " "
+        line = f"{marker} [{checked}] {index + 1}. {option.label}"
+        if index == selected_index:
+            line = f"{CYAN}{line}{RESET}"
+        else:
+            line = f"  {line}"
+        lines.append(line)
+    lines.append("")
+    lines.append(f"{DIM}上下键选择 {GLYPHS['dot']} 空格勾选 {GLYPHS['dot']} Enter 确认/跳过{RESET}")
+    return "\n".join(lines)
+
+
+def _transient_menu_value_from_text(
+    text: str,
+    options: list[TransientChoiceOption],
+    *,
+    default_value: str = "",
+) -> str:
+    if text == "\t":
+        return "\t" if any(option.value == "\t" for option in options) else ""
+    normalized = text.strip().lower()
+    mapped = _transient_choice_from_text(normalized, default_on_enter=default_value)
+    candidates = {mapped, normalized}
+    for option in options:
+        option_values = {option.value.lower(), *(alias.lower() for alias in option.aliases)}
+        if candidates.intersection(option_values):
+            return option.value
+    if mapped.isdigit():
+        index = int(mapped) - 1
+        if 0 <= index < len(options):
+            return options[index].value
+    return ""
+
+
+def _parse_transient_indices(text: str, option_count: int) -> list[int]:
+    indices: list[int] = []
+    for part in text.replace("，", ",").split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            index = int(part) - 1
+        except ValueError:
+            continue
+        if 0 <= index < option_count and index not in indices:
+            indices.append(index)
+    return indices
+
+
 def _read_approval_choice() -> str:
-    prompt = "选择  1 允许一次 / 2 本轮不再询问 / 3 拒绝 / Tab 换方案："
-    return _read_transient_choice(
-        prompt,
-        valid_chars={"\t", "1", "2", "3", "4", "y", "Y", "a", "A", "n", "N", "p", "P"},
-        default_on_enter="3",
+    return _read_transient_menu_choice(
+        "选择工具授权方式",
+        _approval_options(),
+        default_value="3",
     )
+
+
+def _approval_options() -> list[TransientChoiceOption]:
+    return [
+        TransientChoiceOption("1", "允许一次", aliases=("y", "yes", "approve", "allow", "确认", "同意", "允许")),
+        TransientChoiceOption("2", "本轮不再询问这个工具", aliases=("a", "always", "session", "本轮", "一直允许")),
+        TransientChoiceOption("3", "拒绝", aliases=("n", "no", "deny", "拒绝")),
+        TransientChoiceOption("\t", "让模型换方案", aliases=("4", "p", "propose", "different", "tab", "换方案")),
+    ]
 
 
 def _approval_prompt(tool_name: str) -> ApprovalDecision:
     FLOW_INPUT.begin_output()
     set_title_state("confirmation")
     try:
-        if msvcrt is not None and sys.stdin.isatty():
-            approval_text = (
-                f"确认  {tool_name} 需要授权\n"
-                "1 允许一次\n"
-                "2 本轮不再询问这个工具\n"
-                "3 拒绝\n"
-                "回复数字即可；也可回复 /approve 或 /deny。"
-            )
-            raw_answer = _read_transient_choice(
-                approval_text + "\n选择：",
-                valid_chars={"\t", "1", "2", "3", "4", "y", "Y", "a", "A", "n", "N", "p", "P"},
-                default_on_enter="3",
-            )
-        else:
-            approval_text = (
-                f"确认  {tool_name} 需要授权\n"
-                "1 允许一次\n"
-                "2 本轮不再询问这个工具\n"
-                "3 拒绝\n"
-                "Tab 让模型换方案"
-            )
-            print(approval_text)
-            _qq_send(approval_text)
-            raw_answer = _read_approval_choice()
+        raw_answer = _read_transient_menu_choice(
+            f"确认  {tool_name} 需要授权",
+            _approval_options(),
+            default_value="3",
+        )
         answer = raw_answer.lower() if raw_answer == "\t" else raw_answer.strip().lower()
 
         if answer in {"1", "y", "yes"}:
@@ -1481,31 +1737,16 @@ def _select_skill_contexts_for_prompt(prompt: str) -> list[dict[str, object]]:
     recommendations = recommend_skill_contexts(prompt, top_k=5)
     if not recommendations:
         return []
-    lines = [f"{DIM}思考  找到可选 skill；输入编号注入，直接回车跳过。{RESET}"]
+    options = []
     for index, item in enumerate(recommendations, start=1):
         description = _short_value(item.get("description", ""), 110)
-        lines.append(f"  {index}. {item.get('name')}  {DIM}{description}{RESET}")
-    lines.append("选择 skill 编号（可用逗号分隔，回车跳过）：")
-    rendered = "\n".join(lines)
-    if msvcrt is not None and sys.stdin.isatty():
-        raw = _read_transient_text(rendered).strip()
-    else:
-        print("\n".join(lines[:-1]))
-        raw = input(lines[-1]).strip()
-    if not raw:
-        return []
-    selected: list[dict[str, object]] = []
-    for part in raw.replace("，", ",").split(","):
-        part = part.strip()
-        if not part:
-            continue
-        try:
-            index = int(part)
-        except ValueError:
-            continue
-        if 1 <= index <= len(recommendations):
-            selected.append(recommendations[index - 1])
-    return selected
+        options.append(TransientChoiceOption(str(index), f"{item.get('name')}  {DIM}{description}{RESET}"))
+    selected_values = _read_transient_multi_choice(
+        f"{DIM}思考  找到可选 skill；勾选后注入，直接回车跳过。{RESET}",
+        options,
+    )
+    selected_indices = _parse_transient_indices(",".join(selected_values), len(recommendations))
+    return [recommendations[index] for index in selected_indices]
 
 
 def _append_skill_context_messages(messages: list[dict[str, object]], prompt: str, selected: list[dict[str, object]]) -> None:

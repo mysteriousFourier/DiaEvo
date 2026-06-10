@@ -17,7 +17,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable
 
-from .features import FeatureStore, cosine
+from .features import FeatureStore, cosine, tokenize
 from .ingest import DEFAULT_TOOL_EVENTS_PATH, load_traces
 from .miner import mine
 from .paths import DATA_DIR, ensure_project_dirs
@@ -27,6 +27,8 @@ from .storage import read_json, read_jsonl, write_json, write_jsonl
 KG_ROOT = DATA_DIR / "knowledge_graph"
 KG_CURRENT_DIR = KG_ROOT / "current"
 KG_DELTA_DIR = KG_ROOT / "deltas"
+KG_DOMAIN_DIR = KG_ROOT / "domains"
+KG_DOMAIN_REGISTRY_PATH = KG_ROOT / "domain_registry.jsonl"
 KG_REVIEW_QUEUE_PATH = KG_ROOT / "review_queue.jsonl"
 KG_WORKBENCH_HOST = "127.0.0.1"
 KG_WORKBENCH_PORT = 8765
@@ -52,6 +54,7 @@ VALIDATED_CONFIDENCE = 0.9
 WEB_FETCH_CONFIDENCE = 0.75
 WEB_SEARCH_CONFIDENCE = 0.55
 TEXT_MENTION_CONFIDENCE = 0.6
+DOMAIN_MATCH_THRESHOLD = 0.18
 
 _KG_SERVER_PROCESS: subprocess.Popen[Any] | None = None
 _SENTENCE_TRANSFORMER_FACTORY: Callable[[str], Any] | None = None
@@ -94,6 +97,186 @@ def _short_text(value: Any, limit: int = 220) -> str:
 
 def _safe_list(value: Any) -> list[Any]:
     return value if isinstance(value, list) else []
+
+
+def _safe_properties(item: dict[str, Any]) -> dict[str, Any]:
+    properties = item.get("properties")
+    return properties if isinstance(properties, dict) else {}
+
+
+def _domain_root_for_current(current_dir: Path) -> Path:
+    return current_dir.parent if current_dir.name == "current" else current_dir.parent
+
+
+def _domain_registry_path(current_dir: Path) -> Path:
+    if current_dir == KG_CURRENT_DIR:
+        return KG_DOMAIN_REGISTRY_PATH
+    return _domain_root_for_current(current_dir) / "domain_registry.jsonl"
+
+
+def _domain_store_root(current_dir: Path) -> Path:
+    if current_dir == KG_CURRENT_DIR:
+        return KG_DOMAIN_DIR
+    return _domain_root_for_current(current_dir) / "domains"
+
+
+def _domain_key(domain_id: str) -> str:
+    text = str(domain_id or "").strip()
+    if text.startswith("domain:"):
+        text = text.split(":", 1)[1]
+    return _slug(text or "general", limit=64)
+
+
+def _domain_id_from_label(label: str) -> str:
+    tokens = [token for token in tokenize(label) if re.search(r"[a-z0-9]", token)]
+    base = "-".join(tokens[:5])
+    if not base:
+        base = f"d-{_stable_hash(label, length=12)}"
+    return f"domain:{_slug(base, limit=64)}"
+
+
+def _domain_current_dir(current_dir: Path, domain: str) -> Path:
+    return _domain_store_root(current_dir) / _domain_key(domain)
+
+
+def _domain_matches(requested: str, candidate: str) -> bool:
+    requested_text = str(requested or "").strip()
+    candidate_text = str(candidate or "").strip()
+    if not requested_text or not candidate_text:
+        return False
+    return requested_text == candidate_text or _domain_key(requested_text) == _domain_key(candidate_text)
+
+
+def _resolve_current_dir_for_domain(current_dir: Path, domain: str | None) -> Path:
+    if not domain:
+        return current_dir
+    return _domain_current_dir(current_dir, domain)
+
+
+def _domain_keywords(text: str, limit: int = 8) -> list[str]:
+    counts = Counter(tokenize(text))
+    return [token for token, _count in counts.most_common(limit)]
+
+
+def _domain_match_text(record: dict[str, Any]) -> str:
+    keywords = " ".join(str(value) for value in _safe_list(record.get("keywords")))
+    return " ".join(
+        [
+            str(record.get("id") or ""),
+            str(record.get("label") or ""),
+            str(record.get("summary") or ""),
+            keywords,
+        ]
+    ).strip()
+
+
+def _conversation_text(messages: list[dict[str, Any]]) -> str:
+    parts: list[str] = []
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = str(message.get("content") or message.get("text") or "").strip()
+        if content:
+            parts.append(content)
+    return "\n".join(parts)
+
+
+def _new_domain_record(text: str, *, generated_at: str, source_id: str = "") -> dict[str, Any]:
+    keywords = _domain_keywords(text)
+    label = " / ".join(keywords[:3]) if keywords else "general"
+    domain_id = _domain_id_from_label(label or text)
+    return {
+        "id": domain_id,
+        "label": label,
+        "summary": _short_text(text, 260),
+        "keywords": keywords,
+        "classifier": "local_tfidf",
+        "domain_confidence": 1.0,
+        "match_score": 0.0,
+        "created_at": generated_at,
+        "updated_at": generated_at,
+        "source_ids": [source_id] if source_id else [],
+        "conversation_count": 1 if source_id else 0,
+        "fact_count": 0,
+        "entity_count": 0,
+        "evidence_path_count": 0,
+    }
+
+
+def _load_domain_registry(current_dir: Path) -> list[dict[str, Any]]:
+    return _read_jsonl_if_exists(_domain_registry_path(current_dir))
+
+
+def _classify_domain(
+    text: str,
+    registry: list[dict[str, Any]],
+    *,
+    generated_at: str,
+    source_id: str = "",
+) -> dict[str, Any]:
+    cleaned = text.strip()
+    if not cleaned:
+        return _new_domain_record("general", generated_at=generated_at, source_id=source_id)
+    usable_registry = [item for item in registry if isinstance(item, dict) and item.get("id")]
+    if usable_registry:
+        documents = [_domain_match_text(item) for item in usable_registry]
+        store = FeatureStore.from_documents(documents, max_features=1000)
+        nearest = store.nearest(cleaned, limit=1)
+        if nearest:
+            index, score = nearest[0]
+            if score >= DOMAIN_MATCH_THRESHOLD:
+                matched = dict(usable_registry[index])
+                existing_keywords = [str(value) for value in _safe_list(matched.get("keywords"))]
+                merged_keywords = list(dict.fromkeys([*existing_keywords, *_domain_keywords(cleaned)]))[:12]
+                matched["keywords"] = merged_keywords
+                matched["summary"] = _short_text(str(matched.get("summary") or "") or cleaned, 260)
+                matched["classifier"] = "local_tfidf"
+                matched["domain_confidence"] = round(float(score), 4)
+                matched["match_score"] = round(float(score), 4)
+                if source_id:
+                    matched["source_ids"] = list(dict.fromkeys([*[
+                        str(value) for value in _safe_list(matched.get("source_ids"))
+                    ], source_id]))
+                return matched
+    return _new_domain_record(cleaned, generated_at=generated_at, source_id=source_id)
+
+
+def _item_domain_ids(item: dict[str, Any]) -> list[str]:
+    properties = _safe_properties(item)
+    values = [str(value) for value in _safe_list(properties.get("domain_ids")) if str(value).strip()]
+    primary = str(properties.get("primary_domain_id") or "").strip()
+    if primary:
+        values.insert(0, primary)
+    return list(dict.fromkeys(values))
+
+
+def _domain_properties(domain: dict[str, Any] | None) -> dict[str, Any]:
+    if not domain:
+        return {}
+    domain_id = str(domain.get("id") or "").strip()
+    if not domain_id:
+        return {}
+    return {
+        "primary_domain_id": domain_id,
+        "domain_ids": [domain_id],
+        "domain_confidence": domain.get("domain_confidence", 1.0),
+        "domain_classifier": domain.get("classifier", "local_tfidf"),
+    }
+
+
+def _domain_entity_record(domain: dict[str, Any], created_at: str) -> dict[str, Any]:
+    domain_id = str(domain.get("id") or "").strip()
+    return {
+        "id": domain_id,
+        "kind": "domain",
+        "label": str(domain.get("label") or _domain_key(domain_id)),
+        "properties": {
+            "summary": str(domain.get("summary") or ""),
+            "keywords": [str(value) for value in _safe_list(domain.get("keywords"))],
+            "classifier": str(domain.get("classifier") or "local_tfidf"),
+        },
+        "created_at": str(domain.get("created_at") or created_at),
+    }
 
 
 def _read_jsonl_if_exists(path: str | Path | None) -> list[dict[str, Any]]:
@@ -542,7 +725,16 @@ def _add_tool_event_knowledge(builder: KGBuilder, tool_events_path: Path | None)
             )
 
 
-def _add_conversation_knowledge(builder: KGBuilder, conversation_path: Path | None) -> None:
+def _add_conversation_knowledge(
+    builder: KGBuilder,
+    conversation_path: Path | None,
+    *,
+    domain: dict[str, Any] | None = None,
+) -> None:
+    domain_id = str(domain.get("id") or "").strip() if domain else ""
+    domain_fact_properties = _domain_properties(domain)
+    if domain_id:
+        builder.entities.setdefault(domain_id, _domain_entity_record(domain or {}, builder.generated_at))
     for index, message in enumerate(_read_jsonl_if_exists(conversation_path), start=1):
         role = str(message.get("role") or "user").strip() or "user"
         content = str(message.get("content") or message.get("text") or "").strip()
@@ -570,7 +762,18 @@ def _add_conversation_knowledge(builder: KGBuilder, conversation_path: Path | No
             confidence=TEXT_MENTION_CONFIDENCE,
             evidence_ids=[evidence_id],
             source_type="conversation",
+            properties=domain_fact_properties,
         )
+        if domain_id:
+            builder.triple(
+                message_id,
+                "CONTRIBUTES_TO_DOMAIN",
+                domain_id,
+                confidence=float(domain.get("domain_confidence") or TEXT_MENTION_CONFIDENCE) if domain else TEXT_MENTION_CONFIDENCE,
+                evidence_ids=[evidence_id],
+                source_type="conversation",
+                properties=domain_fact_properties,
+            )
         if role.lower() == "user":
             intent_id = builder.entity("task", f"conversation:{message_key}:{content}", _short_text(content, 180))
             builder.triple(
@@ -580,7 +783,18 @@ def _add_conversation_knowledge(builder: KGBuilder, conversation_path: Path | No
                 confidence=TEXT_MENTION_CONFIDENCE,
                 evidence_ids=[evidence_id],
                 source_type="conversation",
+                properties=domain_fact_properties,
             )
+            if domain_id:
+                builder.triple(
+                    intent_id,
+                    "BELONGS_TO_DOMAIN",
+                    domain_id,
+                    confidence=float(domain.get("domain_confidence") or TEXT_MENTION_CONFIDENCE) if domain else TEXT_MENTION_CONFIDENCE,
+                    evidence_ids=[evidence_id],
+                    source_type="conversation",
+                    properties=domain_fact_properties,
+                )
             builder.claim(
                 f"User stated intent: {content}",
                 subject=message_id,
@@ -589,6 +803,7 @@ def _add_conversation_knowledge(builder: KGBuilder, conversation_path: Path | No
                 confidence=TEXT_MENTION_CONFIDENCE,
                 evidence_ids=[evidence_id],
                 source_type="conversation",
+                properties=domain_fact_properties,
             )
 
 
@@ -720,10 +935,14 @@ def _load_active_ids(current_dir: Path) -> set[str]:
 
 
 def _queue_entry(kind: str, item: dict[str, Any], builder: KGBuilder, generated_at: str) -> dict[str, Any]:
+    properties = _safe_properties(item)
+    domain_ids = _item_domain_ids(item)
     entity_ids = sorted(
-        value
-        for value in (item.get("subject"), item.get("object"))
-        if isinstance(value, str) and value in builder.entities
+        {
+            value
+            for value in [item.get("subject"), item.get("object"), *domain_ids]
+            if isinstance(value, str) and value in builder.entities
+        }
     )
     evidence_ids = [value for value in _safe_list(item.get("evidence")) if isinstance(value, str)]
     return {
@@ -733,6 +952,9 @@ def _queue_entry(kind: str, item: dict[str, Any], builder: KGBuilder, generated_
         "item": item,
         "entities": [builder.entities[entity_id] for entity_id in entity_ids],
         "evidence_paths": [builder.evidence[evidence_id] for evidence_id in evidence_ids if evidence_id in builder.evidence],
+        "primary_domain_id": str(properties.get("primary_domain_id") or (domain_ids[0] if domain_ids else "")),
+        "domain_ids": domain_ids,
+        "domain_confidence": properties.get("domain_confidence", ""),
         "generated_at": generated_at,
         "reviewed_at": "",
         "reviewer": "",
@@ -789,9 +1011,22 @@ def build_kg_delta(
     delta_target.mkdir(parents=True, exist_ok=True)
 
     builder = KGBuilder(generated_at)
+    domains: list[dict[str, Any]] = []
+    conversation_domain: dict[str, Any] | None = None
+    if conversation_source:
+        conversation_messages = _read_jsonl_if_exists(conversation_source)
+        conversation_text = _conversation_text(conversation_messages)
+        if conversation_text.strip():
+            conversation_domain = _classify_domain(
+                conversation_text,
+                _load_domain_registry(current_target),
+                generated_at=generated_at,
+                source_id=str(conversation_source),
+            )
+            domains.append(conversation_domain)
     _add_trace_knowledge(builder, trace_source)
     _add_tool_event_knowledge(builder, event_source)
-    _add_conversation_knowledge(builder, conversation_source)
+    _add_conversation_knowledge(builder, conversation_source, domain=conversation_domain)
     if include_mining:
         _add_mining_knowledge(builder, trace_source, registry_path, plugin_path, k)
 
@@ -810,6 +1045,8 @@ def build_kg_delta(
         "tool_events_path": str(event_source),
         "conversation_path": str(conversation_source) if conversation_source else "",
         "include_mining": include_mining,
+        "domain_count": len(domains),
+        "domains": sorted(domains, key=lambda item: str(item.get("id") or "")),
         "entity_count": len(builder.entities),
         "triple_count": len(builder.triples),
         "claim_count": len(builder.claims),
@@ -829,6 +1066,9 @@ def build_kg_delta(
         "review_queue_path": str(queue_target),
         "queued_count": len(additions),
         "review_queue_count": queue_count,
+        "domain_count": len(domains),
+        "domains": sorted(domains, key=lambda item: str(item.get("id") or "")),
+        "domain_registry_path": str(_domain_registry_path(current_target)),
         "entity_count": len(builder.entities),
         "triple_count": len(builder.triples),
         "claim_count": len(builder.claims),
@@ -902,6 +1142,128 @@ def _append_unique(records: list[dict[str, Any]], additions: list[dict[str, Any]
     return added
 
 
+def _entry_domain_ids(entry: dict[str, Any], item: dict[str, Any] | None = None) -> list[str]:
+    values = [str(value) for value in _safe_list(entry.get("domain_ids")) if str(value).strip()]
+    primary = str(entry.get("primary_domain_id") or "").strip()
+    if primary:
+        values.insert(0, primary)
+    if item:
+        values.extend(_item_domain_ids(item))
+    return list(dict.fromkeys(values))
+
+
+def _domain_record_from_entry(entry: dict[str, Any], domain_id: str, applied_at: str) -> dict[str, Any]:
+    domain_entity = next(
+        (
+            entity
+            for entity in _safe_list(entry.get("entities"))
+            if isinstance(entity, dict) and str(entity.get("id") or "") == domain_id
+        ),
+        {},
+    )
+    properties = _safe_properties(domain_entity)
+    evidence_paths = [item for item in _safe_list(entry.get("evidence_paths")) if isinstance(item, dict)]
+    source_ids = list(
+        dict.fromkeys(
+            str(item.get("path") or item.get("source_id") or "")
+            for item in evidence_paths
+            if item.get("path") or item.get("source_id")
+        )
+    )
+    return {
+        "id": domain_id,
+        "label": str(domain_entity.get("label") or _domain_key(domain_id)),
+        "summary": str(properties.get("summary") or ""),
+        "keywords": [str(value) for value in _safe_list(properties.get("keywords"))],
+        "classifier": str(properties.get("classifier") or "local_tfidf"),
+        "domain_confidence": entry.get("domain_confidence") or _safe_properties(entry.get("item") or {}).get("domain_confidence") or "",
+        "match_score": entry.get("domain_confidence") or "",
+        "created_at": str(domain_entity.get("created_at") or applied_at),
+        "updated_at": applied_at,
+        "source_ids": source_ids,
+        "conversation_count": len(source_ids),
+        "fact_count": 0,
+        "entity_count": 0,
+        "evidence_path_count": 0,
+    }
+
+
+def _write_domain_entry(current_dir: Path, entry: dict[str, Any]) -> set[str]:
+    item = entry.get("item") if isinstance(entry.get("item"), dict) else {}
+    if not item:
+        return set()
+    domain_ids = _entry_domain_ids(entry, item)
+    if not domain_ids:
+        return set()
+    touched: set[str] = set()
+    for domain_id in domain_ids:
+        domain_target = _domain_current_dir(current_dir, domain_id)
+        domain_target.mkdir(parents=True, exist_ok=True)
+        entities, triples, claims, evidence = _load_current_records(domain_target)
+        entry_entities = [entity for entity in _safe_list(entry.get("entities")) if isinstance(entity, dict)]
+        if not any(str(entity.get("id") or "") == domain_id for entity in entry_entities):
+            entry_entities.append(_domain_entity_record({"id": domain_id, "label": _domain_key(domain_id)}, str(item.get("created_at") or _now())))
+        _append_unique(entities, entry_entities)
+        _append_unique(evidence, [path for path in _safe_list(entry.get("evidence_paths")) if isinstance(path, dict)])
+        item_id = str(item.get("id") or "")
+        if entry.get("kind") == "claim" or item_id.startswith("claim:"):
+            _append_unique(claims, [item])
+        else:
+            _append_unique(triples, [item])
+        write_jsonl(domain_target / "entities.jsonl", sorted(entities, key=lambda value: str(value.get("id") or "")))
+        write_jsonl(domain_target / "triples.jsonl", sorted(triples, key=lambda value: str(value.get("id") or "")))
+        write_jsonl(domain_target / "claims.jsonl", sorted(claims, key=lambda value: str(value.get("id") or "")))
+        write_jsonl(domain_target / "evidence_paths.jsonl", sorted(evidence, key=lambda value: str(value.get("id") or "")))
+        touched.add(domain_id)
+    return touched
+
+
+def _refresh_domain_registry(current_dir: Path, applied_entries: list[dict[str, Any]], applied_at: str) -> list[dict[str, Any]]:
+    if not applied_entries:
+        return _load_domain_registry(current_dir)
+    registry_path = _domain_registry_path(current_dir)
+    records_by_id = {
+        str(item.get("id") or ""): dict(item)
+        for item in _read_jsonl_if_exists(registry_path)
+        if item.get("id")
+    }
+    touched: set[str] = set()
+    for entry in applied_entries:
+        item = entry.get("item") if isinstance(entry.get("item"), dict) else {}
+        for domain_id in _entry_domain_ids(entry, item):
+            touched.add(domain_id)
+            incoming = _domain_record_from_entry(entry, domain_id, applied_at)
+            current = records_by_id.get(domain_id, {})
+            existing_keywords = [str(value) for value in _safe_list(current.get("keywords"))]
+            incoming_keywords = [str(value) for value in _safe_list(incoming.get("keywords"))]
+            existing_sources = [str(value) for value in _safe_list(current.get("source_ids"))]
+            incoming_sources = [str(value) for value in _safe_list(incoming.get("source_ids"))]
+            records_by_id[domain_id] = {
+                **incoming,
+                **current,
+                "id": domain_id,
+                "label": str(current.get("label") or incoming.get("label") or _domain_key(domain_id)),
+                "summary": str(current.get("summary") or incoming.get("summary") or ""),
+                "keywords": list(dict.fromkeys([*existing_keywords, *incoming_keywords]))[:12],
+                "source_ids": list(dict.fromkeys([*existing_sources, *incoming_sources])),
+                "classifier": str(current.get("classifier") or incoming.get("classifier") or "local_tfidf"),
+                "created_at": str(current.get("created_at") or incoming.get("created_at") or applied_at),
+                "updated_at": applied_at,
+            }
+    for domain_id in touched:
+        entities, triples, claims, evidence = _load_current_records(_domain_current_dir(current_dir, domain_id))
+        record = records_by_id.get(domain_id, {"id": domain_id, "label": _domain_key(domain_id)})
+        source_ids = [str(value) for value in _safe_list(record.get("source_ids"))]
+        record["fact_count"] = len(triples) + len(claims)
+        record["entity_count"] = len(entities)
+        record["evidence_path_count"] = len(evidence)
+        record["conversation_count"] = len(source_ids)
+        records_by_id[domain_id] = record
+    records = sorted(records_by_id.values(), key=lambda item: str(item.get("id") or ""))
+    write_jsonl(registry_path, records)
+    return records
+
+
 def apply_kg_delta(
     *,
     queue_path: str | Path | None = None,
@@ -915,6 +1277,8 @@ def apply_kg_delta(
     applied_at = _now()
     added_entities = added_triples = added_claims = added_evidence = 0
     applied_ids: list[str] = []
+    applied_entries: list[dict[str, Any]] = []
+    touched_domains: set[str] = set()
     existing_fact_ids = {str(item.get("id")) for item in triples + claims if item.get("id")}
     for entry in queue:
         if entry.get("status") != "accepted":
@@ -930,18 +1294,25 @@ def apply_kg_delta(
             added_claims += _append_unique(claims, [item])
         else:
             added_triples += _append_unique(triples, [item])
+        entry["item"] = item
         entry["applied_at"] = applied_at
+        applied_entries.append(entry)
+        touched_domains.update(_write_domain_entry(current_target, entry))
         applied_ids.append(item_id)
         existing_fact_ids.add(item_id)
     write_jsonl(current_target / "entities.jsonl", sorted(entities, key=lambda item: str(item.get("id") or "")))
     write_jsonl(current_target / "triples.jsonl", sorted(triples, key=lambda item: str(item.get("id") or "")))
     write_jsonl(current_target / "claims.jsonl", sorted(claims, key=lambda item: str(item.get("id") or "")))
     write_jsonl(current_target / "evidence_paths.jsonl", sorted(evidence, key=lambda item: str(item.get("id") or "")))
+    domain_registry = _refresh_domain_registry(current_target, applied_entries, applied_at)
     if queue_target.exists():
         write_jsonl(queue_target, queue)
     return {
         "status": "ok",
         "current_dir": str(current_target),
+        "domain_registry_path": str(_domain_registry_path(current_target)),
+        "domain_count": len(domain_registry),
+        "touched_domains": sorted(touched_domains),
         "applied_count": len(applied_ids),
         "applied_ids": applied_ids,
         "added_entities": added_entities,
@@ -1187,6 +1558,7 @@ def graph_vector_search(
     strict: bool = True,
     include_pending: bool = False,
     current_dir: str | Path | None = None,
+    domain: str | None = None,
     queue_path: str | Path | None = None,
     top_k: int = 5,
     expand_hops: int = 1,
@@ -1194,10 +1566,13 @@ def graph_vector_search(
     embedding_model: str | None = None,
     hf_endpoint: str | None = None,
 ) -> dict[str, Any]:
-    current_target = Path(current_dir) if current_dir else KG_CURRENT_DIR
+    base_current = Path(current_dir) if current_dir else KG_CURRENT_DIR
+    current_target = _resolve_current_dir_for_domain(base_current, domain)
     entities, triples, claims, evidence = _load_current_records(current_target)
     if include_pending:
         for entry in _read_jsonl_if_exists(queue_path or KG_REVIEW_QUEUE_PATH):
+            if domain and not any(_domain_matches(domain, value) for value in _entry_domain_ids(entry)):
+                continue
             item = entry.get("item") if isinstance(entry.get("item"), dict) else {}
             if not item:
                 continue
@@ -1214,6 +1589,8 @@ def graph_vector_search(
             "status": "empty",
             "retrieval_mode": "graph_vector_dense" if requested_backend == "dense" else "graph_vector_tfidf",
             "query": query,
+            "domain": str(domain or ""),
+            "current_dir": str(current_target),
             "strict": strict,
             "include_pending": include_pending,
             "seed_hits": [],
@@ -1254,6 +1631,8 @@ def graph_vector_search(
             "status": "no_match",
             "retrieval_mode": retrieval_mode,
             "query": query,
+            "domain": str(domain or ""),
+            "current_dir": str(current_target),
             "strict": strict,
             "include_pending": include_pending,
             "seed_hits": [],
@@ -1298,6 +1677,8 @@ def graph_vector_search(
         "status": "ok",
         "retrieval_mode": retrieval_mode,
         "query": query,
+        "domain": str(domain or ""),
+        "current_dir": str(current_target),
         "strict": strict,
         "include_pending": include_pending,
         "seed_hits": seed_hits,
@@ -1316,6 +1697,7 @@ def answer_kg(
     strict: bool = True,
     include_pending: bool = False,
     current_dir: str | Path | None = None,
+    domain: str | None = None,
     queue_path: str | Path | None = None,
     max_paths: int = 5,
     vector_backend: str | None = None,
@@ -1327,6 +1709,7 @@ def answer_kg(
         strict=strict,
         include_pending=include_pending,
         current_dir=current_dir,
+        domain=domain,
         queue_path=queue_path,
         top_k=max_paths,
         expand_hops=1,
@@ -1347,6 +1730,7 @@ def answer_kg(
             "status": "insufficient",
             "strict": strict,
             "include_pending": include_pending,
+            "domain": str(domain or ""),
             "retrieval_mode": retrieval_mode,
             "answer": "知识图谱证据不足（KG insufficient）：没有为这个问题召回已审核的事实子图。",
             "missing": ["向量召回的已审核三元组或声明", "图扩展后的已审核证据路径"],
@@ -1388,6 +1772,7 @@ def answer_kg(
         "status": "ok",
         "strict": strict,
         "include_pending": include_pending,
+        "domain": str(domain or ""),
         "retrieval_mode": retrieval_mode,
         "answer": "已从已审核知识图谱找到相关证据：" + "；".join(fact_lines),
         "facts": facts,
@@ -2069,10 +2454,12 @@ def export_kg_snapshot(
     date: str | None = None,
     output_dir: str | Path | None = None,
     current_dir: str | Path | None = None,
+    domain: str | None = None,
 ) -> dict[str, Any]:
     stamp = _date_stamp(date)
-    current_target = Path(current_dir) if current_dir else KG_CURRENT_DIR
-    snapshot_dir = Path(output_dir) if output_dir else KG_ROOT / stamp
+    base_current = Path(current_dir) if current_dir else KG_CURRENT_DIR
+    current_target = _resolve_current_dir_for_domain(base_current, domain)
+    snapshot_dir = Path(output_dir) if output_dir else (KG_ROOT / stamp / _domain_key(domain) if domain else KG_ROOT / stamp)
     snapshot_dir.mkdir(parents=True, exist_ok=True)
     entities, triples, claims, evidence = _load_current_records(current_target)
     labels = _entity_labels(entities)
@@ -2154,9 +2541,11 @@ def export_kg_snapshot(
     )
     readme = "\n".join(
         [
-            f"# 知识图谱快照 {stamp}",
+            f"# {'领域' if domain else ''}知识图谱快照 {stamp}".strip(),
             "",
-            "本文件夹是已审核 DiaEvo 知识图谱的可读导出，只包含 active KG 中 accepted 的事实和证据。",
+            "本文件夹是已审核 DiaEvo 知识图谱的可读导出，只包含 active KG 中 accepted 的事实和证据。"
+            if not domain
+            else f"本文件夹是已审核 DiaEvo 领域知识图谱 `{domain}` 的可读导出。",
             "",
             "## 摘要",
             "",
@@ -2183,6 +2572,7 @@ def export_kg_snapshot(
     summary = {
         "status": "ok",
         "date": stamp,
+        "domain": str(domain or ""),
         "snapshot_dir": str(snapshot_dir),
         "visualization_path": str(snapshot_dir / "graph_visualization.html"),
         "current_dir": str(current_target),
@@ -2205,34 +2595,41 @@ def _write_current_graph_workbench(
     *,
     date: str | None = None,
     current_dir: str | Path | None = None,
+    domain: str | None = None,
 ) -> dict[str, Any]:
     stamp = _date_stamp(date)
-    current_target = Path(current_dir) if current_dir else KG_CURRENT_DIR
+    base_current = Path(current_dir) if current_dir else KG_CURRENT_DIR
+    current_target = _resolve_current_dir_for_domain(base_current, domain)
     current_target.mkdir(parents=True, exist_ok=True)
     entities, triples, claims, evidence = _load_current_records(current_target)
     labels = _entity_labels(entities)
     visualization_path = current_target / "graph_visualization.html"
+    title = f"领域可编辑知识图谱：{domain}" if domain else "总体可编辑知识图谱"
     visualization_path.write_text(
         _graph_visualization_html(
             stamp=stamp,
             entities=entities,
             triples=triples,
             labels=labels,
-            title="总体可编辑知识图谱",
-            export_id="current",
+            title=title,
+            export_id=_domain_key(domain) if domain else "current",
         ),
         encoding="utf-8",
     )
     return {
         "status": "ok",
         "date": stamp,
+        "domain": str(domain or ""),
+        "base_current_dir": str(base_current),
         "current_dir": str(current_target),
         "visualization_path": str(visualization_path),
         "entity_count": len(entities),
         "triple_count": len(triples),
         "claim_count": len(claims),
         "evidence_path_count": len(evidence),
-        "message": "已生成 active KG 的总体可编辑知识图谱 HTML；未生成日期快照。",
+        "message": "已生成 active KG 的总体可编辑知识图谱 HTML；未生成日期快照。"
+        if not domain
+        else f"已生成领域 KG `{domain}` 的可编辑知识图谱 HTML；未生成日期快照。",
     }
 
 
@@ -2240,12 +2637,13 @@ def _open_current_graph_workbench(
     *,
     date: str | None = None,
     current_dir: str | Path | None = None,
+    domain: str | None = None,
     port: int | None = None,
     open_browser: bool = True,
     browser_opener: Callable[[str], bool] = _open_browser,
     server_starter: Callable[..., dict[str, Any]] = _serve_directory_url,
 ) -> dict[str, Any]:
-    summary = _write_current_graph_workbench(date=date, current_dir=current_dir)
+    summary = _write_current_graph_workbench(date=date, current_dir=current_dir, domain=domain)
     current_target = Path(summary["current_dir"])
     server = server_starter(current_target, "graph_visualization.html", port=port)
     opened = browser_opener(str(server["url"])) if open_browser else False
@@ -2253,7 +2651,9 @@ def _open_current_graph_workbench(
         **summary,
         **server,
         "opened": opened,
-        "message": "已在本地端口打开 active KG 的总体可编辑知识图谱工作台；未生成日期快照。",
+        "message": "已在本地端口打开 active KG 的总体可编辑知识图谱工作台；未生成日期快照。"
+        if not domain
+        else f"已在本地端口打开领域 KG `{domain}` 的可编辑知识图谱工作台；未生成日期快照。",
     }
 
 
@@ -2262,8 +2662,9 @@ def visualize_kg(
     date: str | None = None,
     output_dir: str | Path | None = None,
     current_dir: str | Path | None = None,
+    domain: str | None = None,
 ) -> dict[str, Any]:
-    summary = export_kg_snapshot(date=date, output_dir=output_dir, current_dir=current_dir)
+    summary = export_kg_snapshot(date=date, output_dir=output_dir, current_dir=current_dir, domain=domain)
     return {
         **summary,
         "message": "已生成可编辑知识图谱 HTML。打开 visualization_path 后可直接编辑节点和关系。",
@@ -2359,6 +2760,7 @@ def kg_workbench(
     date: str | None = None,
     output_dir: str | Path | None = None,
     current_dir: str | Path | None = None,
+    domain: str | None = None,
     edit_path: str | Path | None = None,
     approve: bool = False,
     port: int | None = None,
@@ -2369,10 +2771,11 @@ def kg_workbench(
     if edit_path:
         return apply_kg_edit(edit_path, current_dir=current_dir, approve=approve)
     if output_dir:
-        return visualize_kg(date=date, output_dir=output_dir, current_dir=current_dir)
+        return visualize_kg(date=date, output_dir=output_dir, current_dir=current_dir, domain=domain)
     return _open_current_graph_workbench(
         date=date,
         current_dir=current_dir,
+        domain=domain,
         port=port,
         open_browser=open_browser,
         browser_opener=browser_opener,

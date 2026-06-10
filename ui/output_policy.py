@@ -95,9 +95,38 @@ def print_assistant(text: str, *, mode: OutputMode | None = None) -> None:
     if selected == "terminal" and sys.stdout.isatty():
         try:
             from rich.console import Console
-            from rich.markdown import Markdown
+            from rich.markdown import HorizontalRule, Markdown
+            from rich.rule import Rule
+            from rich.text import Text
+            from rich.theme import Theme
 
-            Console().print(Markdown(clean))
+            class ConnectedHorizontalRule(HorizontalRule):
+                def __rich_console__(self, console, options):  # type: ignore[no-untyped-def]
+                    style = console.get_style("markdown.hr", default="none")
+                    yield Rule(style=style, characters="─")
+                    yield Text()
+
+            class ConnectedRuleMarkdown(Markdown):
+                elements = {**Markdown.elements, "hr": ConnectedHorizontalRule}
+
+            theme = Theme(
+                {
+                    "markdown.h1": "bold bright_white underline",
+                    "markdown.h2": "bold bright_white",
+                    "markdown.h3": "bold white",
+                    "markdown.h4": "white",
+                    "markdown.h5": "white",
+                    "markdown.h6": "dim white",
+                    "markdown.hr": "dim blue",
+                    "markdown.code": "bright_blue",
+                    "markdown.code_block": "bright_blue",
+                    "markdown.link": "underline bright_blue",
+                    "markdown.link_url": "dim blue",
+                    "markdown.item.bullet": "bright_blue",
+                    "markdown.item.number": "bright_blue",
+                }
+            )
+            Console(theme=theme).print(ConnectedRuleMarkdown(clean))
             return
         except Exception:
             pass

@@ -4,6 +4,7 @@ import re
 import shutil
 import unicodedata
 import os
+import sys
 from pathlib import Path
 
 from diaevo.paths import DIAEVO_DIR, WORKSPACE_ROOT, REPORTS_DIR
@@ -11,13 +12,18 @@ from diaevo.env import load_env
 from diaevo.storage import read_json, write_json
 from diaevo import __version__
 
+try:
+    import msvcrt
+except ImportError:  # pragma: no cover - Windows is the primary target.
+    msvcrt = None
+
 ESC = "\033["
 DIM = f"{ESC}2m"
 BOLD = f"{ESC}1m"
 ITALIC = f"{ESC}3m"
 RESET = f"{ESC}0m"
 BLUE = f"{ESC}38;5;111m"
-PURPLE = f"{ESC}38;5;141m"
+PURPLE = f"{ESC}38;5;75m"
 WHITE = f"{ESC}38;5;255m"
 CYAN = f"{ESC}38;5;45m"
 ANSI_RE = re.compile(r"\x1b\[[0-9;]*m")
@@ -320,7 +326,7 @@ def render_trust_dialog(selected: int = 1) -> str:
         f"{GLYPHS['prompt'] if selected == 1 else ' '} 1. 是，我信任这个目录",
         f"{GLYPHS['prompt'] if selected == 2 else ' '} 2. 否，退出",
         "",
-        f"{DIM}Enter 确认 {GLYPHS['dot']} 输入 2 退出{RESET}",
+        f"{DIM}上下键选择 {GLYPHS['dot']} Enter 确认 {GLYPHS['dot']} 输入数字仍可直选{RESET}",
     ]
 
     lines = [_frame_line(GLYPHS["tl"], GLYPHS["tr"], width, title)]
@@ -332,13 +338,60 @@ def render_trust_dialog(selected: int = 1) -> str:
     return "\n".join(lines)
 
 
+def _erase_rendered_lines(count: int) -> None:
+    if count <= 0:
+        return
+    sys.stdout.write("\r\033[2K")
+    for _ in range(count - 1):
+        sys.stdout.write("\033[1A\r\033[2K")
+
+
+def _read_trust_dialog_choice() -> str:
+    if msvcrt is None or not sys.stdin.isatty():
+        print(render_trust_dialog())
+        return input("选择 1 或 2 [1]: ").strip().lower()
+
+    selected = 1
+    rendered_lines = 0
+
+    def redraw() -> None:
+        nonlocal rendered_lines
+        if rendered_lines:
+            _erase_rendered_lines(rendered_lines)
+        rendered = render_trust_dialog(selected)
+        rendered_lines = rendered.count("\n") + 1
+        sys.stdout.write(rendered)
+        sys.stdout.flush()
+
+    redraw()
+    while True:
+        char = msvcrt.getwch()
+        if char in {"\003", "\032"}:
+            redraw()
+            continue
+        if char in {"\r", "\n"}:
+            _erase_rendered_lines(rendered_lines)
+            sys.stdout.flush()
+            return str(selected)
+        if char in {"\x00", "\xe0"}:
+            key = msvcrt.getwch()
+            if key in {"H", "P"}:
+                selected = 2 if selected == 1 else 1
+                redraw()
+            continue
+        normalized = char.strip().lower()
+        if normalized in {"1", "2", "y", "n", "q"}:
+            _erase_rendered_lines(rendered_lines)
+            sys.stdout.flush()
+            return normalized
+
+
 def maybe_show_trust_dialog() -> bool:
     if has_trusted_workspace():
         return True
-    print(render_trust_dialog())
     while True:
         try:
-            choice = input("选择 1 或 2 [1]: ").strip().lower()
+            choice = _read_trust_dialog_choice()
         except KeyboardInterrupt:
             print("\n请输入 1 或 2。")
             continue

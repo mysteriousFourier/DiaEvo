@@ -641,6 +641,7 @@ def build_parser() -> argparse.ArgumentParser:
     kg_parser.add_argument("--date", default=None, help="工作台显示日期，格式 YYMMDD 或 ISO 日期；默认今天。")
     kg_parser.add_argument("--output-dir", default=None, help="兼容选项：指定后才生成独立 HTML 导出目录。")
     kg_parser.add_argument("--current-dir", default=None, help="可选：指定 active KG 目录。")
+    kg_parser.add_argument("--domain", default=None, help="可选：打开某个领域图谱；不指定时打开总体 active KG。")
     kg_parser.add_argument("--port", type=int, default=None, help="可选：绑定本地工作台端口；默认 8765，冲突时自动顺延。")
     kg_parser.add_argument("--no-open", action="store_true", help="只输出本地 URL，不自动打开浏览器。")
     kg_parser.add_argument("--apply-edit", default=None, help="应用知识图谱编辑器导出的 JSON 文件。")
@@ -653,6 +654,7 @@ def build_parser() -> argparse.ArgumentParser:
     kg_snapshot_parser.add_argument("--date", default=None, help="Snapshot date as YYMMDD or ISO date; defaults to today.")
     kg_snapshot_parser.add_argument("--output-dir", default=None, help="Optional explicit snapshot output directory.")
     kg_snapshot_parser.add_argument("--current-dir", default=None, help="Optional active KG directory.")
+    kg_snapshot_parser.add_argument("--domain", default=None, help="Optional domain graph id or slug.")
 
     kg_visualize_parser = add_hidden_parser(
         "visualize-kg",
@@ -661,12 +663,14 @@ def build_parser() -> argparse.ArgumentParser:
     kg_visualize_parser.add_argument("--date", default=None, help="Snapshot date as YYMMDD or ISO date; defaults to today.")
     kg_visualize_parser.add_argument("--output-dir", default=None, help="Optional explicit visualization output directory.")
     kg_visualize_parser.add_argument("--current-dir", default=None, help="Optional active KG directory.")
+    kg_visualize_parser.add_argument("--domain", default=None, help="Optional domain graph id or slug.")
 
     kg_answer_parser = subparsers.add_parser("answer-kg", help="显式使用已审核知识图谱回答；严格模式需手动开启。")
     kg_answer_parser.add_argument("--query", required=True, help="要从 KG 中回答的问题。")
     kg_answer_parser.add_argument("--strict", action="store_true", help="只使用 accepted KG 事实和已审核证据。")
     kg_answer_parser.add_argument("--include-pending", action="store_true", help="同时搜索 pending 候选；严格模式会忽略。")
     kg_answer_parser.add_argument("--current-dir", default=None, help="可选：指定 active KG 目录。")
+    kg_answer_parser.add_argument("--domain", default=None, help="可选：只在指定领域图谱中回答。")
     kg_answer_parser.add_argument("--queue", default=None, help="可选：非严格模式使用的审核队列 JSONL 路径。")
     kg_answer_parser.add_argument("--max-paths", type=int, default=5, help="最多返回多少条图谱证据路径。")
     kg_answer_parser.add_argument("--vector-backend", choices=["auto", "dense", "tfidf"], default=None, help="KG 向量检索后端；dense 使用 sentence-transformers。")
@@ -1235,21 +1239,23 @@ def main(argv: list[str] | None = None) -> int:
                 date=args.date,
                 output_dir=args.output_dir,
                 current_dir=args.current_dir,
+                domain=args.domain,
                 edit_path=args.apply_edit,
                 approve=args.approve,
                 port=args.port,
                 open_browser=not args.no_open,
             )
         elif args.command == "export-kg-snapshot":
-            result = export_kg_snapshot(date=args.date, output_dir=args.output_dir, current_dir=args.current_dir)
+            result = export_kg_snapshot(date=args.date, output_dir=args.output_dir, current_dir=args.current_dir, domain=args.domain)
         elif args.command == "visualize-kg":
-            result = visualize_kg(date=args.date, output_dir=args.output_dir, current_dir=args.current_dir)
+            result = visualize_kg(date=args.date, output_dir=args.output_dir, current_dir=args.current_dir, domain=args.domain)
         elif args.command == "answer-kg":
             result = answer_kg(
                 args.query,
                 strict=args.strict,
                 include_pending=args.include_pending,
                 current_dir=args.current_dir,
+                domain=args.domain,
                 queue_path=args.queue,
                 max_paths=args.max_paths,
                 vector_backend=args.vector_backend,
