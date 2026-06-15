@@ -38,6 +38,7 @@ class FlowInputEvent:
     interrupt: bool = False
     talk: bool = False
     hard_interrupt: bool = False
+    plan: bool = False
     source: str = field(default="", compare=False)
     reply_to_user_id: str = field(default="", compare=False)
 
@@ -56,6 +57,7 @@ class FlowInputController:
         self.draft = ""
         self.cursor_index = 0
         self.selected_index = 0
+        self.plan_mode = False
         self.queued_preview: list[str] = []
         self._rendered_lines = 0
         self._rendered_lines_above_input = 0
@@ -109,6 +111,7 @@ class FlowInputController:
             self.draft = ""
             self.cursor_index = 0
             self.selected_index = 0
+            self.plan_mode = False
             self.queued_preview.clear()
             self.status_line = ""
             self._status_renderer = None
@@ -413,6 +416,11 @@ class FlowInputController:
             event.app.current_buffer.reset()
             event.app.invalidate()
 
+        @bindings.add("s-tab")
+        def _toggle_plan_mode(event) -> None:
+            controller.toggle_plan_mode()
+            event.app.invalidate()
+
         return PromptSession(
             message=f"{GLYPHS['prompt']} ",
             completer=DiaEvoCompleter(),
@@ -483,7 +491,7 @@ class FlowInputController:
         value = _submit_value(str(text), 0).strip()
         if not value:
             return
-        event = _event_from_text(value, interrupt=True)
+        event = _event_from_text(value, interrupt=True, plan=self.plan_mode)
         self.queue.put(event)
         with self._render_lock:
             self.queued_preview.append(_preview_text(event.text if event.talk else value))
@@ -510,8 +518,18 @@ class FlowInputController:
             pieces.append(status_line)
         if self.queued_preview:
             pieces.append(self._render_queued_preview().replace(DIM, "").replace(RESET, ""))
-        pieces.append("Enter 发送 · Tab 补全 · Esc 中止 · /exit 退出")
+        mode = "Plan" if self.plan_mode else "Act"
+        pieces.append(f"Mode {mode} · Shift+Tab 切换 · Enter 发送 · Tab 补全 · Esc 中止 · /exit 退出")
         return "  ".join(pieces)
+
+    def toggle_plan_mode(self) -> bool:
+        with self._render_lock:
+            self.plan_mode = not self.plan_mode
+            if self._toolkit_mode:
+                self._invalidate_toolkit()
+            elif self.prompt_visible.is_set():
+                self._render_prompt_line()
+            return self.plan_mode
 
     def _worker(self) -> None:
         while True:
@@ -558,7 +576,7 @@ class FlowInputController:
         text = _submit_value(self.draft, self.selected_index).strip()
         if not text:
             return
-        event = _event_from_text(text, interrupt=True)
+        event = _event_from_text(text, interrupt=True, plan=self.plan_mode)
         self.queue.put(event)
         with self._render_lock:
             self.queued_preview.append(_preview_text(event.text if event.talk else text))
@@ -618,7 +636,10 @@ class FlowInputController:
         matches = _matching_commands(self.draft)
         match_count = _menu_match_count(self.draft)
         with self._render_lock:
-            if match_count and key == "H":
+            if key in {"\x0f", "Z"}:
+                self.plan_mode = not self.plan_mode
+                self._render_prompt_line()
+            elif match_count and key == "H":
                 self.selected_index = _move_menu_selection(self.selected_index, match_count, -1)
                 self._render_prompt_line()
             elif match_count and key == "P":
@@ -686,6 +707,7 @@ def _event_from_text(
     *,
     interrupt: bool,
     hard_interrupt: bool = False,
+    plan: bool = False,
     source: str = "",
     reply_to_user_id: str = "",
 ) -> FlowInputEvent:
@@ -696,6 +718,7 @@ def _event_from_text(
         interrupt=False if talk else interrupt,
         talk=talk,
         hard_interrupt=hard_interrupt,
+        plan=plan,
         source=source,
         reply_to_user_id=reply_to_user_id,
     )

@@ -92,6 +92,7 @@ def test_prompt_footer_is_short_and_composer_like() -> None:
 
     assert "Enter 发送" in rendered
     assert "Tab 补全" in rendered
+    assert "Shift+Tab 切换" in rendered
     assert "Enter 运行命令或当前菜单项" not in rendered
 
 
@@ -175,6 +176,16 @@ def test_read_prompt_erases_menu_and_footer_on_submit(monkeypatch) -> None:
     writes = "".join(fake_stdout.writes)
     assert "Enter 发送" in writes
     assert writes.rstrip().endswith("\033[2K")
+
+
+def test_idle_prompt_plan_mode_prefixes_plain_task(monkeypatch) -> None:
+    monkeypatch.setattr(prompt_bar, "_PLAN_MODE", True)
+
+    assert prompt_bar._apply_plan_mode_prefix("修复 skill 挖掘") == prompt_bar.PLAN_MODE_PREFIX + "修复 skill 挖掘"
+    assert prompt_bar._apply_plan_mode_prefix("/learn") == "/learn --plan"
+    assert prompt_bar._apply_plan_mode_prefix("/status") == "/status"
+
+    monkeypatch.setattr(prompt_bar, "_PLAN_MODE", False)
 
 
 def test_read_prompt_uses_plain_input_by_default(monkeypatch) -> None:

@@ -35,6 +35,32 @@ def mine(
         for explanation in cluster.explanations:
             kind = str(explanation.get("type") or "unknown")
             explanation_counts[kind] = explanation_counts.get(kind, 0) + 1
+    generation_entrypoints = []
+    plan_notes = []
+    for cluster in clusters:
+        diagnostic = generation_diagnostic(cluster.to_mapping())
+        if diagnostic.get("eligible") and (cluster.coverage_gap >= 0.25 or cluster.tool_reuse_count > 0):
+            generation_entrypoints.append(
+                {
+                    "cluster_id": cluster.id,
+                    "primary_reason": cluster.explanations[0]["type"] if cluster.explanations else "unknown",
+                    "coverage_gap": round(cluster.coverage_gap, 4),
+                    "failure_rate": round(cluster.failure_rate, 4),
+                    "tool_reuse_count": cluster.tool_reuse_count,
+                    "workflow_signal_strength": diagnostic.get("workflow_signal_strength", 0.0),
+                    "recommended_action": "generate_candidate_skill",
+                }
+            )
+        elif diagnostic.get("failure_signal_strength", 0.0) >= 0.25:
+            plan_notes.append(
+                {
+                    "cluster_id": cluster.id,
+                    "reason": "failure signals should become planning constraints, not standalone skills",
+                    "workflow_signal_strength": diagnostic.get("workflow_signal_strength", 0.0),
+                    "failure_signal_strength": diagnostic.get("failure_signal_strength", 0.0),
+                    "representative_task": cluster.representative_task,
+                }
+            )
     result = {
         "trace_source": str(trace_source),
         "trace_count": len(traces),
@@ -42,19 +68,8 @@ def mine(
         "assignments": {trace.id: f"C{assignments[index] + 1:02d}" for index, trace in enumerate(traces)},
         "clusters": [cluster.to_mapping() for cluster in clusters],
         "cluster_explanation_counts": explanation_counts,
-        "generation_entrypoints": [
-            {
-                "cluster_id": cluster.id,
-                "primary_reason": cluster.explanations[0]["type"] if cluster.explanations else "unknown",
-                "coverage_gap": round(cluster.coverage_gap, 4),
-                "failure_rate": round(cluster.failure_rate, 4),
-                "tool_reuse_count": cluster.tool_reuse_count,
-                "recommended_action": "generate_candidate_skill",
-            }
-            for cluster in clusters
-            if generation_diagnostic(cluster.to_mapping()).get("eligible")
-            and (cluster.coverage_gap >= 0.25 or cluster.tool_reuse_count > 0 or cluster.failure_rate > 0)
-        ],
+        "generation_entrypoints": generation_entrypoints,
+        "plan_notes": plan_notes,
         "association_rules": rules[:100],
         "frequent_sequences": sequences[:100],
         "graph": {

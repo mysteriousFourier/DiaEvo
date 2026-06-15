@@ -198,7 +198,12 @@ def summarize_clusters(
         members = [traces[index] for index in indexes]
         vectors = [features.vectors[index] for index in indexes]
         center = centroid(vectors)
-        representative_index = max(indexes, key=lambda index: cosine(features.vectors[index], center))
+        representative_candidates = [
+            index
+            for index in indexes
+            if (traces[index].source or "trace") != "tool_event"
+        ] or indexes
+        representative_index = max(representative_candidates, key=lambda index: cosine(features.vectors[index], center))
         success_count = sum(1 for trace in members if trace.success)
         size = len(members)
         used_skill_count = sum(1 for trace in members if trace.used_skills)

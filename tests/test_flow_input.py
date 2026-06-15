@@ -3,6 +3,7 @@ import threading
 from contextlib import nullcontext
 
 from ui.flow_input import FlowInputController, FlowInputEvent
+from ui.interactive_shell import PLAN_MODE_PREFIX, ChatConfigState, _event_to_command
 
 
 def test_escape_with_active_slash_menu_clears_draft_without_interrupt(capsys):
@@ -267,6 +268,39 @@ def test_toolkit_submission_queues_flow_event():
 
     assert controller.queue.get_nowait() == FlowInputEvent("继续检查输入栏", interrupt=True)
     assert controller.queued_preview == ["继续检查输入栏"]
+
+
+def test_plan_mode_marks_submitted_flow_event():
+    controller = FlowInputController()
+
+    assert controller.toggle_plan_mode() is True
+    controller._queue_toolkit_submission("先规划 skill 挖掘")
+
+    event = controller.queue.get_nowait()
+    assert event.text == "先规划 skill 挖掘"
+    assert event.plan is True
+    assert "Mode Plan" in controller._render_toolkit_toolbar()
+
+
+def test_raw_shift_tab_extended_key_toggles_plan_mode(capsys):
+    controller = FlowInputController()
+
+    controller._handle_extended_key("Z")
+
+    assert controller.plan_mode is True
+    capsys.readouterr()
+
+
+def test_plan_event_rewrites_learn_command_to_plan_mode():
+    command = _event_to_command(FlowInputEvent("/learn", plan=True), ChatConfigState())
+
+    assert command == "/learn --plan"
+
+
+def test_plan_event_marks_plain_task_with_internal_prefix():
+    command = _event_to_command(FlowInputEvent("修复 skill 挖掘流程", plan=True), ChatConfigState())
+
+    assert command == PLAN_MODE_PREFIX + "修复 skill 挖掘流程"
 
 
 def test_toolkit_escape_queues_hard_interrupt():

@@ -1,7 +1,9 @@
 ﻿from __future__ import annotations
 
 import json
+import os
 import re
+import sys
 from pathlib import Path
 from typing import Any
 
@@ -83,6 +85,50 @@ def _as_strings(values: Any) -> list[str]:
     return [str(item) for item in values if str(item)]
 
 
+def workflow_signal_strength(cluster: dict[str, Any]) -> float:
+    source_counts = cluster.get("source_counts", {})
+    if not isinstance(source_counts, dict):
+        source_counts = {}
+    trace_count = max(1, int(cluster.get("size") or 0))
+    tool_event_count = int(source_counts.get("tool_event") or 0)
+    non_tool_ratio = max(0.0, min(1.0, (trace_count - tool_event_count) / trace_count))
+    representative = str(cluster.get("representative_task") or "").strip()
+    looks_like_tool_event = representative.lower().startswith("tool event ")
+    files = _as_strings(cluster.get("file_extensions"))
+    commands = _as_strings(cluster.get("commands"))
+    tools = _as_strings(cluster.get("top_tools"))
+    terms = _as_strings(cluster.get("top_terms"))
+    noisy_terms = {"event", "feedback", "tool", "tool-event", "tool_event", "failure", "error"}
+    meaningful_terms = [
+        term
+        for term in terms
+        if term.lower() not in noisy_terms and not term.startswith("#")
+    ]
+    score = 0.0
+    if representative and not looks_like_tool_event:
+        score += 0.32
+    score += 0.12 * non_tool_ratio
+    if files:
+        score += 0.18
+    if commands:
+        score += 0.12
+    if len(tools) >= 2:
+        score += 0.12
+    score += min(0.14, len(meaningful_terms) * 0.035)
+    return round(min(1.0, score), 4)
+
+
+def failure_signal_strength(cluster: dict[str, Any]) -> float:
+    errors = _as_strings(cluster.get("top_errors"))
+    failure_types = _as_strings(cluster.get("top_failure_types"))
+    failure_rate = float(cluster.get("failure_rate", 0.0) or 0.0)
+    tool_success_rate = float(cluster.get("tool_success_rate", 0.0) or 0.0)
+    event_count = int(cluster.get("event_count", 0) or 0)
+    tool_failure_pressure = (1.0 - tool_success_rate) if event_count else 0.0
+    signal_count = min(1.0, (len(errors) + len(failure_types)) / 4.0)
+    return round(min(1.0, max(failure_rate, tool_failure_pressure, signal_count)), 4)
+
+
 def _list_items(values: list[str], empty: str = "暂无强信号。") -> list[str]:
     if not values:
         return [f"- {empty}"]
@@ -104,6 +150,8 @@ def generation_diagnostic(cluster: dict[str, Any]) -> dict[str, Any]:
     files = _as_strings(cluster.get("file_extensions"))
     top_tools = _as_strings(cluster.get("top_tools"))
     top_terms = _as_strings(cluster.get("top_terms"))
+    workflow_strength = workflow_signal_strength(cluster)
+    failure_strength = failure_signal_strength(cluster)
     is_tool_event_only = bool(trace_count) and tool_event_count >= trace_count
     looks_like_tool_event = representative.lower().startswith("tool event ")
     has_task_context = bool(files or commands) or not looks_like_tool_event
@@ -132,16 +180,23 @@ def generation_diagnostic(cluster: dict[str, Any]) -> dict[str, Any]:
             "representative_task": representative,
             "top_tools": top_tools,
             "meaningful_terms": meaningful_terms,
+            "workflow_signal_strength": workflow_strength,
+            "failure_signal_strength": failure_strength,
         }
-    if len(meaningful_terms) < 2 and not files:
+    if workflow_strength < 0.35:
         return {
             "eligible": False,
             "reason": "insufficient_task_signals",
-            "message": "该簇缺少足够的任务关键词和文件上下文，暂不适合生成可复用 skill。",
+            "message": (
+                "该簇缺少足够的对话任务、文件、命令或工具序列证据；"
+                "失败归因只能作为辅助信号，暂不适合生成可复用 skill。"
+            ),
             "source_counts": source_counts,
             "representative_task": representative,
             "top_tools": top_tools,
             "meaningful_terms": meaningful_terms,
+            "workflow_signal_strength": workflow_strength,
+            "failure_signal_strength": failure_strength,
         }
     return {
         "eligible": True,
@@ -151,6 +206,8 @@ def generation_diagnostic(cluster: dict[str, Any]) -> dict[str, Any]:
         "representative_task": representative,
         "top_tools": top_tools,
         "meaningful_terms": meaningful_terms,
+        "workflow_signal_strength": workflow_strength,
+        "failure_signal_strength": failure_strength,
     }
 
 
@@ -171,14 +228,16 @@ def _explanation_text(cluster: dict[str, Any]) -> list[str]:
 
 def _workflow_steps(tools: list[str], errors: list[str], failure_types: list[str]) -> list[str]:
     steps = [
-        "先阅读任务，检查与聚类信号匹配的项目文件，确认最小可复现工作流。",
-        "优先复用从成功轨迹中挖掘出的工具序列，不要一开始就引入新工具。",
+        "进入 plan mode：先从用户请求中提取目标、约束、期望产物和未知点，必要时先反问补齐关键流程。",
+        "把计划拆成“收集上下文 -> 执行修改或操作 -> 验证 -> 回灌反馈”，并确认每一步都有对话任务证据支撑。",
+        "阅读与聚类信号匹配的项目文件，确认最小可复现工作流，再开始执行。",
+        "优先复用从成功轨迹中挖掘出的工具序列；命令失败归因只作为验证和恢复线索，不作为主流程入口。",
     ]
     if tools:
         steps.append("运行或模拟反复出现的工具路径：" + " -> ".join(f"`{tool}`" for tool in tools[:6]) + "。")
     if errors or failure_types:
         joined = ", ".join(f"`{value}`" for value in [*errors, *failure_types][:6])
-        steps.append(f"如果任务出现 {joined}，先复现失败场景，再开始编辑。")
+        steps.append(f"如果任务出现 {joined}，先判断它属于目标流程、环境限制还是工具调用问题，再决定是否复现。")
     steps.extend(
         [
             "只做能解决当前失败或覆盖缺口的最小 workspace 范围修改。",
@@ -334,13 +393,19 @@ def _write_code_artifacts(target_root: Path, cluster: dict[str, Any]) -> dict[st
     helper_path = scripts_dir / "skill_flow.py"
     helper_path.write_text(_helper_script(cluster), encoding="utf-8")
     skill_relative_helper = f"{target_root.as_posix().strip('/')}/scripts/skill_flow.py"
+    python_executable = Path(sys.executable).as_posix()
+    python_command = (
+        f'& "{python_executable}" {skill_relative_helper} --describe'
+        if os.name == "nt"
+        else f'"{python_executable}" {skill_relative_helper} --describe'
+    )
     validation = {
         "schema": "diaevo.validation.v1",
         "status": "candidate",
         "workspace_only": True,
         "network": False,
         "timeout_sec": 60,
-        "commands": [f"python {skill_relative_helper} --describe"],
+        "commands": [python_command],
     }
     write_json(target_root / "validation.json", validation)
     artifacts = {

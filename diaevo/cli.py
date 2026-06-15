@@ -11,7 +11,13 @@ from .evaluation import baseline_report
 from .code_evolution import run_code_evolution
 from .evolution import evolve_skill
 from .gepa_adapter import evaluate_gepa, evaluate_gepa_phase4
-from .generator import generate_skill, generation_diagnostic, semantic_skill_name
+from .generator import (
+    failure_signal_strength,
+    generate_skill,
+    generation_diagnostic,
+    semantic_skill_name,
+    workflow_signal_strength,
+)
 from .ingest import ingest_traces
 from .knowledge_graph import (
     KG_REVIEW_STATUSES,
@@ -342,6 +348,30 @@ def _render_learn_result(result: dict[str, Any]) -> str:
     selected = result.get("selected_task") if isinstance(result.get("selected_task"), dict) else {}
     generated = result.get("generated") if isinstance(result.get("generated"), dict) else {}
     verified = result.get("verify") if isinstance(result.get("verify"), dict) else {}
+    if status == "plan":
+        lines.extend(
+            [
+                "做了什么：进入 plan mode，只规划可持久化内容，没有写入候选 skill。",
+                f"任务名：{selected.get('title', '')}",
+                f"它解决什么：{selected.get('solves', '')}",
+                f"为什么：{selected.get('reason', '')}",
+            ]
+        )
+        plan_steps = result.get("plan_steps") if isinstance(result.get("plan_steps"), list) else []
+        if plan_steps:
+            lines.extend(["", "计划："])
+            lines.extend(f"{index}. {step}" for index, step in enumerate(plan_steps, start=1))
+        plan_notes = result.get("plan_notes") if isinstance(result.get("plan_notes"), list) else []
+        if plan_notes:
+            lines.extend(["", "应持久化到模型规则/规划约束，而不是 skill 的发现："])
+            for item in plan_notes[:5]:
+                if isinstance(item, dict):
+                    lines.append(f"- {item.get('title', '')}：{item.get('reason', '')}")
+        report_path = str(result.get("report_path") or "")
+        if report_path:
+            lines.append(f"详细报告：{report_path}")
+        lines.extend(["", "下一步建议：确认计划后运行 /learn 生成候选 skill；失败归因类内容进入 agent 规则沉淀。"])
+        return "\n".join(line for line in lines if line).rstrip()
     if status == "preview":
         lines.extend(
             [
@@ -448,6 +478,7 @@ def build_parser() -> argparse.ArgumentParser:
     learn_parser.add_argument("--clusters", type=int, default=None, help="可选：固定聚类数量。")
     learn_parser.add_argument("--output-dir", default=None, help="可选：候选 skill 输出目录。")
     learn_parser.add_argument("--with-code", action="store_true", help="为候选 skill 生成只读 helper code。")
+    learn_parser.add_argument("--plan", action="store_true", help="进入规划模式：只输出候选工作流与规则沉淀建议，不写入 skill。")
     learn_parser.add_argument("--dry-run", action="store_true", help="只显示会学习哪个任务，不写入候选 skill。")
 
     subparsers.add_parser("status", help="显示当前工作区、模型和最近学习结果。")
@@ -889,12 +920,53 @@ def run_self_evolve(
 
 
 def _candidate_score(cluster: dict[str, Any]) -> float:
+    workflow_strength = workflow_signal_strength(cluster)
+    failure_strength = failure_signal_strength(cluster)
     return (
-        float(cluster.get("coverage_gap") or 0.0) * 3.0
-        + float(cluster.get("failure_rate") or 0.0) * 1.5
+        workflow_strength * 4.0
+        + float(cluster.get("coverage_gap") or 0.0) * 1.2
         + min(float(cluster.get("tool_reuse_count") or 0.0), 10.0) / 10.0
         + min(float(cluster.get("size") or 0.0), 10.0) / 20.0
+        - failure_strength * max(0.0, 0.45 - workflow_strength) * 2.0
     )
+
+
+def _plan_note_for_cluster(cluster: dict[str, Any], diagnostic: dict[str, Any]) -> dict[str, Any] | None:
+    failure_strength = failure_signal_strength(cluster)
+    workflow_strength = workflow_signal_strength(cluster)
+    errors = cluster.get("top_errors") if isinstance(cluster.get("top_errors"), list) else []
+    failure_types = cluster.get("top_failure_types") if isinstance(cluster.get("top_failure_types"), list) else []
+    if failure_strength < 0.25 and not errors and not failure_types:
+        return None
+    title = str(cluster.get("representative_task") or "执行失败归因").strip()[:80]
+    if diagnostic.get("eligible"):
+        reason = "该簇有可复用工作流，失败信号只应作为恢复约束写入 skill。"
+    elif workflow_strength < 0.35:
+        reason = "主要信号来自命令失败或工具限制，应沉淀为模型规划规则，而不是占用 skill 候选。"
+    else:
+        reason = "失败信号需要规划约束承接，避免模型把自我执行问题误当用户工作流。"
+    return {
+        "title": title,
+        "reason": reason,
+        "cluster_id": str(cluster.get("id") or ""),
+        "workflow_signal_strength": workflow_strength,
+        "failure_signal_strength": failure_strength,
+        "signals": [str(item) for item in [*errors, *failure_types][:6]],
+    }
+
+
+def _learn_plan_steps(selected_task: dict[str, Any], plan_notes: list[dict[str, Any]]) -> list[str]:
+    steps = [
+        "先确认候选是否来自用户对话中的完整工作流：目标、输入、关键文件/命令、验证方式都要能从轨迹解释。",
+        "把命令失败、审批失败、环境限制和重复失败归因写入 agent 规划约束，不生成独立 skill。",
+        "只为 workflow signal 足够强的候选生成 SKILL.md；失败信号仅进入 Failure Fallbacks 和 Verification Suggestions。",
+        "生成前保留候选任务卡，必要时向用户反问缺失步骤，补齐完整流程后再 promotion。",
+    ]
+    if selected_task.get("tools"):
+        steps.append("候选工作流工具序列：" + " -> ".join(f"`{tool}`" for tool in selected_task["tools"]))
+    if plan_notes:
+        steps.append("本轮发现的规则类沉淀数量：" + str(len(plan_notes)))
+    return steps
 
 
 def _task_card(cluster: dict[str, Any]) -> dict[str, Any]:
@@ -902,13 +974,17 @@ def _task_card(cluster: dict[str, Any]) -> dict[str, Any]:
     representative = str(cluster.get("representative_task") or "未命名任务").strip()
     terms = diagnostic.get("meaningful_terms") if isinstance(diagnostic.get("meaningful_terms"), list) else []
     tools = cluster.get("top_tools") if isinstance(cluster.get("top_tools"), list) else []
+    workflow_strength = workflow_signal_strength(cluster)
+    failure_strength = failure_signal_strength(cluster)
     reason_parts = []
-    if float(cluster.get("coverage_gap") or 0.0) >= 0.25:
+    if workflow_strength >= 0.55:
+        reason_parts.append("对话工作流信号清晰")
+    if float(cluster.get("coverage_gap") or 0.0) >= 0.25 and workflow_strength >= 0.35:
         reason_parts.append("已有能力覆盖不足")
     if int(cluster.get("tool_reuse_count") or 0) > 0:
         reason_parts.append("相似工具流程反复出现")
-    if float(cluster.get("failure_rate") or 0.0) > 0:
-        reason_parts.append("历史任务里出现过失败，需要固定排查步骤")
+    if failure_strength >= 0.25:
+        reason_parts.append("失败信号只作为规划/恢复约束")
     reason = "，".join(reason_parts) or "任务信号足够清晰，适合沉淀成可复用流程"
     solves = representative
     if terms:
@@ -921,6 +997,8 @@ def _task_card(cluster: dict[str, Any]) -> dict[str, Any]:
         "cluster_id": str(cluster.get("id") or ""),
         "score": round(_candidate_score(cluster), 4),
         "tools": [str(item) for item in tools[:5]],
+        "workflow_signal_strength": workflow_strength,
+        "failure_signal_strength": failure_strength,
     }
 
 
@@ -933,6 +1011,7 @@ def run_learn(
     clusters: int | None = None,
     output_dir: str | None = None,
     with_code: bool = False,
+    plan: bool = False,
     dry_run: bool = False,
 ) -> dict[str, Any]:
     ingest_result = ingest_traces(
@@ -949,6 +1028,9 @@ def run_learn(
             continue
         diagnostic = generation_diagnostic(cluster)
         card = _task_card(cluster)
+        note = _plan_note_for_cluster(cluster, diagnostic)
+        if note:
+            skipped.append({**card, "reason_code": "plan_note", "plan_note": note})
         if diagnostic.get("eligible"):
             eligible.append({**card, "cluster": cluster})
         else:
@@ -976,6 +1058,33 @@ def run_learn(
 
     selected = eligible[0]
     selected_card = {key: value for key, value in selected.items() if key != "cluster"}
+    plan_notes = [
+        item["plan_note"]
+        for item in skipped
+        if isinstance(item.get("plan_note"), dict)
+    ]
+    if plan:
+        result = {
+            "status": "plan",
+            "message": "已进入 plan mode：只规划候选工作流和规则沉淀，不写入候选 skill。",
+            "workspace": str(WORKSPACE_ROOT),
+            "selected_task": selected_card,
+            "candidates": visible_candidates,
+            "plan_steps": _learn_plan_steps(selected_card, plan_notes),
+            "plan_notes": plan_notes,
+            "ingest": {
+                "trace_count": ingest_result.get("trace_count", 0),
+                "tool_events_ingested": ingest_result.get("tool_events_ingested", 0),
+            },
+            "mine": {
+                "trace_count": mine_result.get("trace_count", 0),
+                "cluster_count": len(mine_result.get("clusters", []) or []),
+            },
+        }
+        report_path = REPORTS_DIR / "learn_report.json"
+        write_json(report_path, result)
+        result["report_path"] = str(report_path)
+        return result
     if dry_run:
         result = {
             "status": "preview",
@@ -983,6 +1092,7 @@ def run_learn(
             "workspace": str(WORKSPACE_ROOT),
             "selected_task": selected_card,
             "candidates": visible_candidates,
+            "plan_notes": plan_notes,
         }
         report_path = REPORTS_DIR / "learn_report.json"
         write_json(report_path, result)
@@ -1106,6 +1216,7 @@ def main(argv: list[str] | None = None) -> int:
                 clusters=args.clusters,
                 output_dir=args.output_dir,
                 with_code=args.with_code,
+                plan=args.plan,
                 dry_run=args.dry_run,
             )
         elif args.command == "status":

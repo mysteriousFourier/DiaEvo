@@ -59,6 +59,8 @@ _SKILL_MENU_CACHE: list[tuple[str, str]] | None = None
 _PROMPT_SESSION: Any | None = None
 _PROMPT_TOOLKIT_DISABLED = {"0", "false", "no", "off"}
 _RAW_PROMPT_ENABLED = {"1", "true", "yes", "on"}
+PLAN_MODE_PREFIX = "__DIAEVO_PLAN_MODE__ "
+_PLAN_MODE = False
 
 
 def _erase_lines(count: int) -> None:
@@ -264,11 +266,13 @@ def render_prompt_line(value: str = "") -> str:
 
 
 def render_footer() -> str:
-    return f"  {DIM}Enter 发送 {GLYPHS['dot']} Tab 补全 {GLYPHS['dot']} Esc 清空菜单{RESET}"
+    mode = "Plan" if _PLAN_MODE else "Act"
+    return f"  {DIM}Mode {mode} {GLYPHS['dot']} Shift+Tab 切换 {GLYPHS['dot']} Enter 发送 {GLYPHS['dot']} Tab 补全 {GLYPHS['dot']} Esc 清空菜单{RESET}"
 
 
 def render_plain_footer() -> str:
-    return "Enter 发送 · Tab 补全 · /exit 退出"
+    mode = "Plan" if _PLAN_MODE else "Act"
+    return f"Mode {mode} · Shift+Tab 切换 · Enter 发送 · Tab 补全 · /exit 退出"
 
 
 def render_command_menu(value: str, selected_index: int = 0) -> str:
@@ -389,7 +393,7 @@ def _read_prompt_toolkit() -> str | None:
         except (EOFError, KeyboardInterrupt):
             print("输入 /exit 退出。")
             continue
-        return _submit_value(text, 0).strip()
+        return _apply_plan_mode_prefix(_submit_value(text, 0).strip())
 
 
 def _prompt_stdout_patch():
@@ -409,6 +413,7 @@ def _prompt_session():
         from prompt_toolkit.completion import Completer, Completion
         from prompt_toolkit.completion import CompleteEvent
         from prompt_toolkit.document import Document
+        from prompt_toolkit.key_binding import KeyBindings
     except Exception as exc:  # pragma: no cover - dependency may be absent in minimal installs.
         raise RuntimeError("prompt_toolkit is not available") from exc
 
@@ -422,6 +427,14 @@ def _prompt_session():
             for value, description in _completion_items(text):
                 yield Completion(value, start_position=-len(text), display=value, display_meta=description)
 
+    bindings = KeyBindings()
+
+    @bindings.add("s-tab")
+    def _toggle_plan_mode(event) -> None:
+        global _PLAN_MODE
+        _PLAN_MODE = not _PLAN_MODE
+        event.app.invalidate()
+
     _PROMPT_SESSION = PromptSession(
         message=f"{GLYPHS['prompt']} ",
         completer=DiaEvoCompleter(),
@@ -429,6 +442,7 @@ def _prompt_session():
         bottom_toolbar=render_plain_footer,
         reserve_space_for_menu=8,
         style=_prompt_style(),
+        key_bindings=bindings,
     )
     return _PROMPT_SESSION
 
@@ -495,7 +509,7 @@ def _read_prompt_raw() -> str:
             sys.stdout.write(_cursor_to_bottom(rendered_lines, rendered_value))
             _erase_lines(rendered_lines)
             sys.stdout.flush()
-            return value
+            return _apply_plan_mode_prefix(value)
         if char in {"\003", "\032"}:
             redraw()
             continue
@@ -520,6 +534,10 @@ def _read_prompt_raw() -> str:
             elif match_count and key == "P":
                 selected_index = _move_menu_selection(selected_index, match_count, 1)
                 redraw()
+            elif key in {"\x0f", "Z"}:
+                global _PLAN_MODE
+                _PLAN_MODE = not _PLAN_MODE
+                redraw()
             continue
         if char == "\t":
             if _menu_match_count(value):
@@ -536,3 +554,18 @@ def _read_prompt_raw() -> str:
             value += char
             selected_index = 0
             redraw()
+
+
+def _apply_plan_mode_prefix(value: str) -> str:
+    if not value or not _PLAN_MODE:
+        return value
+    if value.lower() == "/learn":
+        return "/learn --plan"
+    if value.lower().startswith("/learn "):
+        parts = value.split()
+        if "--plan" not in parts[1:]:
+            return f"{value} --plan"
+        return value
+    if value.startswith("/"):
+        return value
+    return PLAN_MODE_PREFIX + value

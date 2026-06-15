@@ -651,6 +651,59 @@ def test_transient_menu_choice_accepts_tab_shortcut() -> None:
     )
 
 
+def test_plan_question_parser_accepts_json_block() -> None:
+    from ui import interactive_shell
+
+    parsed = interactive_shell._parse_plan_question(
+        '```json\n{"type":"plan_question","question":"选哪个流程？","options":["A","B","C"]}\n```'
+    )
+
+    assert parsed == {"question": "选哪个流程？", "options": ["A", "B", "C"]}
+
+
+def test_plan_question_custom_choice_uses_tab_after_fourth_option(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    class FakeStdout:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+
+        def write(self, value: str) -> int:
+            self.writes.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+    class FakeStdin:
+        def isatty(self) -> bool:
+            return True
+
+    class FakeMsvcrt:
+        def __init__(self) -> None:
+            self.chars = iter(["\xe0", "P", "\xe0", "P", "\xe0", "P", "\t"])
+
+        def kbhit(self) -> bool:
+            return True
+
+        def getwch(self) -> str:
+            return next(self.chars)
+
+    fake_stdout = FakeStdout()
+    monkeypatch.setattr(interactive_shell.sys, "stdout", fake_stdout)
+    monkeypatch.setattr(interactive_shell.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(interactive_shell, "msvcrt", FakeMsvcrt())
+    monkeypatch.setattr(interactive_shell, "_qq_send", lambda *args, **kwargs: None)
+    monkeypatch.setattr(interactive_shell, "_read_transient_text", lambda prompt, **kwargs: "我自己的答案")
+
+    answer = interactive_shell._read_plan_question_answer("请选择", ["A", "B", "C"])
+
+    writes = "".join(fake_stdout.writes)
+    assert answer == "我自己的答案"
+    assert "4. 自定义答案" in writes
+    assert "选中自定义后 Tab 输入" in writes
+
+
 def test_transient_multi_choice_uses_arrows_and_space(monkeypatch) -> None:
     from ui import interactive_shell
 
@@ -746,6 +799,43 @@ def test_tool_loop_continues_until_model_returns_text(monkeypatch) -> None:
     assert answer == "done from existing tool results"
     assert len(calls) == 3
     assert calls[-1]["tools"] is not None
+
+
+def test_plan_question_answer_is_added_and_turn_continues(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    calls = []
+
+    def fake_chat_completion(messages, config, *, tools=None, tool_choice=None):
+        calls.append([dict(item) for item in messages])
+        if len(calls) == 1:
+            return {
+                "choices": [
+                    {
+                        "message": {
+                            "content": (
+                                '{"type":"plan_question","question":"缺哪个信息？",'
+                                '"options":["补充目标","补充输入","补充验证"]}'
+                            )
+                        }
+                    }
+                ]
+            }
+        return {"choices": [{"message": {"content": "计划已确认"}}]}
+
+    monkeypatch.setattr(interactive_shell, "chat_completion", fake_chat_completion)
+    monkeypatch.setattr(interactive_shell, "_read_plan_question_answer", lambda question, options: "补充验证")
+    monkeypatch.setattr(interactive_shell, "_start_flow_input_listener", lambda: False)
+    monkeypatch.setattr(interactive_shell, "_stop_flow_input_listener", lambda enabled: None)
+
+    state = ChatConfigState()
+    state.value = object()
+    messages = [{"role": "user", "content": "先规划"}]
+    answer = interactive_shell._chat_turn_with_tools(messages, state)
+
+    assert answer == "计划已确认"
+    assert len(calls) == 2
+    assert calls[1][-1] == {"role": "user", "content": "我选择：补充验证"}
 
 
 def test_model_request_stream_updates_status_line_without_printing_progress(monkeypatch) -> None:

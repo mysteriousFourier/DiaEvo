@@ -1,6 +1,8 @@
 ﻿from pathlib import Path
 
 import shutil
+import os
+import sys
 
 from diaevo.cli import build_parser, render_cli_result, run_learn, workspace_status
 from diaevo.generator import generate_skill
@@ -55,7 +57,13 @@ def test_generate_code_backed_skill_validates_in_sandbox(tmp_path):
     assert artifacts["review_status"] == "pending"
     assert artifacts["fallback_mode"] == "skill_md"
     validation = read_json(skill_dir / "validation.json")
-    assert validation["commands"] == [f"python {skill_dir.as_posix()}/scripts/skill_flow.py --describe"]
+    expected_python = Path(sys.executable).as_posix()
+    expected_command = (
+        f'& "{expected_python}" {skill_dir.as_posix()}/scripts/skill_flow.py --describe'
+        if os.name == "nt"
+        else f'"{expected_python}" {skill_dir.as_posix()}/scripts/skill_flow.py --describe'
+    )
+    assert validation["commands"] == [expected_command]
 
     verify_result = verify_skill(skill_dir)
     assert verify_result["passed"]
@@ -136,11 +144,12 @@ def test_cli_accepts_generate_with_code():
 
 
 def test_cli_accepts_learn_and_status_commands():
-    learn_args = build_parser().parse_args(["learn", "--dry-run", "--no-tool-events"])
+    learn_args = build_parser().parse_args(["learn", "--dry-run", "--plan", "--no-tool-events"])
     status_args = build_parser().parse_args(["status"])
 
     assert learn_args.command == "learn"
     assert learn_args.dry_run is True
+    assert learn_args.plan is True
     assert learn_args.no_tool_events is True
     assert status_args.command == "status"
 
@@ -228,6 +237,38 @@ def test_learn_dry_run_selects_task_card_without_writing_skill():
     rendered = render_cli_result("learn", report)
     assert "任务名：" in rendered
     assert "trace_ids" not in rendered
+
+
+def test_learn_plan_mode_returns_workflow_plan_without_writing_skill():
+    ingest_traces("data/sample_traces.jsonl", include_tool_events=False)
+    report = run_learn(include_tool_events=False, plan=True, clusters=4)
+
+    assert report["status"] == "plan"
+    assert report["selected_task"]["workflow_signal_strength"] >= 0.35
+    assert report["plan_steps"]
+    assert "generated" not in report
+    rendered = render_cli_result("learn", report)
+    assert "plan mode" in rendered
+    assert "不是 skill" in rendered
+
+
+def test_failure_only_cluster_becomes_plan_note_not_generation_entrypoint(tmp_path):
+    traces = tmp_path / "failure_only.jsonl"
+    traces.write_text(
+        "\n".join(
+            [
+                '{"id":"F1","task":"Tool event run_shell: pytest -q","tools":["run_shell"],"commands":["pytest -q"],"outcome":"failure","error_type":"timeout","source":"tool_event","event_count":1,"tool_success_rate":0.0,"tool_failure_types":["timeout"],"tags":["tool-event"]}',
+                '{"id":"F2","task":"Tool event run_shell: npm run build","tools":["run_shell"],"commands":["npm run build"],"outcome":"failure","error_type":"network","source":"tool_event","event_count":1,"tool_success_rate":0.0,"tool_failure_types":["network"],"tags":["tool-event"]}',
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = mine(traces, k=1)
+
+    assert report["generation_entrypoints"] == []
+    assert report["plan_notes"]
+    assert report["plan_notes"][0]["failure_signal_strength"] >= 0.25
 
 
 def test_status_reports_recent_learning(monkeypatch, tmp_path):

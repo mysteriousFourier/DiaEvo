@@ -49,7 +49,7 @@ from .action_report import active_skill_names, build_turn_report, short_value, t
 from .cli_style import ANSI_RE, CYAN, DIM, GLYPHS, RESET, maybe_show_trust_dialog
 from .flow_input import FlowInputController, FlowInputEvent, msvcrt
 from .output_policy import print_assistant, print_status
-from .prompt_bar import _erase_lines, is_command_input, read_prompt
+from .prompt_bar import PLAN_MODE_PREFIX, _erase_lines, is_command_input, read_prompt
 from .progress import status
 from .terminal_home import render_plain
 from .tool_render import render_tool_result
@@ -58,6 +58,7 @@ from .window_title import set_title_state, start_title_monitor, stop_title_monit
 DEFAULT_RECOMMEND_TASK = "给当前项目生成测试修复 skill"
 HOME_PROMPT_GAP = "\n\n"
 QQ_COMPLETION_NOTICE = "已完成，请在电脑查看结果。"
+PLAN_QUESTION_TYPE = "plan_question"
 
 HELP_TEXT = """
 常用操作：
@@ -419,7 +420,16 @@ def _event_to_command(event: FlowInputEvent, chat_state: ChatConfigState) -> str
         if event.text:
             _start_talk_thread(event.text, chat_state, reply_to_user_id=event.reply_to_user_id)
         return ""
-    return event.text.strip()
+    if event.plan and event.text.strip().lower() == "/learn":
+        return "/learn --plan"
+    if event.plan and event.text.strip().lower().startswith("/learn "):
+        text = event.text.strip()
+        if "--plan" not in shlex.split(text, posix=False)[1:]:
+            return f"{text} --plan"
+    text = event.text.strip()
+    if event.plan and text and not text.startswith("/"):
+        return PLAN_MODE_PREFIX + text
+    return text
 
 
 def _qq_flow_event(text: str, *, user_id: str = "") -> FlowInputEvent:
@@ -1272,6 +1282,8 @@ def _read_transient_menu_choice(
                 continue
             if char in {"\r", "\n"}:
                 return finish(options[selected_index].value)
+            if char == "\t" and options[selected_index].value == "\t":
+                return finish("\t")
             value = _transient_menu_value_from_text(char, options, default_value=default_value)
             if value:
                 return finish(value)
@@ -1454,6 +1466,59 @@ def _transient_choice_from_text(text: str, *, default_on_enter: str) -> str:
     return normalized[0]
 
 
+def _read_plan_question_answer(question: str, options: list[str]) -> str:
+    clean_options = [" ".join(str(option).split()) for option in options if str(option).strip()]
+    clean_options = clean_options[:3]
+    while len(clean_options) < 3:
+        clean_options.append(f"采用方案 {len(clean_options) + 1}")
+    choice_options = [
+        TransientChoiceOption(str(index), label)
+        for index, label in enumerate(clean_options, start=1)
+    ]
+    choice_options.append(TransientChoiceOption("\t", "自定义答案", aliases=("4", "custom", "other", "自定义")))
+    selected = _read_transient_menu_choice(
+        question.strip() or "请选择下一步",
+        choice_options,
+        default_value="1",
+    )
+    if selected == "\t":
+        custom = _read_transient_text("自定义答案：", send_to_qq=True).strip()
+        return custom or clean_options[0]
+    try:
+        index = int(selected) - 1
+    except ValueError:
+        return selected
+    if 0 <= index < len(clean_options):
+        return clean_options[index]
+    return selected
+
+
+def _parse_plan_question(text: str) -> dict[str, object] | None:
+    raw = str(text or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        if len(lines) >= 3 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
+            raw = "\n".join(lines[1:-1]).strip()
+            if raw.lower().startswith("json"):
+                raw = raw[4:].strip()
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError:
+        return None
+    if not isinstance(value, dict) or value.get("type") != PLAN_QUESTION_TYPE:
+        return None
+    question = str(value.get("question") or "").strip()
+    options = value.get("options")
+    if not question or not isinstance(options, list):
+        return None
+    clean_options = [str(item).strip() for item in options if str(item).strip()]
+    if len(clean_options) < 1:
+        return None
+    return {"question": question, "options": clean_options[:3]}
+
+
 def _plain_transient_prompt(prompt: str) -> str:
     clean = ANSI_RE.sub("", prompt.replace(DIM, "").replace(RESET, ""))
     return "\n".join(line.rstrip() for line in clean.splitlines()).strip()
@@ -1487,7 +1552,10 @@ def _render_transient_choice_menu(
             line = f"  {line}"
         lines.append(line)
     lines.append("")
-    lines.append(f"{DIM}上下键选择 {GLYPHS['dot']} Enter 确认 {GLYPHS['dot']} 数字仍可直选{RESET}")
+    if any(option.value == "\t" for option in options):
+        lines.append(f"{DIM}上下键选择 {GLYPHS['dot']} Enter 确认 {GLYPHS['dot']} 选中自定义后 Tab 输入{RESET}")
+    else:
+        lines.append(f"{DIM}上下键选择 {GLYPHS['dot']} Enter 确认 {GLYPHS['dot']} 数字仍可直选{RESET}")
     return "\n".join(lines)
 
 
@@ -1684,6 +1752,21 @@ def _chat_turn_with_tools(messages: list[dict[str, object]], chat_state: ChatCon
                 calls = requested_tool_calls(message)
                 if not calls:
                     answer = extract_assistant_text(response)
+                    plan_question = _parse_plan_question(answer)
+                    if plan_question is not None:
+                        messages.append({"role": "assistant", "content": answer})
+                        selected_answer = _read_plan_question_answer(
+                            str(plan_question.get("question") or ""),
+                            [str(item) for item in plan_question.get("options", [])],
+                        )
+                        messages.append(
+                            {
+                                "role": "user",
+                                "content": f"我选择：{selected_answer}",
+                            }
+                        )
+                        round_index += 1
+                        continue
                     messages.append({"role": "assistant", "content": answer})
                     return answer
 
@@ -1810,6 +1893,9 @@ def main() -> int:
             return 0
         if not command:
             continue
+        plan_mode_turn = command.startswith(PLAN_MODE_PREFIX)
+        if plan_mode_turn:
+            command = command[len(PLAN_MODE_PREFIX) :].strip()
         if is_command_input(command):
             if not _dispatch_command(command, chat_state, kg_mode, messages):
                 _stop_qq_interactive_bridge()
@@ -1824,6 +1910,21 @@ def main() -> int:
         history_len = len(messages)
         selected_skills = _select_skill_contexts_for_prompt(command)
         _append_skill_context_messages(messages, command, selected_skills)
+        if plan_mode_turn:
+            messages.append(
+                {
+                    "role": "system",
+                    "content": (
+                        "本轮处于 plan mode。先产出简洁计划、需要澄清的问题和拟使用的验证方式；"
+                        "如果存在关键未知点，先只输出一个 JSON 对象："
+                        "{\"type\":\"plan_question\",\"question\":\"一个必须澄清的问题\","
+                        "\"options\":[\"选项一\",\"选项二\",\"选项三\"]}。"
+                        "前三个选项由你给出，界面会提供第四个自定义答案入口；不要在这个 JSON 外输出其他文字。"
+                        "除非用户已经明确要求执行并且计划中的关键未知点已解决，否则不要调用写入、删除、"
+                        "shell、网络或补丁工具。失败归因只能作为执行规则/恢复约束，不要把它当作新的 skill 工作流。"
+                    ),
+                }
+            )
         messages.append({"role": "user", "content": command})
         try:
             answer = _chat_turn_with_tools(messages, chat_state)
