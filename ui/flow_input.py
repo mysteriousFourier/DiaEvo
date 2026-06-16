@@ -421,10 +421,22 @@ class FlowInputController:
             controller.toggle_plan_mode()
             event.app.invalidate()
 
+        @bindings.add("enter")
+        def _submit_prompt(event) -> None:
+            event.app.current_buffer.validate_and_handle()
+
+        @bindings.add("escape", "enter")
+        @bindings.add("c-j")
+        @bindings.add("\x1b", "[", "1", "3", ";", "2", "u")
+        @bindings.add("\x1b", "[", "2", "7", ";", "2", ";", "1", "3", "~")
+        def _insert_newline(event) -> None:
+            event.app.current_buffer.insert_text("\n")
+
         return PromptSession(
             message=f"{GLYPHS['prompt']} ",
             completer=DiaEvoCompleter(),
             complete_while_typing=True,
+            multiline=True,
             bottom_toolbar=self._render_toolkit_toolbar,
             reserve_space_for_menu=8,
             style=_prompt_style(),
@@ -519,7 +531,7 @@ class FlowInputController:
         if self.queued_preview:
             pieces.append(self._render_queued_preview().replace(DIM, "").replace(RESET, ""))
         mode = "Plan" if self.plan_mode else "Act"
-        pieces.append(f"Mode {mode} · Shift+Tab 切换 · Enter 发送 · Tab 补全 · Esc 中止 · /exit 退出")
+        pieces.append(f"Mode {mode} · Shift+Tab 切换 · Enter 发送 · Ctrl+J/Shift+Enter/Esc+Enter 换行 · Tab 补全 · Esc 中止 · /exit 退出")
         return "  ".join(pieces)
 
     def toggle_plan_mode(self) -> bool:

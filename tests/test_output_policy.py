@@ -596,6 +596,27 @@ def test_qq_text_reply_is_consumed_by_transient_text_when_raw_disabled(monkeypat
     assert interactive_shell._read_transient_text("换方案：") == "改成只读方案"
 
 
+def test_transient_text_uses_toolkit_before_raw_character_loop(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    class FakeStdin:
+        def isatty(self) -> bool:
+            return True
+
+    class FakeMsvcrt:
+        def kbhit(self) -> bool:
+            raise AssertionError("raw character loop should not run when toolkit text input is available")
+
+    monkeypatch.setenv("DIAEVO_FLOW_INPUT", "1")
+    monkeypatch.setattr(interactive_shell.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(interactive_shell, "msvcrt", FakeMsvcrt())
+    monkeypatch.setattr(interactive_shell, "_qq_send", lambda *args, **kwargs: None)
+    monkeypatch.setattr(interactive_shell, "_prompt_toolkit_enabled", lambda: True)
+    monkeypatch.setattr(interactive_shell, "_read_transient_text_toolkit", lambda prompt: "中文自定义答案")
+
+    assert interactive_shell._read_transient_text("自定义答案：") == "中文自定义答案"
+
+
 def test_transient_menu_choice_can_use_arrow_keys(monkeypatch) -> None:
     from ui import interactive_shell
 
@@ -661,7 +682,36 @@ def test_plan_question_parser_accepts_json_block() -> None:
     assert parsed == {"question": "选哪个流程？", "options": ["A", "B", "C"]}
 
 
-def test_plan_question_custom_choice_uses_tab_after_fourth_option(monkeypatch) -> None:
+def test_plan_question_parser_accepts_options_key_with_trailing_space() -> None:
+    from ui import interactive_shell
+
+    parsed = interactive_shell._parse_plan_question(
+        '{"type":"plan_question","question":"你希望这个轻量检验程序的目标是什么？",'
+        '"options ":["A. 极轻量","B. 中等规模","C. 聚焦特定方法"]}'
+    )
+
+    assert parsed == {
+        "question": "你希望这个轻量检验程序的目标是什么？",
+        "options": ["A. 极轻量", "B. 中等规模", "C. 聚焦特定方法"],
+    }
+
+
+def test_plan_question_parser_extracts_embedded_json_and_keeps_four_options() -> None:
+    from ui import interactive_shell
+
+    parsed = interactive_shell._parse_plan_question(
+        '{"type":"plan_question","question":"测试程序的目标模型规模是什么？",'
+        '"options":["极小模型","小模型","中等模型","支持多档切换"]} '
+        "plan mode提问的这个bug工作者没修好还存在，加入修复计划"
+    )
+
+    assert parsed == {
+        "question": "测试程序的目标模型规模是什么？",
+        "options": ["极小模型", "小模型", "中等模型", "支持多档切换"],
+    }
+
+
+def test_plan_question_custom_choice_uses_inline_input_after_tab(monkeypatch) -> None:
     from ui import interactive_shell
 
     class FakeStdout:
@@ -681,7 +731,7 @@ def test_plan_question_custom_choice_uses_tab_after_fourth_option(monkeypatch) -
 
     class FakeMsvcrt:
         def __init__(self) -> None:
-            self.chars = iter(["\xe0", "P", "\xe0", "P", "\xe0", "P", "\t"])
+            self.chars = iter(["\xe0", "P", "\xe0", "P", "\xe0", "P", "\t", "我", "自", "己", "\r"])
 
         def kbhit(self) -> bool:
             return True
@@ -694,14 +744,94 @@ def test_plan_question_custom_choice_uses_tab_after_fourth_option(monkeypatch) -
     monkeypatch.setattr(interactive_shell.sys, "stdin", FakeStdin())
     monkeypatch.setattr(interactive_shell, "msvcrt", FakeMsvcrt())
     monkeypatch.setattr(interactive_shell, "_qq_send", lambda *args, **kwargs: None)
-    monkeypatch.setattr(interactive_shell, "_read_transient_text", lambda prompt, **kwargs: "我自己的答案")
 
     answer = interactive_shell._read_plan_question_answer("请选择", ["A", "B", "C"])
 
     writes = "".join(fake_stdout.writes)
-    assert answer == "我自己的答案"
+    assert answer == "我自己"
     assert "4. 自定义答案" in writes
-    assert "选中自定义后 Tab 输入" in writes
+    assert "4. |" in writes
+    assert "选中自定义后 Tab 编辑" in writes
+
+
+def test_plan_question_inline_custom_can_return_to_other_options(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    class FakeStdout:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+
+        def write(self, value: str) -> int:
+            self.writes.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+    class FakeStdin:
+        def isatty(self) -> bool:
+            return True
+
+    class FakeMsvcrt:
+        def __init__(self) -> None:
+            self.chars = iter(["\xe0", "P", "\xe0", "P", "\xe0", "P", "\t", "临", "\xe0", "H", "\r"])
+
+        def kbhit(self) -> bool:
+            return True
+
+        def getwch(self) -> str:
+            return next(self.chars)
+
+    monkeypatch.setattr(interactive_shell.sys, "stdout", FakeStdout())
+    monkeypatch.setattr(interactive_shell.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(interactive_shell, "msvcrt", FakeMsvcrt())
+    monkeypatch.setattr(interactive_shell, "_qq_send", lambda *args, **kwargs: None)
+
+    answer = interactive_shell._read_plan_question_answer("请选择", ["A", "B", "C"])
+
+    assert answer == "C"
+
+
+def test_plan_question_with_four_model_options_keeps_custom_as_fifth(monkeypatch) -> None:
+    from ui import interactive_shell
+
+    class FakeStdout:
+        def __init__(self) -> None:
+            self.writes: list[str] = []
+
+        def write(self, value: str) -> int:
+            self.writes.append(value)
+            return len(value)
+
+        def flush(self) -> None:
+            return None
+
+    class FakeStdin:
+        def isatty(self) -> bool:
+            return True
+
+    class FakeMsvcrt:
+        def __init__(self) -> None:
+            self.chars = iter(["4"])
+
+        def kbhit(self) -> bool:
+            return True
+
+        def getwch(self) -> str:
+            return next(self.chars)
+
+    fake_stdout = FakeStdout()
+    monkeypatch.setattr(interactive_shell.sys, "stdout", fake_stdout)
+    monkeypatch.setattr(interactive_shell.sys, "stdin", FakeStdin())
+    monkeypatch.setattr(interactive_shell, "msvcrt", FakeMsvcrt())
+    monkeypatch.setattr(interactive_shell, "_qq_send", lambda *args, **kwargs: None)
+
+    answer = interactive_shell._read_plan_question_answer("请选择", ["A", "B", "C", "D"])
+
+    writes = "".join(fake_stdout.writes)
+    assert answer == "D"
+    assert "4. D" in writes
+    assert "5. 自定义答案" in writes
 
 
 def test_transient_multi_choice_uses_arrows_and_space(monkeypatch) -> None:

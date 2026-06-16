@@ -267,12 +267,12 @@ def render_prompt_line(value: str = "") -> str:
 
 def render_footer() -> str:
     mode = "Plan" if _PLAN_MODE else "Act"
-    return f"  {DIM}Mode {mode} {GLYPHS['dot']} Shift+Tab 切换 {GLYPHS['dot']} Enter 发送 {GLYPHS['dot']} Tab 补全 {GLYPHS['dot']} Esc 清空菜单{RESET}"
+    return f"  {DIM}Mode {mode} {GLYPHS['dot']} Shift+Tab 切换 {GLYPHS['dot']} Enter 发送 {GLYPHS['dot']} Ctrl+J/Shift+Enter/Esc+Enter 换行 {GLYPHS['dot']} Tab 补全 {GLYPHS['dot']} Esc 清空菜单{RESET}"
 
 
 def render_plain_footer() -> str:
     mode = "Plan" if _PLAN_MODE else "Act"
-    return f"Mode {mode} · Shift+Tab 切换 · Enter 发送 · Tab 补全 · /exit 退出"
+    return f"Mode {mode} · Shift+Tab 切换 · Enter 发送 · Ctrl+J/Shift+Enter/Esc+Enter 换行 · Tab 补全 · /exit 退出"
 
 
 def render_command_menu(value: str, selected_index: int = 0) -> str:
@@ -435,10 +435,22 @@ def _prompt_session():
         _PLAN_MODE = not _PLAN_MODE
         event.app.invalidate()
 
+    @bindings.add("enter")
+    def _submit_prompt(event) -> None:
+        event.app.current_buffer.validate_and_handle()
+
+    @bindings.add("escape", "enter")
+    @bindings.add("c-j")
+    @bindings.add("\x1b", "[", "1", "3", ";", "2", "u")
+    @bindings.add("\x1b", "[", "2", "7", ";", "2", ";", "1", "3", "~")
+    def _insert_newline(event) -> None:
+        event.app.current_buffer.insert_text("\n")
+
     _PROMPT_SESSION = PromptSession(
         message=f"{GLYPHS['prompt']} ",
         completer=DiaEvoCompleter(),
         complete_while_typing=True,
+        multiline=True,
         bottom_toolbar=render_plain_footer,
         reserve_space_for_menu=8,
         style=_prompt_style(),

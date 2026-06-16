@@ -221,6 +221,40 @@ def test_prompt_toolkit_style_builds_without_default_background() -> None:
     prompt_bar._prompt_style()
 
 
+def test_prompt_toolkit_session_enables_shift_enter_newline(monkeypatch) -> None:
+    captured = {}
+
+    class FakeBindings:
+        def __init__(self) -> None:
+            self.keys = []
+
+        def add(self, *keys):
+            self.keys.append(keys)
+
+            def decorator(func):
+                return func
+
+            return decorator
+
+    class FakePromptSession:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr(prompt_bar, "_PROMPT_SESSION", None)
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+    monkeypatch.setattr("prompt_toolkit.key_binding.KeyBindings", FakeBindings)
+
+    prompt_bar._prompt_session()
+
+    assert captured["multiline"] is True
+    binding_keys = captured["key_bindings"].keys
+    assert ("enter",) in binding_keys
+    assert ("escape", "enter") in binding_keys
+    assert ("c-j",) in binding_keys
+    assert ("\x1b", "[", "1", "3", ";", "2", "u") in binding_keys
+    assert ("\x1b", "[", "2", "7", ";", "2", ";", "1", "3", "~") in binding_keys
+
+
 def test_read_prompt_ignores_ctrl_c_until_exit_command(monkeypatch) -> None:
     class FakeStdout:
         def __init__(self) -> None:

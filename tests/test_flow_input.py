@@ -317,6 +317,40 @@ def test_toolkit_escape_queues_hard_interrupt():
     assert controller.force_terminate_event.is_set()
 
 
+def test_flow_toolkit_session_enables_shift_enter_newline(monkeypatch):
+    captured = {}
+
+    class FakeBindings:
+        def __init__(self) -> None:
+            self.keys = []
+
+        def add(self, *keys):
+            self.keys.append(keys)
+
+            def decorator(func):
+                return func
+
+            return decorator
+
+    class FakePromptSession:
+        def __init__(self, **kwargs) -> None:
+            captured.update(kwargs)
+
+    monkeypatch.setattr("prompt_toolkit.PromptSession", FakePromptSession)
+    monkeypatch.setattr("prompt_toolkit.key_binding.KeyBindings", FakeBindings)
+
+    controller = FlowInputController()
+    controller._create_toolkit_session()
+
+    assert captured["multiline"] is True
+    binding_keys = captured["key_bindings"].keys
+    assert ("enter",) in binding_keys
+    assert ("escape", "enter") in binding_keys
+    assert ("c-j",) in binding_keys
+    assert ("\x1b", "[", "1", "3", ";", "2", "u") in binding_keys
+    assert ("\x1b", "[", "2", "7", ";", "2", ";", "1", "3", "~") in binding_keys
+
+
 def test_toolkit_exit_uses_prompt_loop_threadsafe_callback():
     controller = FlowInputController()
     scheduled = []

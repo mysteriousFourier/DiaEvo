@@ -11,7 +11,7 @@ import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass
-from typing import Callable
+from typing import Callable, Iterator
 
 from diaevo.cli import main as cli_main
 from diaevo.deepseek_chat import (
@@ -49,7 +49,15 @@ from .action_report import active_skill_names, build_turn_report, short_value, t
 from .cli_style import ANSI_RE, CYAN, DIM, GLYPHS, RESET, maybe_show_trust_dialog
 from .flow_input import FlowInputController, FlowInputEvent, msvcrt
 from .output_policy import print_assistant, print_status
-from .prompt_bar import PLAN_MODE_PREFIX, _erase_lines, is_command_input, read_prompt
+from .prompt_bar import (
+    PLAN_MODE_PREFIX,
+    _erase_lines,
+    _prompt_style,
+    _prompt_toolkit_enabled,
+    _prompt_stdout_patch,
+    is_command_input,
+    read_prompt,
+)
 from .progress import status
 from .terminal_home import render_plain
 from .tool_render import render_tool_result
@@ -1381,6 +1389,15 @@ def _read_transient_text(prompt: str, *, send_to_qq: bool = True) -> str:
     if not _should_poll_transient_input(send_to_qq=send_to_qq):
         return input(prompt)
 
+    queued = _read_qq_transient_text()
+    if queued:
+        return queued
+
+    if _should_use_toolkit_transient_text(send_to_qq=send_to_qq):
+        value = _read_transient_text_toolkit(prompt)
+        if value is not None:
+            return value
+
     with _pause_flow_input():
         sys.stdout.write(prompt)
         sys.stdout.flush()
@@ -1419,6 +1436,47 @@ def _read_transient_text(prompt: str, *, send_to_qq: bool = True) -> str:
                 value += char
                 sys.stdout.write(char)
                 sys.stdout.flush()
+
+
+def _should_use_toolkit_transient_text(*, send_to_qq: bool) -> bool:
+    if not sys.stdin.isatty() or not _prompt_toolkit_enabled():
+        return False
+    if QQ_INTERACTIVE_BRIDGE is not None and send_to_qq:
+        return False
+    return True
+
+
+def _read_transient_text_toolkit(prompt: str) -> str | None:
+    try:
+        from prompt_toolkit import PromptSession
+        from prompt_toolkit.key_binding import KeyBindings
+    except Exception:
+        return None
+
+    bindings = KeyBindings()
+
+    @bindings.add("escape")
+    def _cancel(event) -> None:
+        event.app.exit(result="")
+
+    try:
+        session = PromptSession(
+            message=prompt,
+            multiline=False,
+            key_bindings=bindings,
+            style=_prompt_style(),
+            erase_when_done=True,
+        )
+        with _pause_flow_input():
+            try:
+                with _prompt_stdout_patch():
+                    return session.prompt()
+            except Exception:
+                return session.prompt()
+    except (EOFError, KeyboardInterrupt):
+        return ""
+    except Exception:
+        return None
 
 
 def _should_poll_transient_input(*, send_to_qq: bool) -> bool:
@@ -1468,55 +1526,318 @@ def _transient_choice_from_text(text: str, *, default_on_enter: str) -> str:
 
 def _read_plan_question_answer(question: str, options: list[str]) -> str:
     clean_options = [" ".join(str(option).split()) for option in options if str(option).strip()]
-    clean_options = clean_options[:3]
+    clean_options = clean_options[:4]
     while len(clean_options) < 3:
         clean_options.append(f"采用方案 {len(clean_options) + 1}")
     choice_options = [
         TransientChoiceOption(str(index), label)
         for index, label in enumerate(clean_options, start=1)
     ]
-    choice_options.append(TransientChoiceOption("\t", "自定义答案", aliases=("4", "custom", "other", "自定义")))
-    selected = _read_transient_menu_choice(
+    custom_number = str(len(choice_options) + 1)
+    choice_options.append(TransientChoiceOption("\t", "自定义答案", aliases=(custom_number, "custom", "other", "自定义")))
+    return _read_plan_question_menu_answer(
         question.strip() or "请选择下一步",
         choice_options,
-        default_value="1",
+        clean_options,
     )
-    if selected == "\t":
-        custom = _read_transient_text("自定义答案：", send_to_qq=True).strip()
-        return custom or clean_options[0]
+
+
+def _read_plan_question_menu_answer(
+    title: str,
+    options: list[TransientChoiceOption],
+    answers: list[str],
+    *,
+    default_value: str = "1",
+    send_to_qq: bool = True,
+) -> str:
+    if not _should_poll_transient_menu_input():
+        return _read_plan_question_menu_answer_plain(title, options, answers, default_value=default_value)
+
+    selected_index = _transient_default_index(options, default_value)
+    custom_index = next((index for index, option in enumerate(options) if option.value == "\t"), len(options) - 1)
+    custom_value = ""
+    custom_cursor = 0
+    editing_custom = False
+    rendered = _render_plan_question_menu(
+        title,
+        options,
+        selected_index,
+        default_value=default_value,
+        custom_value=custom_value,
+        custom_cursor=custom_cursor,
+        editing_custom=editing_custom,
+    )
+    if send_to_qq:
+        _qq_send(_plain_transient_prompt(rendered))
+
+    with _pause_flow_input():
+        rendered_lines = 0
+
+        def redraw() -> None:
+            nonlocal rendered_lines
+            if rendered_lines:
+                _erase_lines(rendered_lines)
+            menu = _render_plan_question_menu(
+                title,
+                options,
+                selected_index,
+                default_value=default_value,
+                custom_value=custom_value,
+                custom_cursor=custom_cursor,
+                editing_custom=editing_custom,
+            )
+            rendered_lines = menu.count("\n") + 1
+            sys.stdout.write(menu)
+            sys.stdout.flush()
+
+        def finish(value: str) -> str:
+            if rendered_lines:
+                _erase_lines(rendered_lines)
+            sys.stdout.flush()
+            return value
+
+        redraw()
+        while True:
+            queued = _read_qq_transient_text()
+            if queued:
+                value = _transient_menu_value_from_text(queued, options, default_value=default_value)
+                if value:
+                    if value == "\t":
+                        selected_index = custom_index
+                        custom_value = queued.strip()
+                        if custom_value and custom_value not in {"custom", "other", "自定义", str(custom_index + 1)}:
+                            return finish(custom_value)
+                        editing_custom = True
+                        custom_value = ""
+                        custom_cursor = 0
+                        redraw()
+                        continue
+                    return finish(_plan_question_answer_from_value(value, answers))
+            if not msvcrt.kbhit():
+                time.sleep(0.05)
+                continue
+            char = msvcrt.getwch()
+            if char == "\003":
+                continue
+            if char == "\x1b":
+                if editing_custom:
+                    editing_custom = False
+                    redraw()
+                    continue
+                return finish(_plan_question_answer_from_value(default_value, answers))
+            if char in {"\x00", "\xe0"}:
+                key = msvcrt.getwch()
+                if key == "H":
+                    editing_custom = False
+                    selected_index = (selected_index - 1) % len(options)
+                    redraw()
+                elif key == "P":
+                    editing_custom = False
+                    selected_index = (selected_index + 1) % len(options)
+                    redraw()
+                elif editing_custom and key == "K":
+                    custom_cursor = max(0, custom_cursor - 1)
+                    redraw()
+                elif editing_custom and key == "M":
+                    custom_cursor = min(len(custom_value), custom_cursor + 1)
+                    redraw()
+                elif editing_custom and key == "G":
+                    custom_cursor = 0
+                    redraw()
+                elif editing_custom and key == "O":
+                    custom_cursor = len(custom_value)
+                    redraw()
+                elif editing_custom and key == "S" and custom_cursor < len(custom_value):
+                    custom_value = custom_value[:custom_cursor] + custom_value[custom_cursor + 1 :]
+                    redraw()
+                continue
+            if char in {"\r", "\n"}:
+                if selected_index == custom_index:
+                    clean_custom = custom_value.strip()
+                    if clean_custom:
+                        return finish(clean_custom)
+                    editing_custom = True
+                    redraw()
+                    continue
+                return finish(_plan_question_answer_from_value(options[selected_index].value, answers))
+            if char == "\t" and selected_index == custom_index:
+                editing_custom = True
+                custom_value = ""
+                custom_cursor = 0
+                redraw()
+                continue
+            if editing_custom:
+                if char == "\b":
+                    if custom_cursor > 0:
+                        custom_value = custom_value[: custom_cursor - 1] + custom_value[custom_cursor:]
+                        custom_cursor -= 1
+                        redraw()
+                    continue
+                if char.isprintable():
+                    custom_value = custom_value[:custom_cursor] + char + custom_value[custom_cursor:]
+                    custom_cursor += len(char)
+                    redraw()
+                    continue
+            value = _transient_menu_value_from_text(char, options, default_value=default_value)
+            if value:
+                if value == "\t":
+                    selected_index = custom_index
+                    editing_custom = True
+                    custom_value = ""
+                    custom_cursor = 0
+                    redraw()
+                    continue
+                return finish(_plan_question_answer_from_value(value, answers))
+
+
+def _read_plan_question_menu_answer_plain(
+    title: str,
+    options: list[TransientChoiceOption],
+    answers: list[str],
+    *,
+    default_value: str,
+) -> str:
+    rendered = _render_plan_question_menu(
+        title,
+        options,
+        _transient_default_index(options, default_value),
+        default_value=default_value,
+        custom_value="",
+        custom_cursor=0,
+        editing_custom=False,
+    )
+    print(rendered)
+    while True:
+        raw = input("选择或自定义答案：").strip()
+        if not raw and default_value:
+            return _plan_question_answer_from_value(default_value, answers)
+        value = _transient_menu_value_from_text(raw, options, default_value=default_value)
+        if value == "\t":
+            custom = input("自定义答案：").strip()
+            if custom:
+                return custom
+            continue
+        if value:
+            return _plan_question_answer_from_value(value, answers)
+        if raw:
+            return raw
+        print("请输入有效选项。")
+
+
+def _render_plan_question_menu(
+    title: str,
+    options: list[TransientChoiceOption],
+    selected_index: int,
+    *,
+    default_value: str,
+    custom_value: str,
+    custom_cursor: int,
+    editing_custom: bool,
+) -> str:
+    selected_index = max(0, min(selected_index, len(options) - 1))
+    custom_cursor = max(0, min(custom_cursor, len(custom_value)))
+    lines = [title.rstrip(), ""]
+    for index, option in enumerate(options):
+        marker = GLYPHS["prompt"] if index == selected_index else " "
+        option_number = index + 1
+        suffix = " [默认]" if option.value == default_value else ""
+        label = option.label
+        if option.value == "\t":
+            label = custom_value or option.label
+            if editing_custom:
+                label = custom_value[:custom_cursor] + "|" + custom_value[custom_cursor:]
+        line = f"{marker} {option_number}. {label}{suffix}"
+        if index == selected_index:
+            line = f"{CYAN}{line}{RESET}"
+        else:
+            line = f"  {line}"
+        lines.append(line)
+    lines.append("")
+    lines.append(
+        f"{DIM}上下键选择 {GLYPHS['dot']} 选中自定义后 Tab 编辑 {GLYPHS['dot']} Enter 确认 {GLYPHS['dot']} Esc 取消编辑{RESET}"
+    )
+    return "\n".join(lines)
+
+
+def _plan_question_answer_from_value(value: str, answers: list[str]) -> str:
     try:
-        index = int(selected) - 1
+        index = int(value) - 1
     except ValueError:
-        return selected
-    if 0 <= index < len(clean_options):
-        return clean_options[index]
-    return selected
+        return value
+    if 0 <= index < len(answers):
+        return answers[index]
+    return value
 
 
-def _parse_plan_question(text: str) -> dict[str, object] | None:
+def _json_object_candidates(text: str) -> Iterator[str]:
     raw = str(text or "").strip()
     if not raw:
-        return None
+        return
     if raw.startswith("```"):
         lines = raw.splitlines()
         if len(lines) >= 3 and lines[0].strip().startswith("```") and lines[-1].strip() == "```":
-            raw = "\n".join(lines[1:-1]).strip()
-            if raw.lower().startswith("json"):
-                raw = raw[4:].strip()
-    try:
-        value = json.loads(raw)
-    except json.JSONDecodeError:
+            fenced = "\n".join(lines[1:-1]).strip()
+            if fenced.lower().startswith("json"):
+                fenced = fenced[4:].strip()
+            yield fenced
+    yield raw
+
+    start = None
+    depth = 0
+    in_string = False
+    escaped = False
+    for index, char in enumerate(raw):
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+            continue
+        if char == "{":
+            if depth == 0:
+                start = index
+            depth += 1
+            continue
+        if char == "}" and depth:
+            depth -= 1
+            if depth == 0 and start is not None:
+                yield raw[start : index + 1]
+                start = None
+
+
+def _parse_plan_question(text: str) -> dict[str, object] | None:
+    for candidate in _json_object_candidates(text):
+        try:
+            value = json.loads(candidate)
+        except json.JSONDecodeError:
+            continue
+        parsed = _parse_plan_question_value(value)
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _parse_plan_question_value(value: object) -> dict[str, object] | None:
+    if not isinstance(value, dict):
         return None
-    if not isinstance(value, dict) or value.get("type") != PLAN_QUESTION_TYPE:
+    value = {str(key).strip(): item for key, item in value.items()}
+    if value.get("type") != PLAN_QUESTION_TYPE:
         return None
     question = str(value.get("question") or "").strip()
     options = value.get("options")
+    if options is None:
+        options = value.get("choices")
     if not question or not isinstance(options, list):
         return None
     clean_options = [str(item).strip() for item in options if str(item).strip()]
     if len(clean_options) < 1:
         return None
-    return {"question": question, "options": clean_options[:3]}
+    return {"question": question, "options": clean_options[:4]}
 
 
 def _plain_transient_prompt(prompt: str) -> str:
