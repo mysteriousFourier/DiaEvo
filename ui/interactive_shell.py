@@ -35,6 +35,7 @@ from diaevo.qq_bridge import (
     prepare_onebot_service,
     run_interactive_bridge,
 )
+from diaevo.sessions import load_session, render_session_list, render_session_transcript, save_session, list_sessions
 from diaevo.tool_chat import (
     RequestedToolCall,
     assistant_message_for_history,
@@ -72,6 +73,7 @@ HELP_TEXT = """
 常用操作：
   直接输入任务              让 DiaEvo 读代码、选工具并处理问题
   /skill [名称]             查看或选择已有 skill
+  /resume                  查看历史会话
   /learn                   从最近任务中总结一个候选 skill
   /status                  查看工作区、模型和最近学习结果
   /kg                      打开可编辑知识图谱工作台
@@ -1029,6 +1031,9 @@ def _dispatch_command(
         return True
     if name in {"help", "?"}:
         print(HELP_TEXT)
+        return True
+    if name == "resume":
+        print(render_session_list(list_sessions()))
         return True
     if name == "debug":
         if not rest:
@@ -2166,7 +2171,14 @@ def _append_skill_context_messages(messages: list[dict[str, object]], prompt: st
         print(f"{DIM}思考  已注入 skill：{context.get('name')}。{RESET}")
 
 
-def main() -> int:
+def _save_session_if_needed(messages: list[dict[str, object]], session_id: str | None) -> str | None:
+    has_visible_history = any(item.get("role") in {"user", "assistant", "tool", "function"} for item in messages)
+    if not session_id and not has_visible_history:
+        return None
+    return save_session(messages, session_id=session_id).id
+
+
+def main(session_id: str | None = None) -> int:
     start_title_monitor()
     if not maybe_show_trust_dialog():
         stop_title_monitor()
@@ -2174,28 +2186,37 @@ def main() -> int:
 
     print(render_plain())
     print(HOME_PROMPT_GAP, end="")
-    messages = [
-        {
-            "role": "system",
-            "content": (
-                "你是 DiaEvo 的终端助手。DiaEvo 用任务轨迹挖掘 Agent SKILL.md 工作流，"
-                "用于归纳可复用操作模式、推荐已有技能、生成候选技能草稿并执行本地验证。"
-                "请优先使用中文回答；如果用户明确使用其他语言，再切换到用户语言。"
-                "回答要简洁、可执行，不要编造不存在的命令。"
-                "不要在任何对话、代码、注释、列表或工具说明中使用 emoji。"
-                "如果任务可能受益于专门工作流，先调用 recommend_skills；需要使用某个 skill 时调用 load_skill_context 并遵循其 SKILL.md。"
-                "调用任何写入、删除、补丁、shell 执行或网络工具前，必须先用一句话说明为什么做、将影响什么。"
-                "当前常用斜杠命令包括：/learn、/skill、/status、/kg、/talk <问题>、"
-                "/image <path> <问题>、/qq、/qqquit、/model <name>、/baseurl <url>、/key <api-key>、/home、/help、/exit。"
-                "内部流水线命令只作为高级调试入口保留在 /debug 中；不要把 cluster id 当作普通用户必须理解的步骤。"
-                "你可以通过工具调用请求 list_files、read_file、write_file、edit_file、delete_file、apply_patch、run_shell、web_search、web_fetch、arxiv_search、recommend_skills 或 load_skill_context。"
-                "不要自行选择知识图谱约束回答；严格 KG 回答是用户手动模式，只有用户运行 answer-kg --strict 或明确要求 KG 严格回答时才使用。"
-                "需要审批的工具会先显示预览，只有用户同意后才会执行。"
-                "脚本式入口是 diaevo，例如 diaevo demo "
-                "或 diaevo chat-test --interactive。"
-            ),
-        }
-    ]
+    if session_id:
+        payload = load_session(session_id)
+        messages = [dict(item) for item in payload["messages"]]
+        print(f"resume: {payload.get('id')}")
+        print(render_session_transcript(messages))
+    else:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是 DiaEvo 的终端助手。DiaEvo 用任务轨迹挖掘 Agent SKILL.md 工作流，"
+                    "用于归纳可复用操作模式、推荐已有技能、生成候选技能草稿并执行本地验证。"
+                    "请优先使用中文回答；如果用户明确使用其他语言，再切换到用户语言。"
+                    "回答要简洁、可执行，不要编造不存在的命令。"
+                    "不要在任何对话、代码、注释、列表或工具说明中使用 emoji。"
+                    "如果任务可能受益于专门工作流，先调用 recommend_skills；需要使用某个 skill 时调用 load_skill_context 并遵循其 SKILL.md。"
+                    "调用任何写入、删除、补丁、shell 执行或网络工具前，必须先用一句话说明为什么做、将影响什么。"
+                    "当前常用斜杠命令包括：/learn、/skill、/status、/kg、/talk <问题>、"
+                    "/image <path> <问题>、/qq、/qqquit、/model <name>、/baseurl <url>、/key <api-key>、/home、/help、/exit。"
+                    "内部流水线命令只作为高级调试入口保留在 /debug 中；不要把 cluster id 当作普通用户必须理解的步骤。"
+                    "你可以通过工具调用请求 list_files、read_file、write_file、edit_file、delete_file、apply_patch、run_shell、web_search、web_fetch、arxiv_search、recommend_skills 或 load_skill_context。"
+                    "不要自行选择知识图谱约束回答；严格 KG 回答是用户手动模式，只有用户运行 answer-kg --strict 或明确要求 KG 严格回答时才使用。"
+                    "需要审批的工具会先显示预览，只有用户同意后才会执行。"
+                    "脚本式入口是 diaevo，例如 diaevo demo "
+                    "或 diaevo chat-test --interactive。"
+                ),
+            }
+        ]
+    active_session_id = session_id
+    if active_session_id:
+        active_session_id = _save_session_if_needed(messages, active_session_id)
     chat_state = ChatConfigState()
     kg_mode = KGAnswerMode()
     pending_command: str | None = None
@@ -2222,10 +2243,12 @@ def main() -> int:
                 _stop_qq_interactive_bridge()
                 stop_title_monitor()
                 return 0
+            active_session_id = _save_session_if_needed(messages, active_session_id)
             continue
 
         if kg_mode.enabled:
             _kg_answer_turn(command, kg_mode)
+            active_session_id = _save_session_if_needed(messages, active_session_id)
             continue
 
         history_len = len(messages)
@@ -2269,3 +2292,4 @@ def main() -> int:
             continue
         if answer:
             _print_assistant_flow(answer)
+        active_session_id = _save_session_if_needed(messages, active_session_id)

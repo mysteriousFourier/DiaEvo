@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .env import load_env
+from .sessions import load_session, render_session_transcript, save_session
 from ui.output_policy import print_assistant, sanitize_no_emoji
 from ui.progress import status
 
@@ -471,13 +472,33 @@ def vision_chat_once(
     return extract_assistant_text(response), response
 
 
-def interactive_chat(system: str, config: DeepSeekConfig) -> int:
-    messages: list[Message] = []
+def _initial_chat_messages(system: str) -> list[Message]:
     if system:
-        messages.append({"role": "system", "content": f"{system}\n\n{NO_EMOJI_SYSTEM_RULE}"})
+        return [{"role": "system", "content": f"{system}\n\n{NO_EMOJI_SYSTEM_RULE}"}]
+    return [{"role": "system", "content": NO_EMOJI_SYSTEM_RULE}]
+
+
+def interactive_chat(
+    system: str,
+    config: DeepSeekConfig,
+    *,
+    session_id: str | None = None,
+    persist: bool = True,
+) -> int:
+    if session_id:
+        payload = load_session(session_id)
+        messages = [dict(item) for item in payload["messages"]]
+        active_session_id = str(payload.get("id") or session_id)
+        print(f"DeepSeek chat-test resumed: {active_session_id}. Type /exit to quit.")
+        print(render_session_transcript(messages))
     else:
-        messages.append({"role": "system", "content": NO_EMOJI_SYSTEM_RULE})
-    print("DeepSeek chat-test. Type /exit to quit.")
+        messages = _initial_chat_messages(system)
+        active_session_id = None
+        print("DeepSeek chat-test. Type /exit to quit.")
+    if persist:
+        saved = save_session(messages, session_id=active_session_id)
+        active_session_id = saved.id
+        print(f"session: {active_session_id}")
     while True:
         try:
             prompt = input("\nuser> ").strip()
@@ -493,6 +514,8 @@ def interactive_chat(system: str, config: DeepSeekConfig) -> int:
         answer, _response = chat_completion_stream_text(messages, config, on_text=_write_stream_text)
         print()
         messages.append({"role": "assistant", "content": answer})
+        if persist:
+            save_session(messages, session_id=active_session_id)
 
 
 def _write_stream_text(text: str) -> None:
@@ -513,6 +536,7 @@ def run_chat_test(
     interactive: bool = False,
     image_paths: list[str] | None = None,
     stream: bool = True,
+    resume: str | None = None,
 ) -> int:
     if image_paths:
         config = vision_config_from_env(
@@ -534,7 +558,7 @@ def run_chat_test(
     if interactive:
         if image_paths:
             raise ValueError("chat-test --interactive does not support --image; use a single prompt with --image.")
-        return interactive_chat(system, config)
+        return interactive_chat(system, config, session_id=resume)
     if stream and not image_paths:
         messages: list[Message] = []
         if system:

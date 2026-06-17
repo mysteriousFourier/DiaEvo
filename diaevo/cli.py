@@ -37,6 +37,7 @@ from .recommender import recommend
 from .script_artifacts import SCRIPT_REVIEW_STATUSES, review_script
 from .skill_adapter import adapt_external_skill
 from .skill_context import discover_skill_sources, load_skill_context
+from .sessions import list_sessions, render_session_list
 from .storage import read_json, write_json
 from .tool_layer import execute_tool, parse_tool_arg_pairs, parse_tool_args, tool_schemas
 from .validation_runner import run_validation
@@ -76,6 +77,7 @@ PUBLIC_COMMANDS = (
     "evaluate-code-evolution",
     "tool",
     "chat-test",
+    "resume",
     "qq-bridge",
 )
 
@@ -90,6 +92,7 @@ USER_COMMANDS = (
     "tools",
     "tool",
     "chat-test",
+    "resume",
     "qq-bridge",
 )
 
@@ -822,6 +825,11 @@ def build_parser() -> argparse.ArgumentParser:
     chat_parser.add_argument("--image", action="append", default=[], help="附加图片路径或 URL，并使用 GLM 视觉配置。")
     chat_parser.add_argument("--interactive", action="store_true", help="本地保留对话历史，持续聊天直到 /exit。")
     chat_parser.add_argument("--no-stream", action="store_true", help="关闭实时 token 输出，等待完整响应后一次性打印。")
+    chat_parser.add_argument("--resume", default=None, help="恢复指定会话 ID；仅支持 --interactive。")
+
+    resume_parser = subparsers.add_parser("resume", help="列出历史 DiaEvo 会话，或按 ID 继续会话。")
+    resume_parser.add_argument("session_id", nargs="?", default=None, help="要继续的会话 ID；省略时列出最近会话。")
+    resume_parser.add_argument("--limit", type=int, default=20, help="列出最近会话数量。")
 
     qq_parser = subparsers.add_parser("qq-bridge", help="通过 OneBot 11 QQ 私聊白名单远程控制 DiaEvo。")
     qq_parser.add_argument("--env", default=None, help=".env 路径；默认使用当前 workspace 或安装目录 .env。")
@@ -1441,6 +1449,8 @@ def main(argv: list[str] | None = None) -> int:
             tool_args.update(parse_tool_arg_pairs(args.arg))
             result = execute_tool(args.name, tool_args, approve=args.approve)
         elif args.command == "chat-test":
+            if args.resume and not args.interactive:
+                parser.error("chat-test --resume requires --interactive")
             return run_chat_test(
                 prompt=args.prompt,
                 system=args.system,
@@ -1453,7 +1463,15 @@ def main(argv: list[str] | None = None) -> int:
                 interactive=args.interactive,
                 image_paths=args.image,
                 stream=not args.no_stream,
+                resume=args.resume,
             )
+        elif args.command == "resume":
+            if not args.session_id:
+                print(render_session_list(list_sessions(limit=args.limit)))
+                return 0
+            from ui.interactive_shell import main as shell_main
+
+            return shell_main(session_id=args.session_id)
         elif args.command == "qq-bridge":
             from .qq_bridge import run_bridge_from_env
 

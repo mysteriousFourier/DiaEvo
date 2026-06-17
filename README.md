@@ -126,6 +126,8 @@ diaevo evaluate-code-evolution --task "fix failing pytest path" --patch-file .tm
 diaevo tools
 diaevo tool read_file --arg path=README.md --arg limit=20
 diaevo chat-test --interactive
+diaevo resume
+diaevo resume <session-id>
 diaevo-home
 ```
 
@@ -177,8 +179,9 @@ diaevo
 
 | 能力 | 说明 |
 | --- | --- |
-| 交互式工作台 | 默认 `diaevo` 打开终端首页，包含可信工作区确认、仪表盘、斜杠菜单、多行输入、`/home`、`/tools` 和 `/tool`。 |
+| 交互式工作台 | 默认 `diaevo` 打开终端首页，包含可信工作区确认、仪表盘、斜杠菜单、多行输入、`/home`、`/tools`、`/tool` 和 `/resume`。 |
 | 模型聊天 | 通过 `.env` 和运行时 `/model`、`/baseurl`、`/key` 配置 DeepSeek 或 OpenAI 兼容接口；普通文本进入带工具调用的聊天循环。 |
+| 会话恢复 | 交互式对话会保存到 `.diaevo/sessions/`；`diaevo resume` 列出最近会话，`diaevo resume <session-id>` 显示近期历史并继续同一上下文。 |
 | QQ 远程入口 | 可选配置启用后，交互式终端输入 `/qq` 会通过 OneBot 11/NapCatQQ 接收白名单 QQ 私聊，`/qqquit` 退出远程入口，与本地终端共享同一个交互式会话。 |
 | 图像理解 | `/image <path|url> <问题>` 使用 GLM 视觉模型理解图片，默认 `glm-4.6v-flash`，并发上限为 1，结果会写回主会话历史。 |
 | 本地工具层 | `list_files`、`read_file`、`write_file`、`edit_file`、`delete_file`、`apply_patch`、`run_shell`、`web_search`、`web_fetch`，带工作区边界、只读/写入分级和审批门；`web_search` 和 `arxiv_search` 的原始结果只用于终端展示，进入主模型上下文前会先由旁路筛选器压缩成相关摘要。 |
@@ -216,6 +219,7 @@ diaevo
 | `data/knowledge_graph/domains/<domain>/` | 指定领域的已审核 KG 分区；`kg --domain` 和 `answer-kg --domain` 会读取这里。 |
 | `data/knowledge_graph/YYMMDD/` | 显式导出的知识图谱快照。 |
 | `.diaevo/tool_events.jsonl` | 本地工具事件日志，默认不提交。 |
+| `.diaevo/sessions/*.json` | 交互式会话历史，供 `diaevo resume` 列表和续接。 |
 | `outputs/reports/*.json` | ingest、mining、recommendation、validation、promotion、evolution、evaluation 报告。 |
 | `outputs/candidate_skills/<cluster>/` | 生成和演化后的候选技能。 |
 
