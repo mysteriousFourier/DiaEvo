@@ -14,7 +14,9 @@ __pycache__/
 .mypy_cache/
 .uv-cache/
 .venv/
+.understand-anything/
 QQ.exe
+docs/CODE_WIKI.md
 docs/FINAL_PROJECT_REPORT.md
 docs/HANDOFF*.md
 docs/presentation/
